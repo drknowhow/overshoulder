@@ -195,3 +195,14 @@ def top_windows() -> list[WindowInfo]:
 
     user32.EnumWindows(_cb, 0)
     return out
+
+
+GA_ROOT = 2
+user32.WindowFromPoint.restype = wt.HWND
+user32.WindowFromPoint.argtypes = [wt.POINT]
+
+
+def window_at(x: int, y: int) -> int:
+    """Top-level window that would receive a click at (x, y), or 0."""
+    h = user32.WindowFromPoint(wt.POINT(x, y))
+    return (user32.GetAncestor(h, GA_ROOT) or 0) if h else 0
