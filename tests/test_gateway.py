@@ -454,3 +454,9 @@ def test_revoked_lease_memory_is_bounded():
     for _ in range(L.REVOKED_MEMORY + 50):
         lm.release(lm.acquire("a", FakeScope()).id, "a")
     assert len(lm._revoked) == L.REVOKED_MEMORY
+
+
+def test_gateway_refuses_to_run_elevated(tmp_path, monkeypatch):
+    monkeypatch.setattr(policy, "self_elevated", lambda: True)
+    with pytest.raises(E.Denied):
+        gateway_for_tests(tmp_path, allow_elevated=False)

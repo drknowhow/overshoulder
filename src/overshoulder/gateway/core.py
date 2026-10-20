@@ -299,5 +299,8 @@ def _loggable(verdict: dict, log_text: bool) -> dict:
 
 
 def gateway_for_tests(tmp: Path, **kw) -> Gateway:
+    """A gateway with an isolated registry and log. CI runners are elevated, so tests opt out of that
+    refusal unless they pass allow_elevated=False."""
     reg = ClientRegistry(tmp / "clients.json")
+    kw.setdefault("allow_elevated", True)
     return Gateway(registry=reg, log=ActionLog(tmp / "actions.jsonl"), **kw)
