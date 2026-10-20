@@ -29,6 +29,8 @@ from overshoulder.gateway.core import Gateway
 from overshoulder.gateway.errors import GatewayError, Paused, Unauthorized
 from overshoulder.scope import ScopeError
 from overshoulder.service import ACTIONS, Service
+from overshoulder.settings_page import Sessions
+from overshoulder.settings_page import routes as settings_routes
 
 DEFAULT_PORT = 47621
 
@@ -44,7 +46,9 @@ INSTRUCTIONS = """Overshoulder lets you see and operate desktop apps on this Win
    driving pauses and your call waits (up to ~20 s) for them to stop; "paused" after that means they are
    still busy, so wait and retry later. A person can press the panic key at any time; after a panic only
    they can resume.
-6. release_scope() when done."""
+6. release_scope() when done.
+7. If you need the person to do something (sign in, approve, finish a form), don't ask them to tell you
+   when they're done: wait_for() the window/control/file change that shows it is done."""
 
 
 def operator_key_path() -> Path:
@@ -60,8 +64,10 @@ def ensure_operator_key() -> str:
 
 
 class Daemon:
-    def __init__(self, service: Service | None = None):
+    def __init__(self, service: Service | None = None, port: int = DEFAULT_PORT):
         self.svc = service or Service(Gateway(approver=MessageBoxApprover()))
+        self.port_ref = {"port": port}
+        self.settings_sessions = Sessions()
         self.gw = self.svc.gw
         self._leases: dict[str, str] = {}  # client name -> lease id
         # pywinauto/COM and SendInput are not safe to drive from many threads at once; serialize.
@@ -194,6 +200,30 @@ class Daemon:
             return [json.dumps(out)]
 
         @mcp.tool()
+        async def wait_for(ctx: Context, conditions: list[dict], timeout_s: float = 300) -> dict:
+            """Wait until the person finishes something, then return. No scope needed; this only reads.
+            Returns as soon as ANY condition holds, or {"fired": false} at the timeout (capped by the
+            person's settings). Condition kinds: window_appears {title_re|process}, window_closes
+            {title_re|hwnd}, title_changes {title_re, to_re?}, element_appears / element_gone
+            {title_re, name|name_re, control_type?, auto_id?}, text_contains {title_re, text, name|auto_id?},
+            file {path, event: exists|modified|gone}. For long waits, prefer running
+            `overshoulder wait` as a background command if your host supports that."""
+            from overshoulder import settings as st
+            from overshoulder.waits import WaitError, wait
+
+            def go(token):
+                client = d.gw.registry.authenticate(token)
+                try:
+                    out = wait(conditions, st.load(), timeout_s)
+                except WaitError as e:
+                    return {"ok": False, "error": {"code": e.code, "message": str(e)}}
+                d.gw.log.write("wait", client=client.name, conditions=len(conditions), **out)
+                return {"ok": True, **out}
+
+            headers = ctx.headers
+            return await asyncio.to_thread(lambda: d.call(lambda: go(d.token_from_headers(headers))))
+
+        @mcp.tool()
         async def status(ctx: Context) -> dict:
             """Who holds the desktop, the queue, and whether driving is paused."""
             def go(token):
@@ -225,15 +255,19 @@ class Daemon:
                 d.gw.resume(body.get("only_if"))
             elif verb == "protect":
                 d.gw.protect_pid(int(body["pid"]))
+            elif verb == "settings_link":
+                token = d.settings_sessions.new_link()
+                return JSONResponse({"url": f"http://127.0.0.1:{d.port_ref['port']}/settings?t={token}"})
             else:
                 return JSONResponse({"error": f"unknown verb {verb}"}, status_code=404)
             return JSONResponse({"ok": True, "status": d.gw.status()})
 
+        settings_routes(mcp, d.port_ref, d.settings_sessions, d.gw.registry, str(default_home() / "logs"))
         return mcp
 
 
 def serve(port: int = DEFAULT_PORT) -> None:
-    daemon = Daemon()
+    daemon = Daemon(port=port)
     mcp = daemon.build()
     security = TransportSecuritySettings(enable_dns_rebinding_protection=True,
                                          allowed_hosts=[f"127.0.0.1:{port}", f"localhost:{port}"],

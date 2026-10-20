@@ -20,6 +20,35 @@ def _operator(verb: str, port: int, body: dict | None = None, method: str = "POS
         return json.loads(r.read())
 
 
+def _wait(a) -> int:
+    from overshoulder import settings as st
+    from overshoulder.gateway.log import ActionLog
+    from overshoulder.waits import WaitError, parse_conditions, wait
+
+    conds = parse_conditions(a.json) if a.json else []
+    if a.window_appears:
+        conds.append({"kind": "window_appears", "title_re": a.window_appears})
+    if a.window_closes:
+        conds.append({"kind": "window_closes", "title_re": a.window_closes})
+    if a.title_changes:
+        conds.append({"kind": "title_changes", "title_re": a.title_changes})
+    for flag, kind in ((a.element_appears, "element_appears"), (a.element_gone, "element_gone")):
+        if flag:
+            title_re, _, name_re = flag.partition("::")
+            conds.append({"kind": kind, "title_re": title_re, "name_re": name_re or ".+"})
+    if a.file:
+        path, _, event = a.file.partition("::")
+        conds.append({"kind": "file", "path": path, "event": event or "exists"})
+    try:
+        out = wait(conds, st.load(), a.timeout)
+    except WaitError as e:
+        print(json.dumps({"fired": False, "error": str(e)}))
+        return 2
+    ActionLog(default_home() / "logs" / "waits.jsonl").write("wait", source="cli", conditions=conds, **out)
+    print(json.dumps(out))
+    return 0 if out["fired"] else 3
+
+
 def main(argv: list[str] | None = None) -> int:
     from overshoulder.server import DEFAULT_PORT
 
@@ -48,6 +77,16 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(verb, help=f"{verb} the running gateway")
         p.add_argument("--reason", default=f"operator {verb}")
     sub.add_parser("home", help="print the data directory")
+    sub.add_parser("settings", help="open the settings page in your browser")
+    wt = sub.add_parser("wait", help="block until the person finishes something (exit 0), or time out (exit 3)")
+    wt.add_argument("--json", help="condition object or list, see overshoulder.waits")
+    wt.add_argument("--window-appears", metavar="TITLE_RE")
+    wt.add_argument("--window-closes", metavar="TITLE_RE")
+    wt.add_argument("--title-changes", metavar="TITLE_RE")
+    wt.add_argument("--element-appears", metavar="TITLE_RE::NAME_RE")
+    wt.add_argument("--element-gone", metavar="TITLE_RE::NAME_RE")
+    wt.add_argument("--file", metavar="PATH[::exists|modified|gone]")
+    wt.add_argument("--timeout", type=float, default=None, help="seconds (capped by settings)")
     au = sub.add_parser("autostart", help="start the gateway and watchdog at login (scheduled tasks)")
     au.add_argument("action", choices=["install", "uninstall", "status"])
     rr = sub.add_parser("render", help="(re)render a recording directory into a tutorial")
@@ -76,6 +115,14 @@ def main(argv: list[str] | None = None) -> int:
             for name in reg.names():
                 print(name)
         return 0
+    if a.cmd == "settings":
+        import os
+        url = _operator("settings_link", a.port)["url"]
+        os.startfile(url)
+        print("opened the settings page in your browser")
+        return 0
+    if a.cmd == "wait":
+        return _wait(a)
     if a.cmd == "autostart":
         from overshoulder import autostart
         fn = {"install": autostart.install, "uninstall": autostart.uninstall, "status": autostart.status}
