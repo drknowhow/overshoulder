@@ -250,6 +250,7 @@ class Gateway:
                 return fg
 
             params["require_foreground"] = require_foreground
+            t_act = time.time()
             result = perform(target, params)
             self.leases.count_action(lease)
             verdict = verify(target, params, result) if verify else {"ok": True, "method": "none"}
@@ -269,6 +270,7 @@ class Gateway:
             row = self.log.write("action", client=client_name, lease=lease_id, action=action,
                                  params=logged_params, target=target.describe() if target else None, ok=True,
                                  verify=_loggable(verdict, lease.meta.get("log_text")), scope=scope_desc,
+                                 t_act=round(t_act, 3),
                                  ms=round((time.time() - t0) * 1000))
             out["ts"] = row["ts"]
         except OSError as e:

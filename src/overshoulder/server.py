@@ -115,10 +115,8 @@ class Daemon:
             """Lease a scope: "window:<hwnd>", "screen:<n>" or "screen:all". log_text records typed
             text in the action log (needed for tutorial captions; off by default)."""
             def go(token):
-                out = d.svc.acquire(token, scope, ttl_s)
+                out = d.svc.acquire(token, scope, ttl_s, log_text=log_text)
                 d._leases[d.gw.registry.authenticate(token).name] = out["lease_id"]
-                if log_text:
-                    d.gw.leases.active().meta["log_text"] = True
                 return {"ok": True, **{k: v for k, v in out.items() if k != "lease_id"}}
 
             return await authed(ctx, go)
@@ -129,9 +127,8 @@ class Daemon:
             def go(token):
                 name = d.gw.registry.authenticate(token).name
                 lease_id = d._leases.pop(name, None)
-                if lease_id:
-                    d.svc.release(token, lease_id)
-                return {"ok": True, "released": bool(lease_id)}
+                out = d.svc.release(token, lease_id) if lease_id else {}
+                return {"ok": True, "released": bool(lease_id), **{k: v for k, v in out.items() if k != "released"}}
 
             return await authed(ctx, go)
 
@@ -168,6 +165,19 @@ class Daemon:
             return await authed(ctx, lambda token: d.svc.act(
                 token, d.lease_for(token), action, ref=ref, x=x, y=y, text=text, combo=combo, value=value,
                 expect=expect))
+
+        @mcp.tool()
+        async def record_start(ctx: Context, fps: int = 10, name: str = "") -> dict:
+            """Start a clean recording of your scope (no overlays; the cursor and step callouts are drawn
+            later). For readable captions, take the scope with log_text=true. Stops on record_stop or
+            when the scope is released or revoked."""
+            return await authed(ctx, lambda token: d.svc.record_start(token, d.lease_for(token), fps, name))
+
+        @mcp.tool()
+        async def record_stop(ctx: Context, render: bool = True) -> dict:
+            """Stop recording. With render=true, returns a tutorial MP4 with cursor, click ripples, numbered
+            step callouts and captions, plus one PNG per step and a steps.md."""
+            return await authed(ctx, lambda token: d.svc.record_stop(token, d.lease_for(token), render))
 
         @mcp.tool()
         async def screenshot(ctx: Context) -> list:

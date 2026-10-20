@@ -32,6 +32,8 @@ class Service:
         self.cache = uia.ElementCache()
         self._cache_lease: str | None = None
         self.shots_dir = shots_dir or default_home() / "shots"
+        self.recordings_dir = self.shots_dir.parent / "recordings"
+        self._recordings: dict = {}  # lease id -> Recording
 
     # -- discovery and lease -------------------------------------------------------------------
 
@@ -42,8 +44,8 @@ class Service:
                  "scope": f"window:{x.hwnd}"}
                 for x in sc.find_windows(title_re=title_re, process=process)]
 
-    def acquire(self, token: str, scope: str, ttl_s: float = 60) -> dict:
-        out = self.gw.acquire(token, scope, ttl_s)
+    def acquire(self, token: str, scope: str, ttl_s: float = 60, log_text: bool = False) -> dict:
+        out = self.gw.acquire(token, scope, ttl_s, log_text=log_text)
         if out["lease_id"] != self._cache_lease:
             self.cache.clear()
             self._cache_lease = out["lease_id"]
@@ -53,9 +55,10 @@ class Service:
         return self.gw.heartbeat(token, lease_id)
 
     def release(self, token: str, lease_id: str) -> dict:
+        finished = self.stop_recordings_for(lease_id)
         self.gw.release(token, lease_id)
         self.cache.clear()
-        return {"released": True}
+        return {"released": True, **({"recording": finished} if finished else {})}
 
     def status(self) -> dict:
         return self.gw.status()
@@ -121,6 +124,56 @@ class Service:
             scope = self._scope(lease_id)
             return {"path": str(self._shot(scope.bounds(), "shot"))}
         return self.gw.run(token, lease_id, "screenshot", perform, read_only=True)["result"]
+
+    # -- recording -----------------------------------------------------------------------------
+
+    def record_start(self, token: str, lease_id: str, fps: int = 10, name: str = "") -> dict:
+        from overshoulder.recorder import Recording
+
+        def perform(_t, p):
+            if lease_id in self._recordings:
+                raise ValueError("already recording this scope")
+            lease = self.gw.leases.active()
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            safe = "".join(c for c in (name or lease.client) if c.isalnum() or c in "-_")[:40]
+            rec = Recording(lease.scope, self.recordings_dir / f"{stamp}-{safe}", fps=max(1, min(int(fps), 30)),
+                            lease_id=lease_id, client=lease.client,
+                            alive=lambda: (self.gw.leases.active() or _NoLease).id == lease_id)
+            rec.start()
+            self._recordings[lease_id] = rec
+            return {"recording": str(rec.dir), "fps": rec.fps, "size": rec.size}
+
+        return self.gw.run(token, lease_id, "record_start", perform, read_only=True, params={"fps": fps})["result"]
+
+    def record_stop(self, token: str, lease_id: str, render: bool = True) -> dict:
+        def perform(_t, p):
+            return self._finish_recording(lease_id, render)
+
+        return self.gw.run(token, lease_id, "record_stop", perform, read_only=True)["result"]
+
+    def _finish_recording(self, lease_id: str, render: bool) -> dict:
+        import json as _json
+
+        from overshoulder import render as rnd
+        from overshoulder.recorder import collect_actions
+
+        rec = self._recordings.pop(lease_id, None)
+        if rec is None:
+            raise ValueError("not recording")
+        meta = rec.stop()
+        actions = collect_actions(self.gw.log.path, lease_id, meta["start"], meta["end"])
+        (rec.dir / "actions.json").write_text(_json.dumps(actions, indent=1), encoding="utf-8")
+        out = {"recording": str(rec.dir), "frames": meta["frames"], "actions": len(actions),
+               "error": meta.get("error")}
+        if render and meta["frames"]:
+            out["tutorial"] = rnd.render(rec.dir, actions)
+        return out
+
+    def stop_recordings_for(self, lease_id: str) -> dict | None:
+        """Called on release: finish (and render) a recording the agent forgot to stop."""
+        if lease_id in self._recordings:
+            return self._finish_recording(lease_id, render=True)
+        return None
 
     # -- actions -------------------------------------------------------------------------------
 
@@ -237,6 +290,10 @@ class Service:
         ms = int(time.time() * 1000) % 1000
         path = self.shots_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{ms:03d}-{kind}.png"
         return capture.save(capture.grab(rect), path)
+
+
+class _NoLease:
+    id = None
 
 
 def _need(el, action: str):

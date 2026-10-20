@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(verb, help=f"{verb} the running gateway")
         p.add_argument("--reason", default=f"operator {verb}")
     sub.add_parser("home", help="print the data directory")
+    rr = sub.add_parser("render", help="(re)render a recording directory into a tutorial")
+    rr.add_argument("dir")
 
     a = ap.parse_args(argv)
     if a.cmd == "serve":
@@ -71,6 +73,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for name in reg.names():
                 print(name)
+        return 0
+    if a.cmd == "render":
+        from pathlib import Path
+
+        from overshoulder.render import render
+        print(json.dumps(render(Path(a.dir)), indent=2))
         return 0
     if a.cmd == "home":
         print(default_home())
