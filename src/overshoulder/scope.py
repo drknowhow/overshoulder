@@ -1,0 +1,184 @@
+"""Scopes: the one unit of permission. A session acts only inside the scope it leased.
+
+A window scope is bound to a specific window *and* the process instance that owns it, so a new
+window that happens to reuse the handle, or a restarted app with the same title, is not in scope.
+A screen scope is one monitor or all of them.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Protocol
+
+from overshoulder.driver import display
+from overshoulder.driver import windows as w
+from overshoulder.driver.windows import Rect
+
+
+class ScopeError(RuntimeError):
+    code = "scope_error"
+
+
+class ScopeStale(ScopeError):
+    """The bound window closed, or its handle now belongs to a different process instance."""
+    code = "scope_stale"
+
+
+class OutOfScope(ScopeError):
+    """A point, rect or window is outside the leased scope."""
+    code = "out_of_scope"
+
+
+class ScopeNotFound(ScopeError):
+    code = "scope_not_found"
+
+
+class Scope(Protocol):
+    kind: str
+
+    def describe(self) -> dict: ...
+    def bounds(self) -> Rect: ...
+    def check_alive(self) -> None: ...
+    def owns_window(self, hwnd: int) -> bool: ...
+
+
+def require_point(scope: Scope, x: int, y: int) -> None:
+    scope.check_alive()
+    b = scope.bounds()
+    if not b.contains(x, y):
+        raise OutOfScope(f"point ({x}, {y}) is outside the {scope.kind} scope {b}")
+
+
+def require_rect(scope: Scope, rect: Rect) -> None:
+    scope.check_alive()
+    b = scope.bounds()
+    if not b.contains_rect(rect):
+        raise OutOfScope(f"rect {rect} is not fully inside the {scope.kind} scope {b}")
+
+
+def require_foreground_in_scope(scope: Scope, hwnd: int | None = None) -> int:
+    """The foreground window must belong to the scope; returns it. Used before every keystroke."""
+    scope.check_alive()
+    fg = w.foreground() if hwnd is None else hwnd
+    if not fg or not scope.owns_window(fg):
+        raise OutOfScope(f"foreground window {fg:#x} is not in the {scope.kind} scope")
+    return fg
+
+
+@dataclass(frozen=True)
+class WindowBinding:
+    hwnd: int
+    pid: int  # the app's pid (for UWP, the hosted app, not ApplicationFrameHost)
+    owner_pid: int  # the pid that owns the top-level hwnd
+    created: int  # owner process creation time, FILETIME ticks
+    process: str
+    class_name: str
+    title: str
+
+
+def bind_window(hwnd: int) -> WindowBinding:
+    if not w.is_window(hwnd):
+        raise ScopeNotFound(f"no window {hwnd:#x}")
+    owner_pid = w.pid_of(hwnd)
+    ident = w.process_identity(owner_pid)
+    if ident is None:
+        raise ScopeNotFound(f"window {hwnd:#x} has no live owning process")
+    app_pid = w.hosted_app_pid(hwnd) or owner_pid
+    app_ident = w.process_identity(app_pid) or ident
+    return WindowBinding(hwnd, app_pid, owner_pid, ident[0], app_ident[1].rsplit("\\", 1)[-1],
+                         w.class_name(hwnd), w.title(hwnd))
+
+
+class WindowScope:
+    kind = "window"
+
+    def __init__(self, binding: WindowBinding):
+        self.binding = binding
+
+    def describe(self) -> dict:
+        b = self.binding
+        return {"kind": "window", "hwnd": b.hwnd, "pid": b.pid, "process": b.process,
+                "class": b.class_name, "title": b.title}
+
+    def check_alive(self) -> None:
+        b = self.binding
+        if not w.is_window(b.hwnd):
+            raise ScopeStale(f"window {b.hwnd:#x} ({b.title!r}) is gone")
+        if w.pid_of(b.hwnd) != b.owner_pid:
+            raise ScopeStale(f"window handle {b.hwnd:#x} now belongs to another process")
+        ident = w.process_identity(b.owner_pid)
+        if ident is None or ident[0] != b.created:
+            raise ScopeStale(f"process {b.owner_pid} restarted since the scope was bound")
+
+    def bounds(self) -> Rect:
+        return w.frame_bounds(self.binding.hwnd)
+
+    def owns_window(self, hwnd: int) -> bool:
+        """The bound window itself, or a dialog/popup whose owner chain leads to it."""
+        return hwnd == self.binding.hwnd or w.root_owner(hwnd) == self.binding.hwnd
+
+
+class ScreenScope:
+    kind = "screen"
+
+    def __init__(self, monitor: int | None):
+        """monitor: 1-based index, or None for all monitors."""
+        self.monitor = monitor
+        mons = display.monitors()
+        if monitor is not None and not any(m.index == monitor for m in mons):
+            raise ScopeNotFound(f"no monitor {monitor}; have {[m.index for m in mons]}")
+
+    def describe(self) -> dict:
+        return {"kind": "screen", "monitor": "all" if self.monitor is None else self.monitor}
+
+    def _rects(self) -> list[Rect]:
+        mons = display.monitors()
+        picked = [m for m in mons if self.monitor is None or m.index == self.monitor]
+        return [Rect(m.left, m.top, m.right, m.bottom) for m in picked]
+
+    def check_alive(self) -> None:
+        if not self._rects():
+            raise ScopeStale(f"monitor {self.monitor} is no longer connected")
+
+    def bounds(self) -> Rect:
+        rs = self._rects()
+        if not rs:
+            raise ScopeStale(f"monitor {self.monitor} is no longer connected")
+        return Rect(min(r.left for r in rs), min(r.top for r in rs),
+                    max(r.right for r in rs), max(r.bottom for r in rs))
+
+    def contains(self, x: int, y: int) -> bool:
+        return any(r.contains(x, y) for r in self._rects())
+
+    def owns_window(self, hwnd: int) -> bool:
+        """Any window whose visible frame overlaps the scope's monitor(s)."""
+        f = w.frame_bounds(hwnd)
+        return any(not r.intersect(f).empty for r in self._rects())
+
+
+_SPEC = re.compile(r"^(window|screen):(.+)$")
+
+
+def parse_scope(spec: str) -> Scope:
+    """Build a scope from 'window:<hwnd>' (decimal or 0x hex), 'screen:<n>' or 'screen:all'."""
+    m = _SPEC.match(spec.strip().lower())
+    if not m:
+        raise ValueError(f"bad scope spec {spec!r}; use window:<hwnd>, screen:<n> or screen:all")
+    kind, arg = m.groups()
+    if kind == "screen":
+        return ScreenScope(None if arg == "all" else int(arg))
+    return WindowScope(bind_window(int(arg, 0)))
+
+
+def find_windows(title_re: str | None = None, process: str | None = None) -> list[w.WindowInfo]:
+    """Candidate windows to scope to, filtered by title regex and/or process image name."""
+    rx = re.compile(title_re, re.IGNORECASE) if title_re else None
+    out = []
+    for info in w.top_windows():
+        if rx and not rx.search(info.title):
+            continue
+        if process and info.process.lower() != process.lower():
+            continue
+        out.append(info)
+    return out
