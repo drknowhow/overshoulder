@@ -71,13 +71,16 @@ class LeaseManager:
         with self._lock:
             self._expire()
             a = self._active
-            return {
-                "paused": self._paused,
-                "active": None if a is None else {
-                    "client": a.client, "scope": a.scope.describe(),
-                    "expires_in_s": round(a.expires_at - self._clock(), 1), "actions": a.actions},
-                "queue": list(self._queue),
-            }
+            active = None
+            if a is not None:
+                active = {"client": a.client, "scope": a.scope.describe(),
+                          "expires_in_s": round(a.expires_at - self._clock(), 1), "actions": a.actions}
+                try:
+                    b = a.scope.bounds()
+                    active["bounds"] = [b.left, b.top, b.right, b.bottom]
+                except Exception:
+                    active["bounds"] = None  # scope went stale; the next action will say so
+            return {"paused": self._paused, "active": active, "queue": list(self._queue)}
 
     # -- holder operations ---------------------------------------------------------------------
 
@@ -171,6 +174,11 @@ class LeaseManager:
         with self._lock:
             self._paused = reason
 
-    def resume(self) -> None:
+    def resume(self, only_if: str | None = None) -> bool:
+        """Lift the pause. With only_if, only a pause with exactly that reason is lifted, so an
+        automatic resume (human stopped typing) can never undo a panic."""
         with self._lock:
+            if only_if is not None and self._paused != only_if:
+                return False
             self._paused = None
+            return True

@@ -128,6 +128,21 @@ def test_pause_blocks_actions_and_new_leases():
     lm.check(lease.id, "a")
 
 
+def test_automatic_resume_cannot_undo_a_panic(tmp_path):
+    g = gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda s: FakeScope())
+    g.pause("human input")
+    assert g.resume(only_if="human input")
+    g.panic()
+    assert not g.resume(only_if="human input")
+    assert g.status()["paused"]
+
+
+def test_status_reports_scope_bounds_for_the_outline():
+    lm = LeaseManager(clock=Clock())
+    lm.acquire("a", FakeScope())
+    assert lm.status()["active"]["bounds"] == [0, 0, 100, 100]
+
+
 def test_other_client_cannot_use_a_stolen_lease_id():
     lm = LeaseManager(clock=Clock())
     lease = lm.acquire("a", FakeScope())

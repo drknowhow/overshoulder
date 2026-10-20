@@ -168,9 +168,11 @@ class Gateway:
         self.leases.pause(reason)
         self.log.write("paused", reason=reason)
 
-    def resume(self) -> None:
-        self.leases.resume()
-        self.log.write("resumed")
+    def resume(self, only_if: str | None = None) -> bool:
+        lifted = self.leases.resume(only_if)
+        if lifted:
+            self.log.write("resumed", only_if=only_if)
+        return lifted
 
     # -- actions -------------------------------------------------------------------------------
 

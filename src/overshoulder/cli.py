@@ -28,6 +28,9 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("serve", help="run the gateway daemon (MCP at http://127.0.0.1:<port>/mcp)")
+    wd = sub.add_parser("watchdog", help="run the watchdog: panic hotkey, human-input pause, scope outline")
+    wd.add_argument("--hotkey", default="ctrl+alt+p")
+    wd.add_argument("--idle-resume", type=float, default=5.0, help="seconds of no physical input before resuming")
 
     c = sub.add_parser("client", help="manage agent clients")
     csub = c.add_subparsers(dest="ccmd", required=True)
@@ -51,6 +54,10 @@ def main(argv: list[str] | None = None) -> int:
         from overshoulder.server import serve
         print(f"Overshoulder MCP on http://127.0.0.1:{a.port}/mcp  (data: {default_home()})", flush=True)
         serve(a.port)
+        return 0
+    if a.cmd == "watchdog":
+        from overshoulder.watchdog import run
+        run(a.port, a.hotkey, a.idle_resume)
         return 0
     if a.cmd == "client":
         reg = ClientRegistry()

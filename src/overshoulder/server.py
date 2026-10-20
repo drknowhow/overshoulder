@@ -206,7 +206,7 @@ class Daemon:
             elif verb == "pause":
                 d.gw.pause(body.get("reason", "operator pause"))
             elif verb == "resume":
-                d.gw.resume()
+                d.gw.resume(body.get("only_if"))
             elif verb == "protect":
                 d.gw.protect_pid(int(body["pid"]))
             else:
