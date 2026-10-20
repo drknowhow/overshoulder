@@ -26,7 +26,7 @@ from overshoulder.approvals import MessageBoxApprover
 from overshoulder.driver import input as inp
 from overshoulder.gateway.clients import default_home
 from overshoulder.gateway.core import Gateway
-from overshoulder.gateway.errors import GatewayError, Unauthorized
+from overshoulder.gateway.errors import GatewayError, Paused, Unauthorized
 from overshoulder.scope import ScopeError
 from overshoulder.service import ACTIONS, Service
 
@@ -40,7 +40,10 @@ INSTRUCTIONS = """Overshoulder lets you see and operate desktop apps on this Win
    over coordinates. Actions: """ + ", ".join(ACTIONS) + """.
 4. Typing goes to the focused control in your scope; pass ref to focus a control first.
 5. Refusals are deliberate (out_of_scope, denied, approval_denied, paused, lease_revoked): observe again
-   or stop; never try to work around them. A person can press the panic key at any time.
+   or stop; never try to work around them. When the person at the desk uses the mouse or keyboard,
+   driving pauses and your call waits (up to ~20 s) for them to stop; "paused" after that means they are
+   still busy, so wait and retry later. A person can press the panic key at any time; after a panic only
+   they can resume.
 6. release_scope() when done."""
 
 
@@ -80,7 +83,10 @@ class Daemon:
         lease_id = self._leases.get(client.name)
         if not lease_id:
             raise GatewayError("no scope held; call take_scope first")
-        self.gw.heartbeat(token, lease_id)
+        try:
+            self.gw.heartbeat(token, lease_id)
+        except Paused:
+            pass  # the action itself waits out a human-input pause, or reports the pause
         return lease_id
 
     def call(self, fn, *args, **kwargs):

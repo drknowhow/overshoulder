@@ -25,8 +25,8 @@ from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
 from overshoulder.gateway import policy
 from overshoulder.gateway.clients import ClientRegistry, default_home
-from overshoulder.gateway.errors import Denied, GatewayError, TargetStale, VerifyFailed
-from overshoulder.gateway.lease import DEFAULT_TTL_S, LeaseManager
+from overshoulder.gateway.errors import Denied, GatewayError, Paused, TargetStale, VerifyFailed
+from overshoulder.gateway.lease import DEFAULT_TTL_S, HUMAN_PAUSE, LeaseManager
 from overshoulder.gateway.log import ActionLog
 
 KEYBOARD_ACTIONS = frozenset({"type", "hotkey"})
@@ -104,7 +104,8 @@ class Gateway:
     def __init__(self, registry: ClientRegistry | None = None, leases: LeaseManager | None = None,
                  log: ActionLog | None = None, approver: policy.Approver | None = None,
                  checks: Checks | None = None, scope_factory: Callable[[str], Any] = sc.parse_scope,
-                 allow_elevated: bool = False, protected_pids: set[int] | None = None):
+                 allow_elevated: bool = False, protected_pids: set[int] | None = None,
+                 human_wait_s: float = 20.0):
         # An elevated gateway could drive elevated windows past UIPI, defeating the elevated-window deny.
         if not allow_elevated and policy.self_elevated():
             raise Denied("refusing to run elevated; start Overshoulder from a normal (non-admin) process")
@@ -117,6 +118,9 @@ class Gateway:
         # Overshoulder's own windows (approval prompts, watchdog) are never drivable, in any scope,
         # so an agent cannot approve its own request.
         self.protected_pids = {os.getpid()} | set(protected_pids or ())
+        # A person touching the mouse/keyboard pauses driving briefly; actions wait that out
+        # instead of failing, up to this long. A panic is never waited out.
+        self.human_wait_s = human_wait_s
 
     # -- lease lifecycle -----------------------------------------------------------------------
 
@@ -194,7 +198,7 @@ class Gateway:
         try:
             client = self.registry.authenticate(token)
             client_name = client.name
-            lease = self.leases.check(lease_id, client.name)
+            lease = self._check_waiting_out_human(lease_id, client.name)
             if not lease.meta.get("log_text"):
                 logged_params = _redact_text(logged_params)
             scope = lease.scope
@@ -277,6 +281,17 @@ class Gateway:
             # The action already happened; report the log failure instead of inviting a retry.
             out["log_error"] = str(e)
         return out
+
+    def _check_waiting_out_human(self, lease_id: str, client: str):
+        deadline = time.monotonic() + self.human_wait_s
+        while True:
+            try:
+                return self.leases.check(lease_id, client)
+            except Paused:
+                if self.leases.paused_reason() != HUMAN_PAUSE or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.25)
+                self.leases.heartbeat_unchecked(lease_id, client)
 
     def _require_unprotected(self, hwnd: int) -> None:
         if hwnd and self.checks.pid_of(hwnd) in self.protected_pids:

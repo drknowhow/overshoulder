@@ -23,8 +23,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
-HUMAN_REASON = "human input"
-
+from overshoulder.gateway.lease import HUMAN_PAUSE as HUMAN_REASON  # noqa: E402
 
 # -- decisions (pure, unit-tested) ---------------------------------------------------------------
 

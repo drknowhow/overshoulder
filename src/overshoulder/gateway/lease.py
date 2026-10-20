@@ -20,6 +20,8 @@ DEFAULT_TTL_S = 60.0
 MAX_TTL_S = 600.0
 # A queued client that stops retrying loses its place, so an abandoned request cannot block everyone.
 QUEUE_STALE_S = 30.0
+# The watchdog's pause reason; the only pause an action may wait out (never a panic).
+HUMAN_PAUSE = "human input"
 REVOKED_MEMORY = 1000
 
 
@@ -135,6 +137,17 @@ class LeaseManager:
             if self._paused:
                 raise Paused(f"driving is paused: {self._paused}")
             return a
+
+    def heartbeat_unchecked(self, lease_id: str, client: str) -> None:
+        """Keep a lease alive while it waits out a pause (check() would refuse during the pause)."""
+        with self._lock:
+            a = self._active
+            if a and a.id == lease_id and a.client == client:
+                a.expires_at = max(a.expires_at, self._clock() + 5.0)
+
+    def paused_reason(self) -> str | None:
+        with self._lock:
+            return self._paused
 
     def heartbeat(self, lease_id: str, client: str) -> Lease:
         with self._lock:

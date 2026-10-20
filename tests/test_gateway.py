@@ -128,6 +128,33 @@ def test_pause_blocks_actions_and_new_leases():
     lm.check(lease.id, "a")
 
 
+def test_action_waits_out_a_brief_human_pause(gw):
+    import threading
+    g, token, lease_id, _ = gw
+    g.pause("human input")
+    threading.Timer(0.5, lambda: g.resume(only_if="human input")).start()
+    assert g.run(token, lease_id, "observe", lambda t, p: {}, read_only=True)["ok"]
+
+
+def test_action_does_not_wait_out_a_panic(gw):
+    g, token, lease_id, _ = gw
+    g.human_wait_s = 5
+    g.panic()
+    import time as _t
+    t0 = _t.monotonic()
+    with pytest.raises(E.LeaseRevoked):
+        g.run(token, lease_id, "observe", lambda t, p: {}, read_only=True)
+    assert _t.monotonic() - t0 < 1
+
+
+def test_human_pause_that_outlasts_the_wait_is_reported(gw):
+    g, token, lease_id, _ = gw
+    g.human_wait_s = 0.3
+    g.pause("human input")
+    with pytest.raises(E.Paused):
+        g.run(token, lease_id, "observe", lambda t, p: {}, read_only=True)
+
+
 def test_automatic_resume_cannot_undo_a_panic(tmp_path):
     g = gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda s: FakeScope())
     g.pause("human input")
