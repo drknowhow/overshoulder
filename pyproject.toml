@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "overshoulder"
+version = "0.1.0.dev0"
+description = "A desktop hand for AI agents: see, operate, record and annotate any window or screen."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary (private until release)" }
+dependencies = [
+  "pywinauto==0.6.9; sys_platform == 'win32'",
+  "mss>=10",
+  "pillow>=10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/overshoulder"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "desktop: needs an interactive Windows desktop session (skipped in CI unless OVERSHOULDER_DESKTOP_TESTS=1)",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+extend-exclude = ["spike"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
