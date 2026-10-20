@@ -20,7 +20,7 @@ from overshoulder.gateway.core import Gateway, Target
 from overshoulder.gateway.errors import GatewayError
 
 ACTIONS = ("click", "double_click", "right_click", "invoke", "toggle", "select", "set_value", "type",
-           "hotkey", "focus")
+           "hotkey", "focus", "activate")
 # Below this share of changed pixels a screenshot pair counts as "nothing visible happened".
 CHANGE_EPSILON = 0.0002
 
@@ -82,8 +82,8 @@ class Service:
                                   for x in w.top_windows() if scope.owns_window(x.hwnd)]
             elements = []
             for root in roots:
-                elements += [uia.describe(e) for e in uia.walk(self.cache, root, max_nodes=max_nodes,
-                                                                only_named=only_named)]
+                elements += uia.describe_all(uia.walk(self.cache, root, max_nodes=max_nodes,
+                                                      only_named=only_named))
             out["elements"] = elements[:max_nodes]
             out["truncated"] = len(elements) > max_nodes
             if screenshot:
@@ -103,7 +103,7 @@ class Service:
             hits = []
             for root in roots:
                 els = uia.walk(self.cache, root, max_nodes=max_nodes)
-                hits += [uia.describe(e) for e in uia.find(els, name, name_re, control_type, auto_id)]
+                hits += uia.describe_all(uia.find(els, name, name_re, control_type, auto_id))
             return hits
 
         return self.gw.run(token, lease_id, "find", perform, read_only=True,
@@ -153,6 +153,10 @@ class Service:
                 uia.set_value(_need(el, action), value or "")
             elif action == "focus":
                 uia.focus(_need(el, action))
+            elif action == "activate":
+                if scope.kind != "window":
+                    raise ValueError("activate needs a window scope")
+                uia.activate(scope.binding.hwnd)
             elif action in ("click", "double_click", "right_click"):
                 if t is None:
                     raise ValueError(f"{action} needs a ref or x/y")
@@ -163,7 +167,7 @@ class Service:
                 if el is not None:
                     uia.focus(el)
                     time.sleep(0.15)
-                inp.type_text(self._focused_in_scope(scope), text or "", abort=p["abort"])
+                inp.type_text(p["require_foreground"](), text or "", abort=p["abort"])
             elif action == "hotkey":
                 p["abort"]()
                 inp.hotkey(self._focused_in_scope(scope), combo or "")

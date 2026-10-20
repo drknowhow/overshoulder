@@ -23,6 +23,7 @@ from starlette.responses import JSONResponse
 
 from overshoulder import __version__
 from overshoulder.approvals import MessageBoxApprover
+from overshoulder.driver import input as inp
 from overshoulder.gateway.clients import default_home
 from overshoulder.gateway.core import Gateway
 from overshoulder.gateway.errors import GatewayError, Unauthorized
@@ -86,7 +87,7 @@ class Daemon:
         with self._desk:
             try:
                 return fn(*args, **kwargs)
-            except (GatewayError, ScopeError) as e:
+            except (GatewayError, ScopeError, inp.FocusLost, inp.KeysHeld, inp.InputError) as e:
                 code = getattr(e, "code", "error")
                 extra = e.to_dict() if isinstance(e, GatewayError) else {}
                 return {"ok": False, "error": {**extra, "code": code, "message": str(e)}}

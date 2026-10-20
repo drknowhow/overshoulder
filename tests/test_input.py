@@ -45,6 +45,14 @@ def test_type_text_sends_nothing_once_focus_moves(monkeypatch):
     assert len(sent) == 2
 
 
+def test_typing_refuses_while_a_person_holds_ctrl(monkeypatch):
+    monkeypatch.setattr(inp, "send", lambda events: None)
+    ctrl_down = lambda vk: 0x8000 if vk == 0x11 else 0  # noqa: E731
+    with pytest.raises(inp.KeysHeld):
+        inp.type_text(0x100, "h", per_char_delay=0, get_foreground=lambda: 0x100, key_state=ctrl_down)
+    inp.type_text(0x100, "h", per_char_delay=0, get_foreground=lambda: 0x100, key_state=lambda vk: 0)
+
+
 def test_hotkey_releases_in_reverse_order():
     events = inp.hotkey_inputs("ctrl+shift+s")
     order = [(e.ki.wVk, bool(e.ki.dwFlags & inp.KEYEVENTF_KEYUP)) for e in events]

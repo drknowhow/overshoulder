@@ -233,6 +233,21 @@ def test_read_only_observe_skips_approval_and_focus(gw):
     assert g.run(token, lease_id, "observe", lambda t, p: {}, target=t, read_only=True)["ok"]
 
 
+def test_typing_into_a_target_checks_foreground_after_focusing_it(gw):
+    g, token, lease_id, _ = gw
+    order = []
+    g.checks.foreground_in_scope = lambda s: order.append("fg") or 0x10
+
+    def perform(t, p):
+        order.append("focus")
+        p["require_foreground"]()
+        order.append("type")
+
+    g.run(token, lease_id, "type", perform, target=Target("element", rect=Rect(10, 10, 30, 30)),
+          params={"text": "x"})
+    assert order == ["focus", "fg", "type"]
+
+
 def test_keyboard_action_requires_foreground_in_scope(gw):
     g, token, lease_id, _ = gw
 

@@ -81,6 +81,17 @@ class ElementCache:
             return self._by_ref.get(ref)
 
 
+def describe_all(elements: list[Element]) -> list[dict]:
+    """Describe elements, dropping any that vanish mid-read (apps rebuild their UI while loading)."""
+    out = []
+    for el in elements:
+        try:
+            out.append(describe(el))
+        except Exception:
+            continue
+    return out
+
+
 def describe(el: Element) -> dict:
     info = el.info
     r = _rect(info)
@@ -191,6 +202,11 @@ def set_value(el: Element, value: str) -> None:
 
 def focus(el: Element) -> None:
     el.info.element.SetFocus()
+
+
+def activate(hwnd: int) -> None:
+    """Bring a top-level window to the front via UIA (no synthetic Alt press)."""
+    UIAElementInfo(hwnd).element.SetFocus()
 
 
 def read(el: Element) -> dict:

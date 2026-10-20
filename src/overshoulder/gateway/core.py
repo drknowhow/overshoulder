@@ -213,9 +213,10 @@ class Gateway:
             if not read_only:
                 if action == "hotkey":
                     policy.require_hotkey_allowed(str(params.get("combo", "")))
-                if action in KEYBOARD_ACTIONS:
+                if action in KEYBOARD_ACTIONS and target is None:
                     fg = self.checks.foreground_in_scope(scope)
                     self._require_unprotected(fg)
+                if action in KEYBOARD_ACTIONS:
                     if target is None:
                         focused = self.checks.focused_element()
                         if action == "type":
@@ -239,6 +240,14 @@ class Gateway:
                         "target": target.describe() if target else None, "scope": scope_desc})
 
             params["abort"] = lambda: self.leases.check(lease_id, client.name)
+
+            def require_foreground() -> int:
+                # Keyboard actions with a target focus it first, then must call this before any key.
+                fg = self.checks.foreground_in_scope(scope)
+                self._require_unprotected(fg)
+                return fg
+
+            params["require_foreground"] = require_foreground
             result = perform(target, params)
             self.leases.count_action(lease)
             verdict = verify(target, params, result) if verify else {"ok": True, "method": "none"}

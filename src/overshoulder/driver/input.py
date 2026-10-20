@@ -59,10 +59,31 @@ class INPUT(ctypes.Structure):
 
 class InputError(RuntimeError):
     """SendInput injected fewer events than asked (blocked by UIPI or the secure desktop)."""
+    code = "input_blocked"
 
 
 class FocusLost(RuntimeError):
     """The expected window is not in the foreground, so input was not sent."""
+    code = "focus_lost"
+
+
+class KeysHeld(RuntimeError):
+    """A modifier key is down (usually a person's), which would turn typed text into shortcuts."""
+    code = "keys_held"
+
+
+_MODIFIERS = {0x10: "shift", 0x11: "ctrl", 0x12: "alt", 0x5B: "win", 0x5C: "win"}
+
+
+def held_modifiers(get_state: Callable[[int], int] | None = None) -> list[str]:
+    get_state = get_state or ctypes.windll.user32.GetAsyncKeyState
+    return sorted({name for vk, name in _MODIFIERS.items() if get_state(vk) & 0x8000})
+
+
+def require_no_modifiers(get_state: Callable[[int], int] | None = None) -> None:
+    held = held_modifiers(get_state)
+    if held:
+        raise KeysHeld(f"{'+'.join(held)} is held down; wait until it is released")
 
 
 ctypes.windll.user32.GetForegroundWindow.restype = wt.HWND
@@ -114,12 +135,14 @@ def send(events: Iterable[INPUT]) -> int:
 
 def type_text(hwnd: int, text: str, per_char_delay: float = 0.015,
               get_foreground: Callable[[], int] = foreground_window,
-              abort: Callable[[], object] | None = None) -> None:
+              abort: Callable[[], object] | None = None,
+              key_state: Callable[[int], int] | None = None) -> None:
     """Type text into hwnd, re-checking focus (and abort, if given) before every character."""
     for ch in text.replace("\r\n", "\n"):
         if abort is not None:
             abort()
         require_foreground(hwnd, get_foreground)
+        require_no_modifiers(key_state)
         send(text_inputs(ch))
         if per_char_delay:
             time.sleep(per_char_delay)
@@ -158,8 +181,10 @@ def hotkey_inputs(combo: str) -> list[INPUT]:
     return down + up
 
 
-def hotkey(hwnd: int, combo: str, get_foreground: Callable[[], int] = foreground_window) -> None:
+def hotkey(hwnd: int, combo: str, get_foreground: Callable[[], int] = foreground_window,
+           key_state: Callable[[int], int] | None = None) -> None:
     require_foreground(hwnd, get_foreground)
+    require_no_modifiers(key_state)
     send(hotkey_inputs(combo))
 
 
