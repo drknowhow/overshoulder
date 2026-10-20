@@ -4,3 +4,4 @@ __pycache__/
 .env
 recordings/
 dist/
+spike/out/
