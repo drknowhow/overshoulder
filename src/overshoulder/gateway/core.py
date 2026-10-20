@@ -19,14 +19,17 @@ from pathlib import Path
 from typing import Any
 
 from overshoulder import scope as sc
+from overshoulder.driver import uia
+from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
 from overshoulder.gateway import policy
 from overshoulder.gateway.clients import ClientRegistry, default_home
-from overshoulder.gateway.errors import GatewayError, TargetStale, VerifyFailed
+from overshoulder.gateway.errors import Denied, GatewayError, TargetStale, VerifyFailed
 from overshoulder.gateway.lease import DEFAULT_TTL_S, LeaseManager
 from overshoulder.gateway.log import ActionLog
 
 KEYBOARD_ACTIONS = frozenset({"type", "hotkey"})
+MOUSE_ACTIONS = frozenset({"click", "double_click", "right_click"})
 
 
 @dataclass(frozen=True)
@@ -60,18 +63,50 @@ class Target:
         return d
 
 
+def _hit_test(scope, x: int, y: int) -> int:
+    """The top-level window under (x, y) must be in scope; returns it."""
+    h = w.window_at(x, y)
+    if not h or not scope.owns_window(h):
+        raise sc.OutOfScope(f"the window under ({x}, {y}) is {h:#x}, which is not in scope")
+    return h
+
+
+def _foreground_checked(scope, not_elevated: Callable[[int], None]) -> int:
+    fg = sc.require_foreground_in_scope(scope)
+    not_elevated(w.pid_of(fg))
+    return fg
+
+
 @dataclass
 class Checks:
     """Environment checks, injectable for tests."""
     desktop: Callable[[], None] = policy.require_default_desktop
     not_elevated: Callable[[int], None] = policy.require_not_elevated
-    foreground_in_scope: Callable[[Any], int] = sc.require_foreground_in_scope
+    # Returns the in-scope foreground hwnd; raises OutOfScope / Denied otherwise.
+    foreground_in_scope: Callable[[Any], int] | None = None
+    # Returns the top-level hwnd under a point if it is in scope; raises OutOfScope otherwise.
+    window_at_point: Callable[[Any, int, int], int] = _hit_test
+    # UIA probes; None means "could not tell".
+    focused_element: Callable[[], dict | None] = uia.focused_info
+    element_at_point: Callable[[int, int], dict | None] = uia.info_at_point
+    pid_of: Callable[[int], int] = w.pid_of
+
+    def __post_init__(self):
+        if self.foreground_in_scope is None:
+            self.foreground_in_scope = lambda scope: _foreground_checked(scope, self.not_elevated)
+
+
+TEXT_PARAMS = ("text", "value")
 
 
 class Gateway:
     def __init__(self, registry: ClientRegistry | None = None, leases: LeaseManager | None = None,
                  log: ActionLog | None = None, approver: policy.Approver | None = None,
-                 checks: Checks | None = None, scope_factory: Callable[[str], Any] = sc.parse_scope):
+                 checks: Checks | None = None, scope_factory: Callable[[str], Any] = sc.parse_scope,
+                 allow_elevated: bool = False):
+        # An elevated gateway could drive elevated windows past UIPI, defeating the elevated-window deny.
+        if not allow_elevated and policy.self_elevated():
+            raise Denied("refusing to run elevated; start Overshoulder from a normal (non-admin) process")
         self.registry = registry or ClientRegistry()
         self.leases = leases or LeaseManager()
         self.log = log or ActionLog(default_home() / "logs" / f"actions-{time.strftime('%Y%m%d')}.jsonl")
@@ -81,7 +116,9 @@ class Gateway:
 
     # -- lease lifecycle -----------------------------------------------------------------------
 
-    def acquire(self, token: str, scope_spec: str, ttl_s: float = DEFAULT_TTL_S) -> dict:
+    def acquire(self, token: str, scope_spec: str, ttl_s: float = DEFAULT_TTL_S,
+                log_text: bool = False) -> dict:
+        """log_text=True records typed text in the action log (for tutorial captions); off by default."""
         client = None
         try:
             client = self.registry.authenticate(token)
@@ -92,12 +129,13 @@ class Gateway:
                     "kind": "lease", "client": client.name, "scope": scope.describe(),
                     "reason": f"{client.name} wants {scope.kind} scope {scope.describe()}"})
             lease = self.leases.acquire(client.name, scope, ttl_s)
+            lease.meta["log_text"] = bool(log_text)
         except GatewayError as e:
             self.log.write("lease_refused", client=getattr(client, "name", None), scope=scope_spec,
                            error=e.to_dict())
             raise
         self.log.write("lease_acquired", client=client.name, lease=lease.id, scope=scope.describe(),
-                       ttl_s=lease.ttl_s)
+                       ttl_s=lease.ttl_s, log_text=bool(log_text))
         return {"lease_id": lease.id, "scope": scope.describe(), "ttl_s": lease.ttl_s}
 
     def heartbeat(self, token: str, lease_id: str) -> dict:
@@ -116,7 +154,9 @@ class Gateway:
     # -- watchdog hooks ------------------------------------------------------------------------
 
     def panic(self, reason: str = "panic key") -> None:
+        """Revoke the active lease AND pause, so no client can simply re-acquire until resume()."""
         lease = self.leases.revoke(reason)
+        self.leases.pause(f"{reason}; an operator must resume")
         self.log.write("lease_revoked", reason=reason, lease=getattr(lease, "id", None),
                        client=getattr(lease, "client", None))
 
@@ -134,17 +174,25 @@ class Gateway:
             target: Target | None = None, params: dict | None = None,
             verify: Callable[[Target | None, dict, Any], dict] | None = None,
             read_only: bool = False) -> dict:
-        """Run one action through every check. `perform` runs at most once."""
+        """Run one action through every check. `perform` runs at most once.
+
+        perform receives params plus params["abort"], a callable that raises if the lease was revoked
+        or paused mid-action; long actions (typing) must call it between steps.
+        """
         params = dict(params or {})
         t0 = time.time()
         client_name = None
         lease = None
+        scope_desc = None
         logged_params = {k: v for k, v in params.items() if k != "secret"}
         try:
             client = self.registry.authenticate(token)
             client_name = client.name
             lease = self.leases.check(lease_id, client.name)
+            if not lease.meta.get("log_text"):
+                logged_params = _redact_text(logged_params)
             scope = lease.scope
+            scope_desc = scope.describe()
             scope.check_alive()
             self.checks.desktop()
 
@@ -157,36 +205,61 @@ class Gateway:
             if pid:
                 self.checks.not_elevated(pid)
 
+            focused_type = ""
             if not read_only:
-                reason = policy.approval_reason(action, target.name if target else "", params)
+                if action == "hotkey":
+                    policy.require_hotkey_allowed(str(params.get("combo", "")))
+                if action in KEYBOARD_ACTIONS:
+                    self.checks.foreground_in_scope(scope)
+                    if target is None:
+                        focused = self.checks.focused_element()
+                        if action == "type":
+                            policy.require_not_password(
+                                "type", None if focused is None else focused["password"])
+                        focused_type = (focused or {}).get("type", "")
+                    else:
+                        focused_type = target.control_type
+                name = target.name if target else ""
+                if action in MOUSE_ACTIONS and target is not None:
+                    hit = self.checks.window_at_point(scope, *target.point())
+                    self.checks.not_elevated(self.checks.pid_of(hit))
+                    if target.kind == "point":
+                        under = self.checks.element_at_point(*target.point())
+                        name = (under or {}).get("name", "")
+                reason = policy.approval_reason(action, name, params, focused_type=focused_type)
                 if reason:
                     policy.require_approval(self.approver, {
                         "kind": "action", "client": client.name, "action": action, "reason": reason,
-                        "target": target.describe() if target else None, "scope": scope.describe()})
-                if action in KEYBOARD_ACTIONS:
-                    self.checks.foreground_in_scope(scope)
+                        "target": target.describe() if target else None, "scope": scope_desc})
 
+            params["abort"] = lambda: self.leases.check(lease_id, client.name)
             result = perform(target, params)
-            lease.actions += 1
+            self.leases.count_action(lease)
             verdict = verify(target, params, result) if verify else {"ok": True, "method": "none"}
             if not verdict.get("ok"):
-                raise VerifyFailed(f"{action} did not have the expected effect: {verdict}")
+                raise VerifyFailed(f"{action} did not have the expected effect: "
+                                   f"{verdict.get('expect_failed') or 'verify returned not ok'}")
         except Exception as e:
             # Every refusal and driver failure is logged before it propagates.
             error = e.to_dict() if isinstance(e, GatewayError) else \
                 {"code": getattr(e, "code", type(e).__name__), "message": str(e)}
             self.log.write("action", client=client_name, lease=lease_id, action=action, params=logged_params,
                            target=target.describe() if target else None, ok=False, error=error,
-                           ms=round((time.time() - t0) * 1000))
+                           scope=scope_desc, ms=round((time.time() - t0) * 1000))
             raise
-        row = self.log.write("action", client=client_name, lease=lease_id, action=action,
-                             params=logged_params, target=target.describe() if target else None, ok=True,
-                             verify=verdict, scope=lease.scope.describe(),
-                             ms=round((time.time() - t0) * 1000))
-        return {"ok": True, "result": result, "verify": verdict, "ts": row["ts"]}
+        out = {"ok": True, "result": result, "verify": verdict}
+        try:
+            row = self.log.write("action", client=client_name, lease=lease_id, action=action,
+                                 params=logged_params, target=target.describe() if target else None, ok=True,
+                                 verify=_loggable(verdict, lease.meta.get("log_text")), scope=scope_desc,
+                                 ms=round((time.time() - t0) * 1000))
+            out["ts"] = row["ts"]
+        except OSError as e:
+            # The action already happened; report the log failure instead of inviting a retry.
+            out["log_error"] = str(e)
+        return out
 
-    @staticmethod
-    def _bind(scope, target: Target) -> Target:
+    def _bind(self, scope, target: Target) -> Target:
         if target.revalidate is not None:
             fresh = target.revalidate()
             if fresh is None:
@@ -194,13 +267,35 @@ class Gateway:
             if target.rect and fresh.rect and fresh.rect != target.rect:
                 raise TargetStale(f"target moved from {target.rect} to {fresh.rect}; observe again")
             target = replace(fresh, revalidate=target.revalidate)
-        if target.kind == "point":
-            sc.require_point(scope, *target.point())
-        elif target.rect is not None:
-            sc.require_point(scope, *target.rect.center())
         if target.hwnd and not scope.owns_window(target.hwnd):
             raise sc.OutOfScope(f"target window {target.hwnd:#x} is not in scope")
+        x, y = target.point()
+        binding = getattr(scope, "binding", None)
+        if target.hwnd and binding is not None and target.hwnd != binding.hwnd:
+            # An owned dialog may sit outside its parent's frame; check against the dialog itself.
+            if not w.frame_bounds(target.hwnd).contains(x, y):
+                raise sc.OutOfScope(f"point ({x}, {y}) is outside dialog {target.hwnd:#x}")
+        else:
+            sc.require_point(scope, x, y)
         return target
+
+
+def _redact_text(params: dict) -> dict:
+    """Replace typed text, and expectations that would echo it, with their length."""
+    out = dict(params)
+    for k in TEXT_PARAMS:
+        if isinstance(out.get(k), str):
+            out[k] = {"redacted": True, "len": len(out[k])}
+    if isinstance(out.get("expect"), dict):
+        out["expect"] = {k: ({"redacted": True, "len": len(v)} if isinstance(v, str) else v)
+                         for k, v in out["expect"].items()}
+    return out
+
+
+def _loggable(verdict: dict, log_text: bool) -> dict:
+    if log_text or "readback" not in verdict:
+        return verdict
+    return {**verdict, "readback": "redacted"}
 
 
 def gateway_for_tests(tmp: Path, **kw) -> Gateway:

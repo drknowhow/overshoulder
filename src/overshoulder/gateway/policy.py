@@ -100,28 +100,62 @@ def require_not_elevated(pid: int, check: Callable[[int], bool | None] = process
 TEXT_ACTIONS = frozenset({"type", "set_value", "read_value"})
 
 
-def require_not_password(action: str, is_password: bool) -> None:
-    if is_password and action in TEXT_ACTIONS:
-        raise Denied("target is a password field; agents never type into or read it")
+def require_not_password(action: str, is_password: bool | None) -> None:
+    """is_password None means it could not be determined, which counts as a password field."""
+    if action in TEXT_ACTIONS and is_password is not False:
+        raise Denied("target is a password field (or could not be checked); agents never type into "
+                     "or read it")
 
 
 _CONSEQUENTIAL = re.compile(
     r"\b(send|delete|remove|erase|discard|purchase|buy|pay|checkout|order|place order|install|uninstall|"
     r"format|submit|publish|post|transfer|wipe|reset|sign out|log out|empty trash|overwrite|replace all)\b",
     re.IGNORECASE)
-_CONSEQUENTIAL_KEYS = frozenset({"delete", "shift+delete", "alt+f4", "ctrl+enter", "ctrl+shift+delete"})
-_CLICK_ACTIONS = frozenset({"click", "invoke", "double_click", "toggle", "select"})
+_VK_CTRL, _VK_SHIFT, _VK_ALT, _VK_WIN, _VK_RWIN = 0x11, 0x10, 0x12, 0x5B, 0x5C
+_VK_TAB, _VK_ESC, _VK_DEL, _VK_ENTER, _VK_F4 = 0x09, 0x1B, 0x2E, 0x0D, 0x73
+
+# Combos that act on the shell rather than the focused window, so they would leave the scope.
+_SCOPE_ESCAPES = [
+    frozenset({_VK_ALT, _VK_TAB}), frozenset({_VK_ALT, _VK_ESC}), frozenset({_VK_CTRL, _VK_ESC}),
+    frozenset({_VK_CTRL, _VK_SHIFT, _VK_ESC}), frozenset({_VK_CTRL, _VK_ALT, _VK_DEL}),
+]
+_CONSEQUENTIAL_KEYS = [
+    frozenset({_VK_DEL}), frozenset({_VK_SHIFT, _VK_DEL}), frozenset({_VK_CTRL, _VK_SHIFT, _VK_DEL}),
+    frozenset({_VK_ALT, _VK_F4}), frozenset({_VK_CTRL, _VK_ENTER}),
+]
+_CLICK_ACTIONS = frozenset({"click", "invoke", "double_click", "right_click", "toggle", "select"})
+_SINGLE_LINE = frozenset({"edit", "combobox", "spinner"})
 
 
-def approval_reason(action: str, target_name: str = "", params: dict | None = None) -> str | None:
-    """Why this action needs a one-shot approval, or None. Generic signals only."""
+def combo_keys(combo: str) -> frozenset[int]:
+    from overshoulder.driver.input import vk_for
+    return frozenset(vk_for(p) for p in combo.split("+") if p.strip())
+
+
+def require_hotkey_allowed(combo: str) -> None:
+    keys = combo_keys(combo)
+    if keys & {_VK_WIN, _VK_RWIN}:
+        raise Denied(f"hotkey {combo!r} uses the Windows key, which acts outside any scope")
+    if any(keys == esc for esc in _SCOPE_ESCAPES):
+        raise Denied(f"hotkey {combo!r} switches or leaves the active window")
+
+
+def approval_reason(action: str, target_name: str = "", params: dict | None = None,
+                    focused_type: str = "") -> str | None:
+    """Why this action needs a one-shot approval, or None. Generic signals only.
+
+    target_name is the element's name (for point targets, the element under the point when UIA can
+    tell; canvas apps expose none, so their point clicks are not name-checked).
+    """
     params = params or {}
     if action in _CLICK_ACTIONS and target_name and _CONSEQUENTIAL.search(target_name):
         return f"{action} on {target_name!r}"
     if action == "hotkey":
-        combo = str(params.get("combo", "")).lower().replace(" ", "")
-        if combo in _CONSEQUENTIAL_KEYS:
+        combo = str(params.get("combo", ""))
+        if combo_keys(combo) in _CONSEQUENTIAL_KEYS:
             return f"hotkey {combo}"
+    if action == "type" and "\n" in str(params.get("text", "")) and focused_type.lower() in _SINGLE_LINE:
+        return "Enter in a single-line field may submit a form"
     return None
 
 

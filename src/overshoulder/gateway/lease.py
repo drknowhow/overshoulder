@@ -10,7 +10,7 @@ from __future__ import annotations
 import secrets
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -20,6 +20,7 @@ DEFAULT_TTL_S = 60.0
 MAX_TTL_S = 600.0
 # A queued client that stops retrying loses its place, so an abandoned request cannot block everyone.
 QUEUE_STALE_S = 30.0
+REVOKED_MEMORY = 1000
 
 
 @dataclass
@@ -40,17 +41,22 @@ class LeaseManager:
         self._clock = clock
         self._lock = threading.RLock()
         self._active: Lease | None = None
-        self._revoked: dict[str, str] = {}
+        self._revoked: OrderedDict[str, str] = OrderedDict()
         self._queue: deque[str] = deque()
         self._queue_seen: dict[str, float] = {}
         self._paused: str | None = None
 
     # -- state ---------------------------------------------------------------------------------
 
+    def _end(self, lease: Lease, reason: str) -> None:
+        self._revoked[lease.id] = reason
+        while len(self._revoked) > REVOKED_MEMORY:
+            self._revoked.popitem(last=False)
+
     def _expire(self) -> None:
         now = self._clock()
         if self._active and now >= self._active.expires_at:
-            self._revoked[self._active.id] = "expired"
+            self._end(self._active, "expired")
             self._active = None
         for c in [c for c in self._queue if now - self._queue_seen.get(c, now) > QUEUE_STALE_S]:
             self._queue.remove(c)
@@ -137,8 +143,12 @@ class LeaseManager:
         with self._lock:
             a = self._active
             if a and a.id == lease_id and a.client == client:
-                self._revoked[a.id] = "released"
+                self._end(a, "released")
                 self._active = None
+
+    def count_action(self, lease: Lease) -> None:
+        with self._lock:
+            lease.actions += 1
 
     def leave_queue(self, client: str) -> None:
         with self._lock:
@@ -153,7 +163,7 @@ class LeaseManager:
         with self._lock:
             a = self._active
             if a:
-                self._revoked[a.id] = reason
+                self._end(a, reason)
                 self._active = None
             return a
 

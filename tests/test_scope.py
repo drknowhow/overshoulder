@@ -77,6 +77,19 @@ def test_require_rect_needs_the_whole_rect_inside(monkeypatch):
         sc.require_rect(scope, Rect(450, 110, 520, 200))
 
 
+def test_window_scope_refuses_a_foreign_process_window_owned_by_it(monkeypatch):
+    _fake_window(monkeypatch, owners={0x40: 0x10})
+    monkeypatch.setattr(w, "pid_of", lambda h: 555 if h == 0x40 else 7)
+    assert not sc.WindowScope(_binding()).owns_window(0x40)
+
+
+def test_screen_scope_point_in_a_monitor_gap_is_refused(monkeypatch):
+    mons = [Monitor(1, 0, 0, 1920, 1080, 96, True), Monitor(2, 1920, 200, 3840, 1280, 96, False)]
+    monkeypatch.setattr(sc.display, "monitors", lambda: mons)
+    with pytest.raises(sc.OutOfScope):
+        sc.require_point(sc.ScreenScope(None), 2000, 50)
+
+
 def test_window_scope_owns_its_dialogs_but_not_other_windows(monkeypatch):
     _fake_window(monkeypatch, owners={0x20: 0x10, 0x30: 0x30})
     scope = sc.WindowScope(_binding())
@@ -115,8 +128,8 @@ def test_screen_scope_rejects_a_missing_monitor(monkeypatch):
         sc.ScreenScope(3)
 
 
-def test_screen_scope_owns_windows_overlapping_its_monitor(monkeypatch):
+def test_screen_scope_owns_windows_centred_on_its_monitor(monkeypatch):
     _fake_monitors(monkeypatch)
-    monkeypatch.setattr(w, "frame_bounds", lambda h: Rect(2000, 10, 2400, 300))
+    monkeypatch.setattr(w, "frame_bounds", lambda h: Rect(1900, 10, 2400, 300))
     assert not sc.ScreenScope(1).owns_window(0x1)
     assert sc.ScreenScope(2).owns_window(0x1)

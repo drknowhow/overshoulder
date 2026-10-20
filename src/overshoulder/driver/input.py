@@ -65,6 +65,9 @@ class FocusLost(RuntimeError):
     """The expected window is not in the foreground, so input was not sent."""
 
 
+ctypes.windll.user32.GetForegroundWindow.restype = wt.HWND
+
+
 def foreground_window() -> int:
     return ctypes.windll.user32.GetForegroundWindow() or 0
 
@@ -110,9 +113,12 @@ def send(events: Iterable[INPUT]) -> int:
 
 
 def type_text(hwnd: int, text: str, per_char_delay: float = 0.015,
-              get_foreground: Callable[[], int] = foreground_window) -> None:
-    """Type text into hwnd, re-checking focus before every character."""
+              get_foreground: Callable[[], int] = foreground_window,
+              abort: Callable[[], object] | None = None) -> None:
+    """Type text into hwnd, re-checking focus (and abort, if given) before every character."""
     for ch in text.replace("\r\n", "\n"):
+        if abort is not None:
+            abort()
         require_foreground(hwnd, get_foreground)
         send(text_inputs(ch))
         if per_char_delay:

@@ -41,12 +41,22 @@ class ClientRegistry:
     def __init__(self, path: Path | None = None):
         self.path = path or default_home() / "clients.json"
         self._clients: dict[str, Client] = {}
+        self._mtime: float | None = None
         self.load()
 
     def load(self) -> None:
         if self.path.exists():
             data = json.loads(self.path.read_text(encoding="utf-8"))
             self._clients = {c["name"]: Client(**c) for c in data.get("clients", [])}
+            self._mtime = self.path.stat().st_mtime
+        else:
+            self._clients, self._mtime = {}, None
+
+    def _reload_if_changed(self) -> None:
+        # Another process (the CLI) may rotate or remove a token while the gateway runs.
+        mtime = self.path.stat().st_mtime if self.path.exists() else None
+        if mtime != self._mtime:
+            self.load()
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,6 +64,7 @@ class ClientRegistry:
         tmp.write_text(json.dumps({"clients": [asdict(c) for c in self._clients.values()]}, indent=2),
                        encoding="utf-8")
         tmp.replace(self.path)
+        self._mtime = self.path.stat().st_mtime
 
     def add(self, name: str, window: str = "allow", screen: str = "approve") -> str:
         """Create or rotate a client; returns the plaintext token (shown once, never stored)."""
@@ -75,6 +86,7 @@ class ClientRegistry:
         return sorted(self._clients)
 
     def authenticate(self, token: str) -> Client:
+        self._reload_if_changed()
         digest = _hash(token or "")
         for c in self._clients.values():
             if hmac.compare_digest(c.token_sha256, digest):

@@ -45,9 +45,10 @@ class Scope(Protocol):
 
 def require_point(scope: Scope, x: int, y: int) -> None:
     scope.check_alive()
-    b = scope.bounds()
-    if not b.contains(x, y):
-        raise OutOfScope(f"point ({x}, {y}) is outside the {scope.kind} scope {b}")
+    contains = getattr(scope, "contains", None)
+    inside = contains(x, y) if contains else scope.bounds().contains(x, y)
+    if not inside:
+        raise OutOfScope(f"point ({x}, {y}) is outside the {scope.kind} scope {scope.bounds()}")
 
 
 def require_rect(scope: Scope, rect: Rect) -> None:
@@ -115,8 +116,11 @@ class WindowScope:
         return w.frame_bounds(self.binding.hwnd)
 
     def owns_window(self, hwnd: int) -> bool:
-        """The bound window itself, or a dialog/popup whose owner chain leads to it."""
-        return hwnd == self.binding.hwnd or w.root_owner(hwnd) == self.binding.hwnd
+        """The bound window itself, or a dialog/popup of the same app whose owner chain leads to it."""
+        if hwnd == self.binding.hwnd:
+            return True
+        return (w.root_owner(hwnd) == self.binding.hwnd
+                and w.pid_of(hwnd) in (self.binding.pid, self.binding.owner_pid))
 
 
 class ScreenScope:
@@ -152,9 +156,9 @@ class ScreenScope:
         return any(r.contains(x, y) for r in self._rects())
 
     def owns_window(self, hwnd: int) -> bool:
-        """Any window whose visible frame overlaps the scope's monitor(s)."""
+        """A window whose visible frame is centred on the scope's monitor(s)."""
         f = w.frame_bounds(hwnd)
-        return any(not r.intersect(f).empty for r in self._rects())
+        return self.contains(*f.center())
 
 
 _SPEC = re.compile(r"^(window|screen):(.+)$")
