@@ -42,10 +42,12 @@ def test_annotate_draws_badge_and_caption_only_while_a_step_is_active():
     fonts = {"badge": R._font(18), "caption": R._font(26)}
     quiet = R.annotate(img, 10.0, (0, 0), None, steps, fonts)
     busy = R.annotate(img, 2.1, (0, 0), None, steps, fonts)
-    assert quiet.tobytes() == img.tobytes()
+    assert quiet.size == busy.size == (400, 300 + R.STRIP)
+    assert quiet.crop((0, 0, 400, 300)).tobytes() == img.tobytes()
     assert busy.getpixel((130, 97)) != (255, 255, 255)  # highlight border, top edge
-    row = [busy.getpixel((x, 262)) for x in range(busy.width)]
-    assert sum(px[0] < 80 for px in row) > 100  # dark caption bar across the bottom
+    strip_quiet = quiet.crop((0, 300, 400, 300 + R.STRIP)).tobytes()
+    strip_busy = busy.crop((0, 300, 400, 300 + R.STRIP)).tobytes()
+    assert strip_quiet != strip_busy  # the caption is drawn in the strip, not over the app
 
 
 def test_annotate_translates_screen_coordinates_by_the_frame_origin():
@@ -70,3 +72,21 @@ def test_keyboard_step_without_target_draws_no_badge():
     steps = R.build_steps([_row("hotkey", 1.0, params={"combo": "ctrl+s"})], 0.0)
     out = R.annotate(img, 1.1, (0, 0), None, steps, {"badge": R._font(18), "caption": R._font(26)})
     assert all(out.getpixel((x, y)) == (255, 255, 255) for x in range(0, 60) for y in range(0, 60))
+
+
+def test_long_captions_shrink_or_truncate_to_fit_a_narrow_window():
+    img = Image.new("RGB", (240, 200), (255, 255, 255))
+    steps = R.build_steps([_row("type", 1.0, params={"text": "a very long sentence " * 6})], 0.0)
+    out = R.annotate(img, 1.1, (0, 0), None, steps, {"badge": R._font(18), "caption": R._font(26)})
+    strip = out.crop((0, 200, 240, 200 + R.STRIP))
+    assert strip.getpixel((0, R.STRIP // 2)) == R.CAPTION_BG[:3]  # text did not run off the left edge
+    assert strip.getpixel((239, R.STRIP // 2)) == R.CAPTION_BG[:3]
+
+
+def test_tight_timing_drops_idle_frames_between_steps():
+    rows = [_row("click", 2.0, target={"kind": "point", "x": 1, "y": 1}),
+            _row("click", 30.0, target={"kind": "point", "x": 1, "y": 1})]
+    steps = R.build_steps(rows, 0.0)
+    assert R.keep_frame(0.5, steps, 40.0) and R.keep_frame(39.5, steps, 40.0)
+    assert R.keep_frame(2.5, steps, 40.0) and R.keep_frame(30.1, steps, 40.0)
+    assert not R.keep_frame(15.0, steps, 40.0)

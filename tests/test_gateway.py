@@ -528,3 +528,12 @@ def test_agent_cannot_click_or_type_into_overshoulders_own_windows(gw):
         g.run(token, lease_id, "click", lambda t, p: None, target=Target("point", x=5, y=5))
     with pytest.raises(E.Denied):
         g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "enter"})
+
+
+def test_enter_hotkey_in_single_line_field_needs_approval(gw):
+    g, token, lease_id, _ = gw
+    g.checks.focused_element = lambda: {"name": "Search", "type": "Edit", "pid": 1, "password": False}
+    with pytest.raises(E.ApprovalDenied):
+        g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "enter"})
+    g.checks.focused_element = lambda: {"name": "", "type": "Document", "pid": 1, "password": False}
+    assert g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "enter"})["ok"]

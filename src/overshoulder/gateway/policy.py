@@ -152,8 +152,11 @@ def approval_reason(action: str, target_name: str = "", params: dict | None = No
         return f"{action} on {target_name!r}"
     if action == "hotkey":
         combo = str(params.get("combo", ""))
-        if combo_keys(combo) in _CONSEQUENTIAL_KEYS:
+        keys = combo_keys(combo)
+        if keys in _CONSEQUENTIAL_KEYS:
             return f"hotkey {combo}"
+        if keys == frozenset({_VK_ENTER}) and focused_type.lower() in _SINGLE_LINE:
+            return "Enter in a single-line field may submit a form"
     if action == "type" and "\n" in str(params.get("text", "")) and focused_type.lower() in _SINGLE_LINE:
         return "Enter in a single-line field may submit a form"
     return None

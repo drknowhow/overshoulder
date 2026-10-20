@@ -21,6 +21,9 @@ CAPTION_BG = (17, 24, 39, 215)
 STEP_ACTIONS = {"click", "double_click", "right_click", "invoke", "toggle", "select", "set_value", "type",
                 "hotkey", "activate", "focus"}
 LEAD_S, HOLD_S, RIPPLE_S = 0.5, 2.2, 0.6
+STRIP = 72  # caption strip under the video, so captions never cover the app
+# Tight timing keeps frames this close to a step and drops the idle time between agent actions.
+PAD_BEFORE, PAD_AFTER, EDGE_S = 0.6, 0.4, 1.0
 
 
 @dataclass
@@ -105,9 +108,24 @@ def _cursor_shape(x: int, y: int, s: float = 1.0) -> list[tuple[float, float]]:
     return [(x + px * s, y + py * s) for px, py in pts]
 
 
+def _fit(d: ImageDraw.ImageDraw, text: str, max_w: float, size: int) -> tuple[str, ImageFont.ImageFont]:
+    while size > 15:
+        font = _font(size)
+        if d.textlength(text, font=font) <= max_w:
+            return text, font
+        size -= 2
+    font = _font(16)
+    while text and d.textlength(text + "...", font=font) > max_w:
+        text = text[:-1]
+    return text + "...", font
+
+
 def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[int, int] | None,
              steps: list[Step], fonts: dict) -> Image.Image:
-    """Draw every annotation active at time t onto a frame whose top-left is `origin` on screen."""
+    """Draw every annotation active at time t onto a frame whose top-left is `origin` on screen.
+
+    Returns the frame with a caption strip of STRIP pixels added underneath.
+    """
     ox, oy = origin
     base = img.convert("RGBA")
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
@@ -138,20 +156,27 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
             d.ellipse((cx - 22, cy - 22, cx + 22, cy + 22), fill=RIPPLE + (70,))
             d.polygon(_cursor_shape(cx, cy, 1.3), fill=(255, 255, 255, 255), outline=(0, 0, 0, 255))
 
+    framed = Image.alpha_composite(base, layer).convert("RGB")
+    out = Image.new("RGB", (base.width, base.height + STRIP), CAPTION_BG[:3])
+    out.paste(framed, (0, 0))
     if active:
         s = active[-1]
-        text = f"{s.n}. {s.caption}"
-        tw = d.textlength(text, font=fonts["caption"])
-        h = 54
-        top = base.height - h - 18
-        left = max((base.width - tw) / 2 - 22, 10)
-        d.rounded_rectangle((left, top, left + tw + 44, top + h), radius=12, fill=CAPTION_BG)
-        d.text((left + 22, top + h / 2), text, font=fonts["caption"], fill=(255, 255, 255, 255), anchor="lm")
-
-    return Image.alpha_composite(base, layer).convert("RGB")
+        sd = ImageDraw.Draw(out)
+        text, font = _fit(sd, f"{s.n}. {s.caption}", base.width - 32, 26)
+        sd.text((base.width / 2, base.height + STRIP / 2), text, font=font, fill=(255, 255, 255), anchor="mm")
+    return out
 
 
-def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | None = None) -> dict:
+def keep_frame(t: float, steps: list[Step], last_t: float) -> bool:
+    """Tight timing: keep the opening and closing second and the frames around each step."""
+    if t <= EDGE_S or t >= last_t - EDGE_S:
+        return True
+    return any(s.start - PAD_BEFORE <= t <= s.end + PAD_AFTER for s in steps)
+
+
+def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | None = None,
+           tight: bool = True) -> dict:
+    """tight=True cuts the idle time between steps; tight=False keeps real-time pacing."""
     rec = Path(rec_dir)
     out = Path(out_dir or rec / "tutorial")
     out.mkdir(parents=True, exist_ok=True)
@@ -170,14 +195,16 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     dec = subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(rec / "video.mp4"),
                             "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE)
     enc = subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt",
-                            "rgb24", "-s", f"{width}x{height}", "-r", str(fps), "-i", "-", "-c:v", "libx264",
+                            "rgb24", "-s", f"{width}x{height + STRIP}", "-r", str(fps), "-i", "-", "-c:v",
+                            "libx264",
                             "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                             str(out / "tutorial.mp4")], stdin=subprocess.PIPE)
     shots_due = {s.n: still_time(s) for s in steps}
     by_n = {s.n: s for s in steps}
     saved: dict[int, str] = {}
     frame_bytes = width * height * 3
-    i = 0
+    last_t = track[-1]["t"] if track else 0.0
+    i = written = 0
     try:
         while True:
             raw = dec.stdout.read(frame_bytes)
@@ -187,8 +214,10 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
                                                                "cursor": None}
             t = fr["t"]
             img = Image.frombytes("RGB", (width, height), raw)
-            framed = annotate(img, t, (fr["bounds"][0], fr["bounds"][1]), fr.get("cursor"), steps, fonts)
-            enc.stdin.write(framed.tobytes())
+            if not tight or keep_frame(t, steps, last_t):
+                framed = annotate(img, t, (fr["bounds"][0], fr["bounds"][1]), fr.get("cursor"), steps, fonts)
+                enc.stdin.write(framed.tobytes())
+                written += 1
             for n, due in shots_due.items():
                 if n not in saved and t >= due:
                     path = out / f"step-{n:02d}.png"
@@ -211,5 +240,5 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
         if s.n in saved:
             lines.append(f"\n   ![Step {s.n}]({saved[s.n]})\n")
     (out / "steps.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return {"video": str(out / "tutorial.mp4"), "frames": i, "steps": len(steps), "images": len(saved),
-            "markdown": str(out / "steps.md")}
+    return {"video": str(out / "tutorial.mp4"), "frames": written, "source_frames": i, "steps": len(steps),
+            "images": len(saved), "seconds": round(written / fps, 1), "markdown": str(out / "steps.md")}
