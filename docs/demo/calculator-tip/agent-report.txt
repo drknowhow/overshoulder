@@ -1,0 +1,7 @@
+﻿**DONE** The tutorial rendered, and the Calculator display read "Display is 7.275", so the 15% tip on $48.50 is $7.275. Nothing was refused. The scope is released.
+
+- Video: `%LOCALAPPDATA%\Overshoulder\recordings\20261020-102339-calculator-tip\tutorial\tutorial.mp4`
+- Markdown: `%LOCALAPPDATA%\Overshoulder\recordings\20261020-102339-calculator-tip\tutorial\steps.md`
+- Size: 11 steps, 11 images, 647 frames, 24 logged actions, and `error` was null.
+
+I pressed these buttons in order: Clear, 4, 8, decimal, 5, 0, ×, 1, 5, %, =. I did not open the video, `steps.md` or the images, so I haven't checked the captions or callouts.
