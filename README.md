@@ -100,6 +100,23 @@ refusal is logged.
 - **Recordings stay in scope.** A window recording captures that window's own pixels, even when
   something covers it.
 
+## Waiting for the person
+
+When an agent needs you to do something (sign in, approve, finish a form), it can watch for the
+result instead of asking you to say "done". `overshoulder wait` exits 0 as soon as any condition
+holds, and 3 on timeout. Hosts that run background commands, such as Claude Code, pick the work
+back up automatically. Agents can also use the `wait_for` tool.
+
+```powershell
+overshoulder wait --window-appears "Order confirmed"
+overshoulder wait --window-closes "Installing" --file "C:\Users\me\Downloads\report.pdf"
+overshoulder wait --json '{"kind": "element_appears", "title_re": "Setup", "name": "Finish"}'
+```
+
+Detection only reads window titles, on-screen controls and files. `overshoulder settings` opens a
+local page where you switch it on or off, choose what agents may watch, limit it to particular apps,
+and set how often it checks and how long it may wait.
+
 ## Tutorials
 
 `record_start` captures a clean video of the scope. `record_stop` renders `tutorial.mp4` with a cursor,
