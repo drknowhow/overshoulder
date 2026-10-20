@@ -460,3 +460,14 @@ def test_gateway_refuses_to_run_elevated(tmp_path, monkeypatch):
     monkeypatch.setattr(policy, "self_elevated", lambda: True)
     with pytest.raises(E.Denied):
         gateway_for_tests(tmp_path, allow_elevated=False)
+
+
+def test_agent_cannot_click_or_type_into_overshoulders_own_windows(gw):
+    import os
+    g, token, lease_id, _ = gw
+    g.checks.pid_of = lambda h: os.getpid()
+    g.approver = policy.CallbackApprover(lambda req: True)
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "click", lambda t, p: None, target=Target("point", x=5, y=5))
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "enter"})

@@ -12,6 +12,7 @@ Each action runs observe -> bind -> act once -> verify:
 
 from __future__ import annotations
 
+import os
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -103,7 +104,7 @@ class Gateway:
     def __init__(self, registry: ClientRegistry | None = None, leases: LeaseManager | None = None,
                  log: ActionLog | None = None, approver: policy.Approver | None = None,
                  checks: Checks | None = None, scope_factory: Callable[[str], Any] = sc.parse_scope,
-                 allow_elevated: bool = False):
+                 allow_elevated: bool = False, protected_pids: set[int] | None = None):
         # An elevated gateway could drive elevated windows past UIPI, defeating the elevated-window deny.
         if not allow_elevated and policy.self_elevated():
             raise Denied("refusing to run elevated; start Overshoulder from a normal (non-admin) process")
@@ -113,6 +114,9 @@ class Gateway:
         self.approver = approver or policy.DenyAll()
         self.checks = checks or Checks()
         self.scope_factory = scope_factory
+        # Overshoulder's own windows (approval prompts, watchdog) are never drivable, in any scope,
+        # so an agent cannot approve its own request.
+        self.protected_pids = {os.getpid()} | set(protected_pids or ())
 
     # -- lease lifecycle -----------------------------------------------------------------------
 
@@ -210,7 +214,8 @@ class Gateway:
                 if action == "hotkey":
                     policy.require_hotkey_allowed(str(params.get("combo", "")))
                 if action in KEYBOARD_ACTIONS:
-                    self.checks.foreground_in_scope(scope)
+                    fg = self.checks.foreground_in_scope(scope)
+                    self._require_unprotected(fg)
                     if target is None:
                         focused = self.checks.focused_element()
                         if action == "type":
@@ -222,6 +227,7 @@ class Gateway:
                 name = target.name if target else ""
                 if action in MOUSE_ACTIONS and target is not None:
                     hit = self.checks.window_at_point(scope, *target.point())
+                    self._require_unprotected(hit)
                     self.checks.not_elevated(self.checks.pid_of(hit))
                     if target.kind == "point":
                         under = self.checks.element_at_point(*target.point())
@@ -258,6 +264,13 @@ class Gateway:
             # The action already happened; report the log failure instead of inviting a retry.
             out["log_error"] = str(e)
         return out
+
+    def _require_unprotected(self, hwnd: int) -> None:
+        if hwnd and self.checks.pid_of(hwnd) in self.protected_pids:
+            raise Denied("that window belongs to Overshoulder itself; agents never drive it")
+
+    def protect_pid(self, pid: int) -> None:
+        self.protected_pids.add(pid)
 
     def _bind(self, scope, target: Target) -> Target:
         if target.revalidate is not None:
