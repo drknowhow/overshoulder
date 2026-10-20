@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(verb, help=f"{verb} the running gateway")
         p.add_argument("--reason", default=f"operator {verb}")
     sub.add_parser("home", help="print the data directory")
+    au = sub.add_parser("autostart", help="start the gateway and watchdog at login (scheduled tasks)")
+    au.add_argument("action", choices=["install", "uninstall", "status"])
     rr = sub.add_parser("render", help="(re)render a recording directory into a tutorial")
     rr.add_argument("dir")
 
@@ -73,6 +75,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for name in reg.names():
                 print(name)
+        return 0
+    if a.cmd == "autostart":
+        from overshoulder import autostart
+        fn = {"install": autostart.install, "uninstall": autostart.uninstall, "status": autostart.status}
+        print(json.dumps(fn[a.action](), indent=2))
         return 0
     if a.cmd == "render":
         from pathlib import Path

@@ -33,6 +33,13 @@ overshoulder serve      # MCP at http://127.0.0.1:47621/mcp
 overshoulder watchdog   # panic key, human-input pause, scope outline
 ```
 
+To start both at every login instead (per-user scheduled tasks, not elevated, restarted if they
+crash; logs in `%LOCALAPPDATA%\Overshoulder\logs`):
+
+```powershell
+overshoulder autostart install     # also: status, uninstall
+```
+
 Create a client for each agent. The token is printed once; only its hash is stored.
 
 ```powershell
