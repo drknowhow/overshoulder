@@ -1,12 +1,14 @@
 """The method ladder: do each action without the person's input when the app allows it.
 
 Rungs, per action (docs/SPIKE-phase2.md has the measurements behind them):
-  press a control   UIA Invoke/Toggle/Select/Expand  -> posted click -> real click
+  press a control   BM_CLICK for a Win32 button -> UIA Invoke/Toggle/Select -> posted click -> real click
   click a point     posted click (one retry for Chromium, which can swallow the first) -> real click
   type              EM_REPLACESEL for edit controls (one message, so nothing arrives out of order) ->
                     WM_CHAR posted to the scope's input window -> real typing
                     (Chromium/Electron windows in the background go straight to real typing)
-  set a value       UIA ValuePattern -> WM_SETTEXT
+  set a value       WM_SETTEXT for a Win32 edit -> UIA ValuePattern
+  (UI Automation on Win32 controls was seen to bring the app forward for a moment, as on Character Map,
+  so a native control gets its own window message first.)
   hotkey            keys posted with modifiers in the target thread's key state -> (real, only if asked)
 
 The method argument picks how far down the ladder an action may go:
@@ -135,9 +137,33 @@ class Ladder:
 
     # -- actions ---------------------------------------------------------------------------------
 
+    @staticmethod
+    def _native(el) -> int:
+        return (getattr(getattr(el, "info", None), "handle", None) or 0) if el is not None else 0
+
+    def _button_message(self, el) -> Outcome | None:
+        """BM_CLICK to a Win32 button: a background press that leaves the foreground alone."""
+        native = self._native(el)
+        if self.method == "input" or not native or w.class_name(native) != "Button":
+            return None
+        try:
+            self.p["background_target"](native)
+            self.p["abort"]()
+            self._guarded(lambda: bg.click_button(native))
+        except bg.BackgroundUnsupported as e:
+            self._attempt("button_message", False, str(e))
+            return None
+        self._attempt("button_message", True)
+        return self._done("button_message")
+
+    def invoke(self, el) -> Outcome:
+        return self._button_message(el) or self.pattern("uia_invoke", lambda: uia.invoke(el))
+
     def press(self, el, target, button: str = "left", count: int = 1) -> Outcome:
         """click / double_click / right_click."""
         kind = (target.control_type or "").lower()
+        if button == "left" and count == 1 and (done := self._button_message(el)) is not None:
+            return done
         if self.method != "input" and el is not None and button == "left" and count == 1 and kind in PRESSABLE:
             for name, fn in (("uia_invoke", uia.invoke), ("uia_toggle", uia.toggle), ("uia_select", uia.select)):
                 try:
@@ -263,18 +289,21 @@ class Ladder:
         return self._done("real_typing", background=False)
 
     def set_value(self, el, value: str) -> Outcome:
+        native = self._native(el)
+        if native and bg.is_edit_class(native):
+            self.p["background_target"](native, typing=True)
+            try:
+                self._guarded(lambda: bg.set_text(native, value))
+                self._attempt("set_text_message", True)
+                return self._done("set_text_message")
+            except bg.BackgroundUnsupported as e:
+                self._attempt("set_text_message", False, str(e))
         try:
             self._guarded(lambda: uia.set_value(el, value))
             self._attempt("uia_value", True)
             return self._done("uia_value")
         except Exception as e:
             self._attempt("uia_value", False, type(e).__name__)
-        native = getattr(el.info, "handle", None) or 0
-        if native and bg.is_edit_class(native):
-            self.p["background_target"](native, typing=True)
-            self._guarded(lambda: bg.set_text(native, value))
-            self._attempt("set_text_message", True)
-            return self._done("set_text_message")
         raise NeedsRealInput("this control takes no value through UI Automation or edit messages; "
                              "focus it and use type instead")
 

@@ -322,3 +322,37 @@ def test_partial_text_is_waited_for_not_reported_as_garbled(env, monkeypatch):
     monkeypatch.setattr(A.Ladder, "_read", staticmethod(lambda el, h: next(reads)))
     out = A.Ladder(FakeScope(), p, "auto").type_text(None, "y = 2").to_dict()
     assert out["method"] == "posted_chars" and out["attempts"][-1]["detail"] == "read back"
+
+
+class NativeEl:
+    """A UI Automation element backed by a Win32 window handle."""
+
+    def __init__(self, handle):
+        self.info = type("Info", (), {"handle": handle})()
+
+
+def test_win32_buttons_are_pressed_with_bm_click_before_ui_automation(env, monkeypatch):
+    calls, p = env
+    monkeypatch.setattr(A.w, "class_name", lambda h: "Button")
+    monkeypatch.setattr(A.bg, "click_button", calls.hook("bm_click"))
+    monkeypatch.setattr(A.uia, "invoke", calls.hook("uia_invoke"))
+    target = Target("element", rect=Rect(0, 0, 10, 10), control_type="Button", name="Select")
+    assert A.Ladder(FakeScope(), p, "background").press(NativeEl(0x40), target).method == "button_message"
+    assert A.Ladder(FakeScope(), p, "background").invoke(NativeEl(0x40)).method == "button_message"
+    assert "uia_invoke" not in calls and calls.count("bm_click") == 2
+
+
+def test_controls_without_a_win32_button_still_use_ui_automation(env, monkeypatch):
+    calls, p = env
+    monkeypatch.setattr(A.w, "class_name", lambda h: "Windows.UI.Core.CoreWindow")
+    monkeypatch.setattr(A.uia, "invoke", calls.hook("uia_invoke"))
+    assert A.Ladder(FakeScope(), p, "background").invoke(NativeEl(0)).method == "uia_invoke"
+
+
+def test_win32_edits_get_wm_settext_before_ui_automation(env, monkeypatch):
+    calls, p = env
+    monkeypatch.setattr(A.bg, "is_edit_class", lambda h: True)
+    monkeypatch.setattr(A.bg, "set_text", calls.hook("wm_settext"))
+    monkeypatch.setattr(A.uia, "set_value", calls.hook("uia_value"))
+    out = A.Ladder(FakeScope(), p, "background").set_value(NativeEl(0x50), "abc")
+    assert out.method == "set_text_message" and "uia_value" not in calls

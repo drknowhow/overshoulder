@@ -152,7 +152,7 @@ def test_character_map_in_the_background(desk, svc):
             s.act(token, lease, "set_value", ref=box, value="bg", method="background")
             select = s.find(token, lease, name="Select", control_type="Button")[0]["ref"]
             out = s.act(token, lease, "click", ref=select, method="background")
-            assert out["result"]["method"] == "uia_invoke"
+            assert out["result"]["method"] == "button_message"
         value = s.read(token, lease, box)["value"].strip()
         assert value.endswith("bg") and len(value) == 3, value
     finally:

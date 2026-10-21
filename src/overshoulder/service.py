@@ -205,7 +205,7 @@ class Service:
             el = self.cache.get(ref) if ref else None
             ladder = Ladder(scope, p, method)
             if action == "invoke":
-                out = ladder.pattern("uia_invoke", lambda: uia.invoke(_need(el, action)))
+                out = ladder.invoke(_need(el, action))
             elif action == "toggle":
                 out = ladder.pattern("uia_toggle", lambda: {"toggle": uia.toggle(_need(el, action))})
             elif action == "select":
