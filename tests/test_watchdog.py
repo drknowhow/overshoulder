@@ -49,3 +49,12 @@ def test_parse_hotkey_requires_a_modifier():
     assert vk == ord("P") and mods & 0x3 == 0x3
     with pytest.raises(ValueError):
         parse_hotkey("p")
+
+
+def test_the_agents_pointer_shows_its_last_action_point_for_a_while():
+    from overshoulder.watchdog import POINTER_SHOW_S, pointer_target
+    status = {"active": {"client": "a"}, "pointer": {"x": 10, "y": 20, "at": 100.0, "client": "a"}}
+    assert pointer_target(status, 101.0) == (10, 20)
+    assert pointer_target(status, 100.0 + POINTER_SHOW_S + 1) is None  # gone a while after the last action
+    assert pointer_target({**status, "active": None}, 101.0) is None  # gone when the scope is released
+    assert pointer_target(None, 101.0) is None  # daemon down

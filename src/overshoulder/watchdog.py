@@ -6,7 +6,9 @@
   a few idle seconds. Low-level hooks tell physical from injected input (LLKHF_INJECTED/LLMHF_INJECTED),
   so the agent's own SendInput never trips it.
 - An outline around the active scope (green driving, amber while the person is using the PC, red
-  stopped), excluded from screen capture so it never appears in recordings.
+  stopped), and the agent's own pointer where it last acted, so the person can see what the agent does
+  in the background without it ever touching their cursor. Both are click-through and excluded from
+  screen capture, so they never appear in recordings.
 
 It talks to the daemon over the operator endpoints, and registers its own pid as protected so agents
 can never click or type into its windows.
@@ -53,6 +55,17 @@ class WatchdogState:
         if paused and paused != HUMAN_REASON:
             self.paused_by_us = False  # someone else (panic, operator) owns this pause
         return None
+
+
+POINTER_SHOW_S = 8.0  # the agent's pointer fades out this long after its last action
+
+
+def pointer_target(status: dict | None, now: float) -> tuple[int, int] | None:
+    """Where to draw the agent's pointer: its last action point while a lease is active, for a while."""
+    p = (status or {}).get("pointer")
+    if not p or not (status or {}).get("active") or now - p.get("at", 0) > POINTER_SHOW_S:
+        return None
+    return int(p["x"]), int(p["y"])
 
 
 # -- daemon client -------------------------------------------------------------------------------
@@ -166,6 +179,9 @@ WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE = 0x80, 0x8000000
 WDA_EXCLUDEFROMCAPTURE = 0x11
 KEY = "#ff00fe"  # transparent colour key
 BORDER = 4
+POINTER_COLOUR = "#2563eb"  # the agent's pointer: blue, so it never reads as the person's own cursor
+POINTER_SIZE = 40
+POINTER_SHAPE = [(0, 0), (0, 17), (4.5, 13), (7.5, 20), (10, 19), (7, 12), (13, 12)]
 
 
 def _click_through(tk_window) -> None:
@@ -213,6 +229,52 @@ def run(port: int | None = None, hotkey: str = "ctrl+alt+p", idle_resume_s: floa
     _click_through(frame)
     shown = {"geom": None, "protected": False}
 
+    # The agent's pointer: a small window whose top-left pixel is the arrow's tip.
+    pointer = tk.Toplevel(root)
+    pointer.overrideredirect(True)
+    pointer.attributes("-topmost", True)
+    pointer.configure(bg=KEY)
+    pointer.attributes("-transparentcolor", KEY)
+    pcanvas = tk.Canvas(pointer, bg=KEY, highlightthickness=0, width=POINTER_SIZE, height=POINTER_SIZE)
+    pcanvas.pack()
+    pcanvas.create_polygon([c * 1.6 + 2 for xy in POINTER_SHAPE for c in xy], fill=POINTER_COLOUR,
+                           outline="white", width=2)
+    pointer.geometry(f"{POINTER_SIZE}x{POINTER_SIZE}+0+0")
+    pointer.withdraw()
+    pointer.update_idletasks()
+    _click_through(pointer)
+    moving = {"pos": None, "from": None, "to": None, "step": 0, "running": False}
+
+    def glide():
+        """Move the pointer toward its target in a few frames, so the person can follow it."""
+        moving["step"] += 1
+        k = min(moving["step"] / 6, 1.0)
+        (sx, sy), (ex, ey) = moving["from"], moving["to"]
+        moving["pos"] = (round(sx + (ex - sx) * k), round(sy + (ey - sy) * k))
+        pointer.geometry(f"+{moving['pos'][0] - 2}+{moving['pos'][1] - 2}")
+        if k < 1.0:
+            root.after(30, glide)
+        else:
+            moving["running"] = False
+
+    def draw_pointer(status):
+        target = pointer_target(status, time.time())
+        if target is None:
+            if moving["pos"] is not None:
+                pointer.withdraw()
+                moving["pos"] = moving["to"] = None
+            return
+        if moving["pos"] is None:  # appears where the agent acts
+            moving["pos"] = moving["to"] = target
+            pointer.geometry(f"+{target[0] - 2}+{target[1] - 2}")
+            pointer.deiconify()
+            _click_through(pointer)
+        elif target != moving["to"]:
+            moving["from"], moving["to"], moving["step"] = moving["pos"], target, 0
+            if not moving["running"]:
+                moving["running"] = True
+                glide()
+
     def poll():
         status = op.status()
         if status is not None and not shown["protected"]:
@@ -226,6 +288,7 @@ def run(port: int | None = None, hotkey: str = "ctrl+alt+p", idle_resume_s: floa
         elif decision == "resume":
             op.resume_human()
         draw(status)
+        draw_pointer(status)
         root.after(250, poll)
 
     def draw(status):

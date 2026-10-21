@@ -275,6 +275,8 @@ class Gateway:
         self.human_wait_s = human_wait_s
         # The person's settings (input mode), read at each use so a save on the settings page applies at once.
         self.settings_source = settings_source or _current_settings
+        # Where the agent last acted (screen pixels), shown on screen by the watchdog as its pointer.
+        self.pointer: dict | None = None
         # Borrow mode: the person's cursor and window, kept while a menu or dialog an agent opened stays in
         # front for its next step. lease id -> (saved desk state, monotonic time it was kept).
         self._kept: dict[str, tuple[Any, float]] = {}
@@ -315,7 +317,11 @@ class Gateway:
         self.log.write("lease_released", client=client.name, lease=lease_id)
 
     def status(self) -> dict:
-        return {**self.leases.status(), "input_mode": self.settings_source().input_mode}
+        out = {**self.leases.status(), "input_mode": self.settings_source().input_mode}
+        pointer = self.pointer
+        active = out.get("active")
+        out["pointer"] = pointer if active and pointer and pointer["client"] == active["client"] else None
+        return out
 
     # -- watchdog hooks ------------------------------------------------------------------------
 
@@ -396,6 +402,9 @@ class Gateway:
                         "kind": "action", "client": client.name, "action": action, "reason": reason,
                         "target": target.describe() if target else None, "scope": scope_desc})
 
+            if target is not None and (target.kind == "point" or (target.rect and not target.rect.empty)):
+                x, y = target.point()
+                self.pointer = {"x": x, "y": y, "action": action, "client": client.name, "at": time.time()}
             params["abort"] = lambda: self._check_background(lease_id, client.name, scope)
             # perform MUST wrap any use of the person's mouse/keyboard (SendInput) in borrow():
             #   with params["borrow"]() as b: fg = b.check(); <SendInput, calling b.abort() between keys>

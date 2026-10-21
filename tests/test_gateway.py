@@ -837,3 +837,15 @@ def test_a_kept_window_is_left_alone_once_the_person_takes_over(tmp_path):
     g.checks.person_idle_s = lambda: 0.0  # they clicked something since
     g.release(token, lease_id)
     assert seen["restored"] == []
+
+
+def test_status_shows_where_the_agent_last_acted_while_it_holds_the_scope(gw):
+    g, token, lease_id, _ = gw
+    assert g.status()["pointer"] is None
+    g.run(token, lease_id, "click", lambda t, p: None, target=Target("point", x=5, y=6))
+    p = g.status()["pointer"]
+    assert (p["x"], p["y"], p["action"], p["client"]) == (5, 6, "click", "agent-a")
+    g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "ctrl+s"})
+    assert (g.status()["pointer"]["x"], g.status()["pointer"]["y"]) == (5, 6)  # keys do not move it
+    g.release(token, lease_id)
+    assert g.status()["pointer"] is None
