@@ -122,7 +122,8 @@ PAGE = """<!doctype html>
   <h2>Safety</h2>
   <ul class="plain">
     <li>Panic key: <b>Ctrl+Alt+P</b> stops the driving agent; resume with <code>overshoulder resume</code>.</li>
-    <li>Using your mouse or keyboard pauses agents until you have been idle for a few seconds.</li>
+    <li>While you use your mouse or keyboard, agents keep to background work, and anything that needs your
+      input waits until you have been idle. Touching them during such an action stops it.</li>
     <li>Action log: <code>{logs}</code></li>
   </ul>
 </section>

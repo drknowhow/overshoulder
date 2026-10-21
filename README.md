@@ -90,8 +90,10 @@ refusal is logged.
 - **Approvals.** Clicking a control named like *Send*, *Delete*, *Buy*, *Pay* or *Install*, pressing
   Delete or Alt+F4, or pressing Enter in a single-line field all need a one-time Yes from the person
   at the desk. The prompt defaults to No after 60 seconds.
-- **The person always wins.** Touching the mouse or keyboard pauses driving, and it resumes after a
-  few idle seconds. **Ctrl+Alt+P** revokes the lease and pauses until you run `overshoulder resume`.
+- **The person always wins.** While you use the mouse or keyboard, agents keep to background work,
+  and anything that needs your real input waits until you've been idle for a few seconds. Touching
+  them during such an action stops it. **Ctrl+Alt+P** revokes the lease and pauses until you run
+  `overshoulder resume`.
   The watchdog is a separate process, so agents can't stop it, and it outlines the active scope on
   screen.
 - **Logs.** Every action goes to a JSONL file in `%LOCALAPPDATA%\Overshoulder\logs`. Typed text is
@@ -108,10 +110,12 @@ to a real mouse or keyboard, and `overshoulder settings` sets whether an agent m
 
 - **Never.** Those actions are refused with `needs_real_input`, and the agent has to ask you.
 - **Only while I'm idle** (the default). An agent may borrow them once you've left them alone for a
-  few seconds (5 unless you change it).
+  few seconds (5 unless you change it). It brings its window forward, acts, then puts your cursor and
+  your window back. A menu or dialog it opened stays in front for its next step, for up to 30 seconds.
+  If you move while it works, it stops and leaves things as they are.
 - **Full control.** An agent may use them whenever it needs to.
 
-In every mode, touching the mouse or keyboard pauses an agent that is driving.
+In every mode, touching the mouse or keyboard stops an agent that is using them.
 
 ## Waiting for the person
 

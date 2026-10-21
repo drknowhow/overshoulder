@@ -243,3 +243,61 @@ def test_never_mode_refuses_what_only_real_input_could_do(desk, tmp_path):
         assert codes == ["needs_real_input", "needs_real_input"]
     finally:
         _close(hwnd)
+
+
+def test_borrow_mode_waits_for_the_person_then_gives_back_cursor_and_window(desk, tmp_path):
+    """Input mode "borrow": a click only real input can do waits until the person has been idle, brings
+    the window forward, clicks, then puts the cursor and the person's window back."""
+    _no_running("CalculatorApp.exe")
+    from overshoulder import settings as st
+    from overshoulder.driver import input as inp
+    from overshoulder.gateway.core import gateway_for_tests
+    from overshoulder.service import Service
+    s = Service(gateway_for_tests(tmp_path, settings_source=lambda: st.Settings(input_mode="borrow",
+                                                                                borrow_idle_s=2)),
+                shots_dir=tmp_path / "shots")
+    token = s.gw.registry.add("borrow-test")
+    H, _, sentinel = desk
+    H.launch_noactivate(["calc.exe"])
+    hwnd = _wait_window(r"^Calculator$")
+    time.sleep(5.0)
+    try:
+        lease = s.acquire(token, f"window:{hwnd}")["lease_id"]
+        s.act(token, lease, "invoke", ref=s.find(token, lease, auto_id="clearButton")[0]["ref"],
+              method="background")
+        nine = s.find(token, lease, auto_id="num9Button")[0]
+        x = (nine["rect"][0] + nine["rect"][2]) // 2
+        y = (nine["rect"][1] + nine["rect"][3]) // 2
+        assert H.take_foreground(sentinel)
+        cursor_before = H.cursor()
+        person = H.simulate_person(2.5)
+        deadline = time.time() + 5
+        while inp.person_idle_s() > 0.5 and time.time() < deadline:
+            time.sleep(0.05)
+        assert inp.person_idle_s() <= 0.5, "the stand-in person never started"
+        t0 = time.monotonic()
+        out = s.act(token, lease, "click", x=x, y=y, method="auto")
+        took = time.monotonic() - t0
+        person.wait(10)
+        shown = s.read(token, lease, s.find(token, lease, auto_id="CalculatorResults")[0]["ref"])["name"]
+        evidence = {
+            "what": "borrow mode: a click on Calculator's 9 (posted clicks cannot reach a UWP core window), "
+                    "while another process stood in for the person by pressing F24 every 0.2 s for 2.5 s",
+            "input_mode": "borrow", "borrow_idle_s": 2, "person_active_for_s": 2.5,
+            "act_took_s": round(took, 2), "method": out["result"]["method"], "borrow": out["result"]["borrow"],
+            "attempts": out["result"]["attempts"],
+            "cursor_before": list(cursor_before), "cursor_after": list(H.cursor()),
+            "persons_window_in_front_after": H.user32.GetForegroundWindow() == sentinel,
+            "calculator_shows": shown}
+        if os.environ.get("OVERSHOULDER_EVIDENCE_DIR"):
+            out_dir = Path(os.environ["OVERSHOULDER_EVIDENCE_DIR"])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "borrow_calculator.json").write_text(json.dumps(evidence, indent=2), encoding="utf-8")
+        borrow = out["result"]["borrow"]
+        assert out["result"]["method"] == "real_click"
+        assert borrow["waited_s"] >= 3.0, evidence  # 2.5 s of the person, then 2 s idle
+        assert borrow["brought_forward"] and borrow["restored"] == {"cursor": True, "foreground": True}, evidence
+        assert evidence["persons_window_in_front_after"] and H.cursor() == cursor_before, evidence
+        assert shown.strip().endswith("9"), shown
+    finally:
+        _close(hwnd)

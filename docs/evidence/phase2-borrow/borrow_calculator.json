@@ -1,0 +1,39 @@
+{
+  "what": "borrow mode: a click on Calculator's 9 (posted clicks cannot reach a UWP core window), while another process stood in for the person by pressing F24 every 0.2 s for 2.5 s",
+  "input_mode": "borrow",
+  "borrow_idle_s": 2,
+  "person_active_for_s": 2.5,
+  "act_took_s": 4.98,
+  "method": "real_click",
+  "borrow": {
+    "mode": "borrow",
+    "waited_s": 4.51,
+    "brought_forward": true,
+    "person_active": false,
+    "restored": {
+      "cursor": true,
+      "foreground": true
+    }
+  },
+  "attempts": [
+    {
+      "method": "posted_click",
+      "ok": false,
+      "detail": "Windows.UI.Core.CoreWindow ignores posted mouse input"
+    },
+    {
+      "method": "real_click",
+      "ok": true
+    }
+  ],
+  "cursor_before": [
+    48,
+    153
+  ],
+  "cursor_after": [
+    48,
+    153
+  ],
+  "persons_window_in_front_after": true,
+  "calculator_shows": "Display is 9"
+}

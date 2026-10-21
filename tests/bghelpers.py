@@ -132,3 +132,33 @@ def close_discarding(hwnd: int, attempts: int = 6) -> None:
         except Exception:
             pass
         time.sleep(0.8)
+
+
+PERSON_SCRIPT = r"""
+import ctypes, sys, time
+from ctypes import wintypes as wt
+class KI(ctypes.Structure):
+    _fields_ = [("wVk", wt.WORD), ("wScan", wt.WORD), ("dwFlags", wt.DWORD), ("time", wt.DWORD),
+                ("dwExtraInfo", ctypes.c_size_t)]
+class MI(ctypes.Structure):
+    _fields_ = [("dx", wt.LONG), ("dy", wt.LONG), ("mouseData", wt.DWORD), ("dwFlags", wt.DWORD),
+                ("time", wt.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+class U(ctypes.Union):
+    _fields_ = [("ki", KI), ("mi", MI)]
+class INPUT(ctypes.Structure):
+    _anonymous_ = ("u",)
+    _fields_ = [("type", wt.DWORD), ("u", U)]
+end = time.time() + float(sys.argv[1])
+while time.time() < end:
+    for flags in (0, 2):
+        i = INPUT(type=1, ki=KI(0x87, 0, flags, 0, 0))
+        ctypes.windll.user32.SendInput(1, ctypes.byref(i), ctypes.sizeof(INPUT))
+    time.sleep(0.2)
+"""
+
+
+def simulate_person(seconds: float):
+    """Another process presses F24 (a key no app uses) every 0.2 s. Windows' last-input clock counts it as
+    the person's input, because it is not ours; low-level hooks see it as injected."""
+    import sys
+    return subprocess.Popen([sys.executable, "-c", PERSON_SCRIPT, str(seconds)])

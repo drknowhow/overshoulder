@@ -46,3 +46,13 @@ def test_type_text_refuses_when_target_is_not_foreground(notepad):
 
     with pytest.raises(inp.FocusLost):
         inp.type_text(0x1, "should not be typed")
+
+
+def test_person_watch_ignores_our_own_injected_input():
+    from overshoulder.driver import input as inp
+    from overshoulder.driver.person import PersonWatch
+    with PersonWatch() as watch:
+        assert watch.ok, "low-level hooks could not be installed"
+        inp.send([inp._key(0x87), inp._key(0x87, flags=inp.KEYEVENTF_KEYUP)])  # F24: no app uses it
+        time.sleep(0.3)
+        assert not watch.seen
