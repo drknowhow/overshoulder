@@ -20,6 +20,7 @@ def test_record_and_render_a_notepad_session(tmp_path):
     token = s.gw.registry.add("rec-test")
     path = tmp_path / "rec_notes.txt"
     path.write_text("", encoding="utf-8")
+    __import__("bghelpers").wait_no_window("Notepad")
     subprocess.Popen(["notepad.exe", str(path)])
     win = None
     for _ in range(80):
@@ -50,8 +51,5 @@ def test_record_and_render_a_notepad_session(tmp_path):
         assert 'Type "Hello from an Overshoulder tutorial."' in steps_md
         s.release(token, lease)
     finally:
-        from pywinauto import Desktop
-        try:
-            Desktop(backend="uia").window(handle=win.hwnd).close()
-        except Exception:
-            pass
+        import bghelpers
+        bghelpers.close_discarding(win.hwnd)

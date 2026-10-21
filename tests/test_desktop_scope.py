@@ -16,7 +16,8 @@ def notepad(tmp_path):
 
     path = tmp_path / "overshoulder_scope_test.txt"
     path.write_text("", encoding="utf-8")
-    proc = subprocess.Popen(["notepad.exe", str(path)])
+    __import__("bghelpers").wait_no_window("Notepad")
+    subprocess.Popen(["notepad.exe", str(path)])
     found = []
     for _ in range(80):
         found = sc.find_windows(title_re="overshoulder_scope_test")
@@ -25,13 +26,8 @@ def notepad(tmp_path):
         time.sleep(0.25)
     assert found, "notepad window did not appear"
     yield found[0], path
-    from pywinauto import Desktop
-    try:
-        Desktop(backend="uia").window(handle=found[0].hwnd).close()
-    except Exception:
-        pass
-    if proc.poll() is None:
-        proc.terminate()
+    import bghelpers
+    bghelpers.close_discarding(found[0].hwnd)
 
 
 def test_find_windows_reports_the_real_process_for_a_packaged_app():
@@ -92,7 +88,11 @@ def test_window_scope_owns_its_save_dialog_and_goes_stale_on_close(notepad):
         time.sleep(0.25)
     assert dialog and dialog != info.hwnd, "Save As dialog did not take focus"
     assert scope.owns_window(dialog)
-    inp.send(inp.hotkey_inputs("esc"))
+    from pywinauto import Desktop as _D
+    for b in _D(backend="uia").window(handle=dialog).descendants(control_type="Button"):
+        if b.window_text() == "Cancel":
+            b.invoke()
+            break
     time.sleep(0.5)
     Desktop(backend="uia").window(handle=info.hwnd).close()
     time.sleep(1.0)

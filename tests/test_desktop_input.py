@@ -16,17 +16,15 @@ def notepad(tmp_path):
 
     path = tmp_path / "overshoulder_input_test.txt"
     path.write_text("", encoding="utf-8")
-    proc = subprocess.Popen(["notepad.exe", str(path)])
+    __import__("bghelpers").wait_no_window("Notepad")
+    subprocess.Popen(["notepad.exe", str(path)])
     win = Desktop(backend="uia").window(title_re=r".*overshoulder_input_test.*Notepad")
     win.wait("ready", timeout=20)
     win.set_focus()
     time.sleep(0.8)
     yield win, path
-    try:
-        win.close()
-    finally:
-        if proc.poll() is None:
-            proc.terminate()
+    import bghelpers
+    bghelpers.close_discarding(win.handle)
 
 
 def test_type_text_and_hotkey_save_literal_text(notepad):

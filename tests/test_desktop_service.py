@@ -36,11 +36,8 @@ def _wait_window(title_re, timeout=25):
 
 
 def _close(hwnd):
-    from pywinauto import Desktop
-    try:
-        Desktop(backend="uia").window(handle=hwnd).close()
-    except Exception:
-        pass
+    import bghelpers
+    bghelpers.close_discarding(hwnd)
 
 
 def _focus(hwnd):
@@ -74,6 +71,7 @@ def test_notepad_type_into_element_and_save(svc, tmp_path):
     s, token = svc
     path = tmp_path / "svc_notepad.txt"
     path.write_text("", encoding="utf-8")
+    __import__("bghelpers").wait_no_window("Notepad")
     subprocess.Popen(["notepad.exe", str(path)])
     win = _wait_window("svc_notepad")
     try:
@@ -135,12 +133,13 @@ def test_vscode_point_click_type_and_save(svc, tmp_path):
         _close(win.hwnd)
 
 
-def test_keystrokes_refused_when_another_app_has_focus(svc, tmp_path):
+def test_keystrokes_go_to_the_scope_window_not_the_app_in_front(svc, tmp_path):
     from overshoulder import scope as sc
 
     s, token = svc
     path = tmp_path / "svc_focus.txt"
     path.write_text("", encoding="utf-8")
+    __import__("bghelpers").wait_no_window("Notepad")
     subprocess.Popen(["notepad.exe", str(path)])
     note = _wait_window("svc_focus")
     subprocess.Popen(["calc.exe"])
@@ -148,8 +147,14 @@ def test_keystrokes_refused_when_another_app_has_focus(svc, tmp_path):
     try:
         lease = s.acquire(token, f"window:{note.hwnd}")["lease_id"]
         _focus(calc.hwnd)
-        with pytest.raises(sc.OutOfScope):
-            s.act(token, lease, "type", text="should not appear")
+        out = s.act(token, lease, "type", text="12345", method="background")
+        assert out["result"]["method"] in ("posted_chars", "replace_selection")
+        doc = s.find(token, lease, control_type="Document")[0]["ref"]
+        got = s.read(token, lease, doc)
+        assert "12345" in (got.get("value") or "") + (got.get("text") or "")
+        from pywinauto import Desktop
+        display = Desktop(backend="uia").window(handle=calc.hwnd).child_window(auto_id="CalculatorResults")
+        assert "12345" not in display.window_text()  # the app in front did not receive the digits
         b = s.observe(token, lease, max_nodes=5)["bounds"]
         with pytest.raises(sc.OutOfScope):
             s.act(token, lease, "click", x=b[2] + 5, y=b[1] + 5)
