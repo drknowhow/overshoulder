@@ -1,0 +1,28 @@
+[
+ {
+  "app": "vscode",
+  "action": "click",
+  "method": "posted click on activity tab (first)",
+  "effect": false,
+  "detail": "Explorer panel open: False -> False",
+  "injected": 0,
+  "physical": 0,
+  "fg_changed": false,
+  "cursor_moved": false,
+  "error": null,
+  "background_ok": false
+ },
+ {
+  "app": "vscode",
+  "action": "click",
+  "method": "posted click on activity tab (second)",
+  "effect": true,
+  "detail": "Explorer panel open: False -> True",
+  "injected": 0,
+  "physical": 0,
+  "fg_changed": false,
+  "cursor_moved": false,
+  "error": null,
+  "background_ok": true
+ }
+]

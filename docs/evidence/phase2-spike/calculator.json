@@ -1,0 +1,48 @@
+[
+ {
+  "app": "calc",
+  "action": "launch",
+  "method": "SW_SHOWNOACTIVATE",
+  "effect": false,
+  "detail": "took the foreground"
+ },
+ {
+  "app": "calc",
+  "action": "press buttons",
+  "method": "UIA Invoke",
+  "effect": true,
+  "detail": "Display is 42",
+  "injected": 0,
+  "physical": 0,
+  "fg_changed": true,
+  "cursor_moved": false,
+  "error": null,
+  "background_ok": false
+ },
+ {
+  "app": "calc",
+  "action": "type digits",
+  "method": "WM_CHAR post to CoreWindow",
+  "effect": true,
+  "detail": "Display is 58",
+  "injected": 0,
+  "physical": 0,
+  "fg_changed": true,
+  "cursor_moved": false,
+  "error": null,
+  "background_ok": false
+ },
+ {
+  "app": "calc",
+  "action": "press button",
+  "method": "posted click",
+  "effect": false,
+  "detail": "Display is 0",
+  "injected": 0,
+  "physical": 0,
+  "fg_changed": true,
+  "cursor_moved": false,
+  "error": null,
+  "background_ok": false
+ }
+]

@@ -1,0 +1,60 @@
+[
+ {
+  "app": "notepad",
+  "action": "probe",
+  "method": "UIA walk in background: 52 nodes",
+  "effect": true
+ },
+ {
+  "app": "notepad",
+  "action": "save",
+  "method": "UIA menu File>Save",
+  "effect": false,
+  "detail": "hello\n",
+  "injected": 0,
+  "physical": 0,
+  "fg_changed": false,
+  "cursor_moved": false,
+  "error": "AttributeError: 'NoneType' object has no attribute 'info'",
+  "background_ok": false
+ },
+ {
+  "app": "notepad",
+  "action": "read",
+  "method": "TextPattern in background",
+  "effect": true,
+  "detail": "'typed hello\\r'",
+  "injected": 0,
+  "physical": 0,
+  "fg_changed": false,
+  "cursor_moved": false,
+  "error": null,
+  "background_ok": true
+ },
+ {
+  "app": "vscode",
+  "action": "type",
+  "method": "UIA ValuePattern on editor",
+  "effect": false,
+  "detail": "",
+  "injected": 0,
+  "physical": 0,
+  "fg_changed": false,
+  "cursor_moved": false,
+  "error": null,
+  "background_ok": false
+ },
+ {
+  "app": "vscode",
+  "action": "type",
+  "method": "UIA focus editor + WM_CHAR",
+  "effect": true,
+  "detail": "b = 2",
+  "injected": 0,
+  "physical": 0,
+  "fg_changed": false,
+  "cursor_moved": false,
+  "error": null,
+  "background_ok": true
+ }
+]
