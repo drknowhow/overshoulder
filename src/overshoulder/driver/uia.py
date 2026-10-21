@@ -246,6 +246,50 @@ def _probe(elem) -> dict | None:
         return None
 
 
+def info_for_handle(hwnd: int) -> dict | None:
+    """Name, control type, pid and IsPassword of the UIA element behind a window handle."""
+    try:
+        return _probe(UIAElementInfo(hwnd).element)
+    except Exception:
+        return None
+
+
+def any_password(root_hwnd: int, max_nodes: int = 3000) -> bool | None:
+    """Whether any password field exists in a window's tree (None if the tree cannot be read)."""
+    try:
+        for root in roots_for_window(root_hwnd):
+            for el in walk(ElementCache(), root, max_nodes=max_nodes):
+                if _is_password(el.info):
+                    return True
+        return False
+    except Exception:
+        return None
+
+
+def element_in_window_at(root_hwnd: int, x: int, y: int, max_nodes: int = 3000) -> dict | None:
+    """The smallest element of a window's own tree containing (x, y), even if the window is covered."""
+    best, best_area = None, None
+    try:
+        for root in roots_for_window(root_hwnd):
+            for el in walk(ElementCache(), root, max_nodes=max_nodes):
+                try:
+                    r = _rect(el.info)
+                except Exception:
+                    continue
+                if el.depth == 0 or not r.contains(x, y):
+                    continue
+                area = r.width * r.height
+                if best_area is None or area < best_area:
+                    best, best_area = el, area
+    except Exception:
+        return None
+    if best is None:
+        return None
+    info = best.info
+    return {"name": info.name or "", "type": info.control_type or "", "pid": info.process_id,
+            "password": _is_password(info)}
+
+
 def focused_info() -> dict | None:
     """Name, control type, pid and IsPassword of the element with keyboard focus; None if unknown."""
     try:
