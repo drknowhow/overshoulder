@@ -87,6 +87,13 @@ reports its top-level window as the focus window, and characters posted there go
 driver posts to the window's only visible edit control (`RichEditD2DPT`) instead. When typing
 cannot be read back, the result says so rather than reporting a confirmed success.
 
+**Notepad can reorder posted characters.** In a fresh Windows 11 Notepad window opened right after
+another one closed, `print('hi') {x} + ~` posted as `WM_CHAR` read back as `print('hi') x{} + ~`
+(about one run in two in that sequence). The ladder now gives edit controls the whole text in one
+`EM_REPLACESEL`, which cannot reorder, and posts characters only for text with line breaks (so Enter
+keeps its meaning) or for windows that are not edit controls. Text that reads back changed but wrong
+is reported as `typing_mismatch` instead of as a success.
+
 **Focus steals vary between runs.** In one run of the Character Map test a UIA call brought
 Character Map to the front; in the other runs it did not. The foreground-lock timeout (after the
 person has been idle that long, any app may take the foreground) does not explain it: on this PC
