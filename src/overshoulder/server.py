@@ -169,14 +169,17 @@ class Daemon:
         @mcp.tool()
         async def act(ctx: Context, action: str, ref: str | None = None, x: int | None = None,
                       y: int | None = None, text: str | None = None, combo: str | None = None,
-                      value: str | None = None, expect: dict | None = None) -> dict:
+                      value: str | None = None, expect: dict | None = None, method: str = "auto") -> dict:
             """Run one action and verify it. action: click, double_click, right_click, invoke, toggle,
             select, set_value (value=), type (text=), hotkey (combo="ctrl+s"), focus. Target by ref from
             observe/find, or x/y screen pixels inside the scope. expect: {"changed": true} |
-            {"text_contains": "..."} | {"element": {"name": "...", "control_type": "..."}}."""
+            {"text_contains": "..."} | {"element": {"name": "...", "control_type": "..."}}.
+            method: "auto" (default; works on the window in the background and uses the person's mouse or
+            keyboard only as a last resort), "background" (never), "input" (real input). The result's
+            verify.method says what ran."""
             return await authed(ctx, lambda token: d.svc.act(
                 token, d.lease_for(token), action, ref=ref, x=x, y=y, text=text, combo=combo, value=value,
-                expect=expect))
+                expect=expect, method=method))
 
         @mcp.tool()
         async def record_start(ctx: Context, fps: int = 10, name: str = "") -> dict:

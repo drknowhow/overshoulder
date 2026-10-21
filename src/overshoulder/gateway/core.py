@@ -72,6 +72,34 @@ def _hit_test(scope, x: int, y: int) -> int:
     return h
 
 
+def _scope_focus(scope) -> dict | None:
+    """What has keyboard focus inside the scope's own window, background or not.
+
+    "password" is True/False when known. When the focused window is not a Win32 edit (Chromium, XAML),
+    the focused field cannot be read from outside; then it is False only if the scope has no password
+    field at all, else None (unknown, which the password rule treats as a password field).
+    """
+    from overshoulder.driver import background as bg
+    binding = getattr(scope, "binding", None)
+    if binding is None:  # screen scope: the system focus is the scope's focus
+        return uia.focused_info()
+    hwnd = bg.input_window(binding.hwnd)
+    info = dict(uia.info_for_handle(hwnd) or {"name": "", "type": "", "pid": w.pid_of(hwnd)})
+    info["hwnd"] = hwnd
+    if bg.is_edit_class(hwnd):
+        info["password"] = bool(info.get("password")) or bg.is_password_edit(hwnd)
+    else:
+        info["password"] = uia.any_password(binding.hwnd)
+    return info
+
+
+def _element_in_scope_at(scope, x: int, y: int) -> dict | None:
+    binding = getattr(scope, "binding", None)
+    if binding is None:
+        return uia.info_at_point(x, y)
+    return uia.element_in_window_at(binding.hwnd, x, y)
+
+
 def _foreground_checked(scope, not_elevated: Callable[[int], None]) -> int:
     fg = sc.require_foreground_in_scope(scope)
     not_elevated(w.pid_of(fg))
@@ -91,6 +119,13 @@ class Checks:
     focused_element: Callable[[], dict | None] = uia.focused_info
     element_at_point: Callable[[int, int], dict | None] = uia.info_at_point
     pid_of: Callable[[int], int] = w.pid_of
+    # Background-aware probes: the scope's own focus and the scope's own element under a point.
+    scope_focus: Callable[[Any], dict | None] = _scope_focus
+    element_in_scope_at: Callable[[Any, int, int], dict | None] = _element_in_scope_at
+    root_of: Callable[[int], int] = lambda h: __import__(
+        "overshoulder.driver.background", fromlist=["root_of"]).root_of(h)
+    is_password_window: Callable[[int], bool] = lambda h: __import__(
+        "overshoulder.driver.background", fromlist=["is_password_edit"]).is_password_edit(h)
 
     def __post_init__(self):
         if self.foreground_in_scope is None:
@@ -207,7 +242,7 @@ class Gateway:
             self.checks.desktop()
 
             if target is not None:
-                target = self._bind(scope, target)
+                target = self._bind(scope, target, action)
                 if target.pid:
                     self.checks.not_elevated(target.pid)
                 policy.require_not_password(action, target.is_password)
@@ -215,30 +250,20 @@ class Gateway:
             if pid:
                 self.checks.not_elevated(pid)
 
-            focused_type = ""
+            focus_info = None
             if not read_only:
                 if action == "hotkey":
                     policy.require_hotkey_allowed(str(params.get("combo", "")))
                 if action in KEYBOARD_ACTIONS and target is None:
-                    fg = self.checks.foreground_in_scope(scope)
-                    self._require_unprotected(fg)
-                if action in KEYBOARD_ACTIONS:
-                    if target is None:
-                        focused = self.checks.focused_element()
-                        if action == "type":
-                            policy.require_not_password(
-                                "type", None if focused is None else focused["password"])
-                        focused_type = (focused or {}).get("type", "")
-                    else:
-                        focused_type = target.control_type
+                    # The scope's own focus, which is where background keys go.
+                    focus_info = self.checks.scope_focus(scope)
+                    if action == "type":
+                        policy.require_not_password("type", None if focus_info is None else focus_info["password"])
+                focused_type = target.control_type if target is not None else (focus_info or {}).get("type", "")
                 name = target.name if target else ""
-                if action in MOUSE_ACTIONS and target is not None:
-                    hit = self.checks.window_at_point(scope, *target.point())
-                    self._require_unprotected(hit)
-                    self.checks.not_elevated(self.checks.pid_of(hit))
-                    if target.kind == "point":
-                        under = self.checks.element_at_point(*target.point())
-                        name = (under or {}).get("name", "")
+                if target is not None and target.kind == "point":
+                    under = self.checks.element_in_scope_at(scope, *target.point())
+                    name = (under or {}).get("name", "")
                 reason = policy.approval_reason(action, name, params, focused_type=focused_type)
                 if reason:
                     policy.require_approval(self.approver, {
@@ -246,14 +271,12 @@ class Gateway:
                         "target": target.describe() if target else None, "scope": scope_desc})
 
             params["abort"] = lambda: self.leases.check(lease_id, client.name)
-
-            def require_foreground() -> int:
-                # Keyboard actions with a target focus it first, then must call this before any key.
-                fg = self.checks.foreground_in_scope(scope)
-                self._require_unprotected(fg)
-                return fg
-
-            params["require_foreground"] = require_foreground
+            # perform MUST call real_input() right before using the person's mouse/keyboard (SendInput),
+            # and background_target(hwnd) before posting to or messaging any window.
+            params["real_input"] = lambda: self._allow_real_input(scope, action, target)
+            params["background_target"] = lambda hwnd, typing=False: self._allow_background_target(
+                scope, hwnd, typing)
+            params["scope_focus"] = focus_info
             t_act = time.time()
             result = perform(target, params)
             self.leases.count_action(lease)
@@ -293,6 +316,31 @@ class Gateway:
                 time.sleep(0.25)
                 self.leases.heartbeat_unchecked(lease_id, client)
 
+    def _allow_real_input(self, scope, action: str, target: Target | None) -> int | None:
+        """Checks before the person's real mouse/keyboard is used. Returns the in-scope foreground for keys."""
+        fg = None
+        if action in KEYBOARD_ACTIONS:
+            fg = self.checks.foreground_in_scope(scope)
+            self._require_unprotected(fg)
+            if action == "type" and target is None:
+                focused = self.checks.focused_element()
+                policy.require_not_password("type", None if focused is None else focused["password"])
+        if action in MOUSE_ACTIONS and target is not None:
+            hit = self.checks.window_at_point(scope, *target.point())
+            self._require_unprotected(hit)
+            self.checks.not_elevated(self.checks.pid_of(hit))
+        return fg
+
+    def _allow_background_target(self, scope, hwnd: int, typing: bool = False) -> None:
+        """Checks before posting to / messaging a window: it must be the scope's, and not a password box."""
+        top = self.checks.root_of(hwnd) or hwnd
+        if not scope.owns_window(top):
+            raise sc.OutOfScope(f"window {hwnd:#x} is not in scope")
+        self._require_unprotected(top)
+        self.checks.not_elevated(self.checks.pid_of(hwnd))
+        if typing and self.checks.is_password_window(hwnd):
+            raise Denied("that window is a password field; agents never type into it")
+
     def _require_unprotected(self, hwnd: int) -> None:
         if hwnd and self.checks.pid_of(hwnd) in self.protected_pids:
             raise Denied("that window belongs to Overshoulder itself; agents never drive it")
@@ -300,7 +348,7 @@ class Gateway:
     def protect_pid(self, pid: int) -> None:
         self.protected_pids.add(pid)
 
-    def _bind(self, scope, target: Target) -> Target:
+    def _bind(self, scope, target: Target, action: str = "") -> Target:
         if target.revalidate is not None:
             fresh = target.revalidate()
             if fresh is None:
@@ -310,6 +358,14 @@ class Gateway:
             target = replace(fresh, revalidate=target.revalidate)
         if target.hwnd and not scope.owns_window(target.hwnd):
             raise sc.OutOfScope(f"target window {target.hwnd:#x} is not in scope")
+        if target.kind == "element" and (target.rect is None or target.rect.empty) and action in MOUSE_ACTIONS:
+            raise sc.OutOfScope("the element has no visible area to click; use invoke, select or type instead")
+        if target.kind == "element" and (target.rect is None or target.rect.empty):
+            # Hidden but real inputs (e.g. Chromium's editor textarea) have no area; nothing is clicked,
+            # and the element's window was just checked to be in scope.
+            if not target.hwnd:
+                raise sc.OutOfScope("element has no area and no window to check against the scope")
+            return target
         x, y = target.point()
         binding = getattr(scope, "binding", None)
         if target.hwnd and binding is not None and target.hwnd != binding.hwnd:

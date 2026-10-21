@@ -10,8 +10,8 @@ import time
 from pathlib import Path
 
 from overshoulder import scope as sc
+from overshoulder.actions import Ladder
 from overshoulder.driver import capture, uia
-from overshoulder.driver import input as inp
 from overshoulder.driver import windows as w
 from overshoulder.driver.display import enable_dpi_awareness
 from overshoulder.driver.windows import Rect
@@ -21,6 +21,7 @@ from overshoulder.gateway.errors import GatewayError
 
 ACTIONS = ("click", "double_click", "right_click", "invoke", "toggle", "select", "set_value", "type",
            "hotkey", "focus", "activate")
+METHODS = ("auto", "background", "input")
 # Below this share of changed pixels a screenshot pair counts as "nothing visible happened".
 CHANGE_EPSILON = 0.0002
 
@@ -179,13 +180,19 @@ class Service:
 
     def act(self, token: str, lease_id: str, action: str, ref: str | None = None, x: int | None = None,
             y: int | None = None, text: str | None = None, combo: str | None = None,
-            value: str | None = None, expect: dict | None = None) -> dict:
-        """Run one action. Target is an element ref from observe/find, or an x/y point in scope."""
+            value: str | None = None, expect: dict | None = None, method: str = "auto") -> dict:
+        """Run one action. Target is an element ref from observe/find, or an x/y point in scope.
+
+        method: "auto" (background first, the person's input only as a last resort), "background"
+        (never the person's mouse or keyboard) or "input" (real input). The result says which ran.
+        """
         if action not in ACTIONS:
             raise ValueError(f"unknown action {action!r}; one of {ACTIONS}")
+        if method not in METHODS:
+            raise ValueError(f"method must be one of {METHODS}")
         target = self._element_target(ref) if ref else (
             Target("point", x=int(x), y=int(y)) if x is not None and y is not None else None)
-        params = {"ref": ref, "x": x, "y": y, "combo": combo, "expect": expect}
+        params = {"ref": ref, "x": x, "y": y, "combo": combo, "expect": expect, "method": method}
         if text is not None:
             params["text"] = text
         if value is not None:
@@ -194,44 +201,43 @@ class Service:
 
         def perform(t: Target | None, p: dict):
             scope = self._scope(lease_id)
-            before["img"] = capture.grab(scope.bounds())
+            before["img"] = self._snap(scope)
             el = self.cache.get(ref) if ref else None
+            ladder = Ladder(scope, p, method)
             if action == "invoke":
-                uia.invoke(_need(el, action))
+                out = ladder.pattern("uia_invoke", lambda: uia.invoke(_need(el, action)))
             elif action == "toggle":
-                return {"toggle": uia.toggle(_need(el, action))}
+                out = ladder.pattern("uia_toggle", lambda: {"toggle": uia.toggle(_need(el, action))})
             elif action == "select":
-                uia.select(_need(el, action))
+                out = ladder.pattern("uia_select", lambda: uia.select(_need(el, action)))
             elif action == "set_value":
-                uia.set_value(_need(el, action), value or "")
+                out = ladder.set_value(_need(el, action), value or "")
             elif action == "focus":
-                uia.focus(_need(el, action))
+                out = ladder.pattern("uia_focus", lambda: uia.focus(_need(el, action)))
             elif action == "activate":
                 if scope.kind != "window":
                     raise ValueError("activate needs a window scope")
+                p["real_input"]()  # bringing a window to the front takes the person's foreground
                 uia.activate(scope.binding.hwnd)
+                out = ladder._done("activate", background=False)
             elif action in ("click", "double_click", "right_click"):
                 if t is None:
                     raise ValueError(f"{action} needs a ref or x/y")
-                px, py = t.point()
-                inp.click(px, py, button="right" if action == "right_click" else "left",
-                          count=2 if action == "double_click" else 1)
+                out = ladder.press(el, t, button="right" if action == "right_click" else "left",
+                                   count=2 if action == "double_click" else 1)
             elif action == "type":
-                if el is not None:
-                    uia.focus(el)
-                    time.sleep(0.15)
-                inp.type_text(p["require_foreground"](), text or "", abort=p["abort"])
-            elif action == "hotkey":
-                p["abort"]()
-                inp.hotkey(self._focused_in_scope(scope), combo or "")
-            return None
+                out = ladder.type_text(el, text or "")
+            else:  # hotkey
+                out = ladder.hotkey(combo or "")
+            return out.to_dict()
 
         def verify(t: Target | None, p: dict, result):
             time.sleep(0.35)
             scope = self._scope(lease_id)
-            after = capture.grab(scope.bounds())
-            pixels = capture.changed_fraction(before["img"], after)
-            verdict = {"ok": True, "changed": pixels > CHANGE_EPSILON, "pixels_changed": round(pixels, 5)}
+            after = self._snap(scope)
+            pixels = capture.changed_fraction(before["img"], after) if before["img"] and after else 0.0
+            verdict = {"ok": True, "changed": pixels > CHANGE_EPSILON, "pixels_changed": round(pixels, 5),
+                       "method": (result or {}).get("method"), "background": (result or {}).get("background")}
             if ref and uia.element_state(self.cache.get(ref)) is not None:
                 readback = uia.read(self.cache.get(ref))
                 verdict["readback"] = {k: (v[:200] if isinstance(v, str) else v) for k, v in readback.items()}
@@ -262,11 +268,14 @@ class Service:
         return Target(**{**t.__dict__, "revalidate": fresh})
 
     @staticmethod
-    def _focused_in_scope(scope) -> int:
-        fg = w.foreground()
-        if not fg or not scope.owns_window(fg):
-            raise sc.OutOfScope(f"foreground window {fg:#x} is not in scope")
-        return fg
+    def _snap(scope):
+        """Pixels of the scope: the window's own (works when covered) or the screen rect."""
+        binding = getattr(scope, "binding", None)
+        if binding is not None:
+            img = capture.window_image(binding.hwnd, scope.bounds())
+            if img is not None:
+                return img
+        return capture.grab(scope.bounds())
 
     def _check_expect(self, expect: dict, ref: str | None, lease_id: str, verdict: dict) -> dict:
         problems = []
