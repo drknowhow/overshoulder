@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from overshoulder.driver import windows as w
+from overshoulder.driver.input import last_input_tick
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -264,16 +265,6 @@ def post_hotkey(hwnd: int, combo: str) -> None:
 
 
 # -- keeping the person's foreground --------------------------------------------------------------
-
-class LASTINPUTINFO(ctypes.Structure):
-    _fields_ = [("cbSize", wt.UINT), ("dwTime", wt.DWORD)]
-
-
-def last_input_tick() -> int:
-    li = LASTINPUTINFO(cbSize=ctypes.sizeof(LASTINPUTINFO))
-    user32.GetLastInputInfo(ctypes.byref(li))
-    return li.dwTime
-
 
 def cursor_pos() -> tuple[int, int]:
     p = wt.POINT()

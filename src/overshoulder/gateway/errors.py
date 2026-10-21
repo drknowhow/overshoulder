@@ -65,3 +65,14 @@ class TargetStale(GatewayError):
 
 class VerifyFailed(GatewayError):
     code = "verify_failed"
+
+
+class NeedsRealInput(GatewayError):
+    """No background method reaches this, and the input mode or the method forbids the person's mouse
+    and keyboard."""
+    code = "needs_real_input"
+
+
+class PersonActive(GatewayError):
+    """Input mode "borrow": the person used the mouse or keyboard too recently to borrow them."""
+    code = "person_active"

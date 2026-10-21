@@ -33,7 +33,7 @@ class Calls(list):
 @pytest.fixture
 def env(monkeypatch):
     calls = Calls()
-    p = {"abort": lambda: None, "real_input": calls.hook("real_input", 0x10),
+    p = {"abort": lambda: None, "real_input": calls.hook("real_input", 0x10), "input_mode": calls.hook("input_mode"),
          "background_target": calls.hook("background_target"), "scope_focus": {"hwnd": 0x20, "type": "Document"}}
     monkeypatch.setattr(A.uia, "roots_for_window", lambda h: [h])
     monkeypatch.setattr(A.w, "frame_bounds", lambda h: Rect(0, 0, 1000, 1000))
@@ -226,3 +226,23 @@ def test_background_chromium_typing_is_not_trusted_to_posted_messages(env, monke
     monkeypatch.setattr(A.Ladder, "_read", staticmethod(lambda el, h: None))
     out = A.Ladder(FakeScope(), p, "background").type_text(None, "abc").to_dict()
     assert out["method"] == "posted_chars"  # in front, posted characters are fine
+
+
+def test_real_typing_asks_the_input_mode_before_focusing_anything(env, monkeypatch):
+    calls, p = env
+    monkeypatch.setattr(A.uia, "focus", calls.hook("uia_focus"))
+    A.Ladder(FakeScope(), p, "input").type_text(object(), "abc")
+    assert calls.index("input_mode") < calls.index("uia_focus") < calls.index("real_input")
+
+
+def test_a_refused_input_mode_leaves_the_persons_foreground_alone(env, monkeypatch):
+    calls, p = env
+    monkeypatch.setattr(A.uia, "focus", calls.hook("uia_focus"))
+
+    def never():
+        raise A.NeedsRealInput("input mode is never")
+
+    p["input_mode"] = never
+    with pytest.raises(A.NeedsRealInput):
+        A.Ladder(FakeScope(), p, "input").type_text(object(), "abc")
+    assert "uia_focus" not in calls and "real_typing" not in calls

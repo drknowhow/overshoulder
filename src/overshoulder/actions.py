@@ -17,7 +17,8 @@ Real input is never used to retry something that may already have happened (a ho
 whose effect is just not visible), so nothing is done twice.
 
 Every rung asks the gateway first: p["background_target"](hwnd) before messaging a window, and
-p["real_input"]() before SendInput. A ForegroundGuard wraps each attempt and puts the person's
+p["real_input"]() before SendInput (p["input_mode"]() alone before anything that could move the
+person's foreground on the way there). A ForegroundGuard wraps each attempt and puts the person's
 foreground window back if the app grabs it.
 """
 
@@ -31,6 +32,7 @@ from overshoulder.driver import capture, uia
 from overshoulder.driver import input as inp
 from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
+from overshoulder.gateway.errors import NeedsRealInput
 
 METHODS = ("auto", "background", "input")
 PRESSABLE = {"button", "menuitem", "hyperlink", "splitbutton", "checkbox", "radiobutton", "tabitem", "listitem",
@@ -40,11 +42,6 @@ REGION = 90  # half-size of the area checked for a visible change around a poste
 # arrived" is only concluded after read-back stays unchanged this long. Concluding it early would
 # make "auto" type the text a second time with real keys.
 LANDED_WAIT_S = 2.0
-
-
-class NeedsRealInput(RuntimeError):
-    """No background method reached the window and the caller did not allow real input."""
-    code = "needs_real_input"
 
 
 @dataclass
@@ -237,6 +234,8 @@ class Ladder:
         return self._real_type(el, text)
 
     def _real_type(self, el, text: str) -> Outcome:
+        # Ask before focusing: focusing can bring the window forward, which a refused mode must not do.
+        self.p["input_mode"]()
         if el is not None:
             uia.focus(el)
             time.sleep(0.15)

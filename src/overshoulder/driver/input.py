@@ -122,12 +122,59 @@ def text_inputs(text: str) -> list[INPUT]:
     return events
 
 
+class LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wt.UINT), ("dwTime", wt.DWORD)]
+
+
+def last_input_tick() -> int:
+    """Tick count (ms since boot, wrapping at 2**32) of the last mouse/keyboard input, ours included."""
+    li = LASTINPUTINFO(cbSize=ctypes.sizeof(LASTINPUTINFO))
+    ctypes.windll.user32.GetLastInputInfo(ctypes.byref(li))
+    return li.dwTime
+
+
+def _tick_now() -> int:
+    return ctypes.windll.kernel32.GetTickCount()
+
+
+# Windows' last-input clock also counts our own SendInput, so the person's last input is tracked around
+# every injection: input newer than our last injection (plus slack for Windows to process it) is
+# theirs. All of this process's SendInput goes through send().
+_INJECT_SLACK_MS = 250
+_ticks: dict[str, int | None] = {"injected": None, "person": None}
+
+
+def _ms_after(a: int, b: int) -> int:
+    """a - b in ms on the wrapping 32-bit tick clock."""
+    return ((a - b + 2**31) % 2**32) - 2**31
+
+
+def _note_person_input() -> None:
+    last = last_input_tick()
+    injected = _ticks["injected"]
+    if injected is None or _ms_after(last, injected) > _INJECT_SLACK_MS:
+        _ticks["person"] = last
+
+
+def _mark_injected() -> None:
+    _ticks["injected"] = _tick_now()
+
+
+def person_idle_s() -> float:
+    """Seconds since the person last used the mouse or keyboard; this process's own input not counted."""
+    _note_person_input()
+    person = _ticks["person"]
+    return max(0, _ms_after(_tick_now(), person)) / 1000 if person is not None else 0.0
+
+
 def send(events: Iterable[INPUT]) -> int:
     events = list(events)
     if not events:
         return 0
+    _note_person_input()
     arr = (INPUT * len(events))(*events)
     sent = ctypes.windll.user32.SendInput(len(events), arr, ctypes.sizeof(INPUT))
+    _mark_injected()
     if sent != len(events):
         raise InputError(f"SendInput injected {sent} of {len(events)} events")
     return sent

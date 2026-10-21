@@ -86,3 +86,23 @@ def test_click_inputs_double_click_has_two_press_pairs():
     flags = [e.mi.dwFlags & 0x7E for e in events]
     assert flags == [0, inp.MOUSEEVENTF_LEFTDOWN, inp.MOUSEEVENTF_LEFTUP,
                      inp.MOUSEEVENTF_LEFTDOWN, inp.MOUSEEVENTF_LEFTUP]
+
+
+def test_person_idle_time_does_not_count_our_own_injected_input(monkeypatch):
+    clock = {"now": 10_000, "last": 9_000}
+    monkeypatch.setattr(inp, "_tick_now", lambda: clock["now"])
+    monkeypatch.setattr(inp, "last_input_tick", lambda: clock["last"])
+    monkeypatch.setattr(inp, "_ticks", {"injected": None, "person": None})
+    assert inp.person_idle_s() == 1.0  # the person's last input was 1 s ago
+    inp._note_person_input()  # what send() does before injecting...
+    clock["now"] = clock["last"] = 12_000
+    inp._mark_injected()  # ...and after: Windows now reports our input as the last one
+    clock["now"] = 13_000
+    assert inp.person_idle_s() == 4.0  # still measured from the person's input at 9.0 s
+    clock["last"], clock["now"] = 13_500, 14_000  # the person moves the mouse
+    assert inp.person_idle_s() == 0.5
+
+
+def test_tick_differences_survive_the_32_bit_wrap():
+    assert inp._ms_after(5, 2**32 - 5) == 10
+    assert inp._ms_after(2**32 - 5, 5) == -10

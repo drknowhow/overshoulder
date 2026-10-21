@@ -20,12 +20,21 @@ from pathlib import Path
 from typing import Any
 
 from overshoulder import scope as sc
+from overshoulder.driver import input as inp
 from overshoulder.driver import uia
 from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
 from overshoulder.gateway import policy
 from overshoulder.gateway.clients import ClientRegistry, default_home
-from overshoulder.gateway.errors import Denied, GatewayError, Paused, TargetStale, VerifyFailed
+from overshoulder.gateway.errors import (
+    Denied,
+    GatewayError,
+    NeedsRealInput,
+    Paused,
+    PersonActive,
+    TargetStale,
+    VerifyFailed,
+)
 from overshoulder.gateway.lease import DEFAULT_TTL_S, HUMAN_PAUSE, LeaseManager
 from overshoulder.gateway.log import ActionLog
 
@@ -126,6 +135,8 @@ class Checks:
         "overshoulder.driver.background", fromlist=["root_of"]).root_of(h)
     is_password_window: Callable[[int], bool] = lambda h: __import__(
         "overshoulder.driver.background", fromlist=["is_password_edit"]).is_password_edit(h)
+    # Seconds since the person last touched the mouse or keyboard (our own SendInput not counted).
+    person_idle_s: Callable[[], float] = inp.person_idle_s
 
     def __post_init__(self):
         if self.foreground_in_scope is None:
@@ -140,7 +151,7 @@ class Gateway:
                  log: ActionLog | None = None, approver: policy.Approver | None = None,
                  checks: Checks | None = None, scope_factory: Callable[[str], Any] = sc.parse_scope,
                  allow_elevated: bool = False, protected_pids: set[int] | None = None,
-                 human_wait_s: float = 20.0):
+                 human_wait_s: float = 20.0, settings_source: Callable[[], Any] | None = None):
         # An elevated gateway could drive elevated windows past UIPI, defeating the elevated-window deny.
         if not allow_elevated and policy.self_elevated():
             raise Denied("refusing to run elevated; start Overshoulder from a normal (non-admin) process")
@@ -156,6 +167,8 @@ class Gateway:
         # A person touching the mouse/keyboard pauses driving briefly; actions wait that out
         # instead of failing, up to this long. A panic is never waited out.
         self.human_wait_s = human_wait_s
+        # The person's settings (input mode), read at each use so a save on the settings page applies at once.
+        self.settings_source = settings_source or _current_settings
 
     # -- lease lifecycle -----------------------------------------------------------------------
 
@@ -192,7 +205,7 @@ class Gateway:
         self.log.write("lease_released", client=client.name, lease=lease_id)
 
     def status(self) -> dict:
-        return self.leases.status()
+        return {**self.leases.status(), "input_mode": self.settings_source().input_mode}
 
     # -- watchdog hooks ------------------------------------------------------------------------
 
@@ -274,6 +287,7 @@ class Gateway:
             # perform MUST call real_input() right before using the person's mouse/keyboard (SendInput),
             # and background_target(hwnd) before posting to or messaging any window.
             params["real_input"] = lambda: self._allow_real_input(scope, action, target)
+            params["input_mode"] = self._require_input_mode
             params["background_target"] = lambda hwnd, typing=False: self._allow_background_target(
                 scope, hwnd, typing)
             params["scope_focus"] = focus_info
@@ -316,8 +330,24 @@ class Gateway:
                 time.sleep(0.25)
                 self.leases.heartbeat_unchecked(lease_id, client)
 
+    def _require_input_mode(self) -> None:
+        """The person's input mode allows their mouse and keyboard to be used now."""
+        s = self.settings_source()
+        if s.input_mode == "never":
+            raise NeedsRealInput(
+                "this needs the person's mouse or keyboard, and their input mode is 'never' (agents work in the "
+                "background only). Use a ref with invoke, select or set_value instead, or ask the person to do "
+                "this step and wait_for() it")
+        if s.input_mode == "borrow":
+            idle = self.checks.person_idle_s()
+            if idle < s.borrow_idle_s:
+                raise PersonActive(
+                    f"the person used the mouse or keyboard {idle:.1f}s ago; their input mode lets agents borrow "
+                    f"them only after {s.borrow_idle_s}s idle. Retry in a few seconds")
+
     def _allow_real_input(self, scope, action: str, target: Target | None) -> int | None:
         """Checks before the person's real mouse/keyboard is used. Returns the in-scope foreground for keys."""
+        self._require_input_mode()
         fg = None
         if action in KEYBOARD_ACTIONS:
             fg = self.checks.foreground_in_scope(scope)
@@ -395,9 +425,17 @@ def _loggable(verdict: dict, log_text: bool) -> dict:
     return {**verdict, "readback": "redacted"}
 
 
+def _current_settings():
+    from overshoulder import settings as st  # imported late: settings imports this package's clients module
+    return st.load_or_default()
+
+
 def gateway_for_tests(tmp: Path, **kw) -> Gateway:
     """A gateway with an isolated registry and log. CI runners are elevated, so tests opt out of that
-    refusal unless they pass allow_elevated=False."""
+    refusal unless they pass allow_elevated=False. The input mode is "full" so tests depend neither on
+    this PC's settings nor on someone touching the mouse; input-mode tests pass settings_source."""
+    from overshoulder import settings as st
     reg = ClientRegistry(tmp / "clients.json")
     kw.setdefault("allow_elevated", True)
+    kw.setdefault("settings_source", lambda: st.Settings(input_mode="full"))
     return Gateway(registry=reg, log=ActionLog(tmp / "actions.jsonl"), **kw)

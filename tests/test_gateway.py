@@ -49,7 +49,7 @@ def ok_checks(**over):
                 window_at_point=lambda s, x, y: 0x10, element_at_point=lambda x, y: None,
                 focused_element=lambda: dict(DOC_FOCUS), pid_of=lambda h: 1,
                 scope_focus=lambda s: dict(DOC_FOCUS), element_in_scope_at=lambda s, x, y: None,
-                root_of=lambda h: h, is_password_window=lambda h: False)
+                root_of=lambda h: h, is_password_window=lambda h: False, person_idle_s=lambda: 999.0)
     return Checks(**{**base, **over})
 
 
@@ -606,3 +606,60 @@ def test_agent_cannot_drive_overshoulders_own_windows_either_way(gw):
     with pytest.raises(E.Denied):
         g.run(token, lease_id, "click", lambda t, p: p["background_target"](0x10),
               target=Target("point", x=5, y=5))
+
+
+# -- input mode: how much agents may use the person's mouse and keyboard -------------------------------
+
+def _mode_gateway(tmp_path, idle_s=999.0):
+    from overshoulder import settings as st
+    path = tmp_path / "settings.json"
+    g = gateway_for_tests(tmp_path, checks=ok_checks(person_idle_s=lambda: idle_s),
+                          scope_factory=lambda s: FakeScope(), settings_source=lambda: st.load_or_default(path))
+    token = g.registry.add("agent-a")
+    return g, token, g.acquire(token, "window:16")["lease_id"], path
+
+
+def _save_from_page(path, **form):
+    """Save settings the way the settings page does: through its form parser."""
+    from overshoulder import settings as st
+    from overshoulder.settings_page import settings_from_form
+    st.save(settings_from_form({"waits_enabled": "on", **form}), path)
+
+
+def test_changing_the_input_mode_on_the_settings_page_changes_what_the_gateway_allows(tmp_path):
+    g, token, lease_id, path = _mode_gateway(tmp_path)
+    clicked = []
+
+    def real_click(t, p):
+        p["real_input"]()
+        clicked.append(1)
+
+    _save_from_page(path, input_mode="full")
+    g.run(token, lease_id, "click", real_click, target=Target("point", x=5, y=5))
+    _save_from_page(path, input_mode="never")
+    with pytest.raises(E.NeedsRealInput):
+        g.run(token, lease_id, "click", real_click, target=Target("point", x=5, y=5))
+    assert clicked == [1]
+    assert rows(g)[-1]["ok"] is False and rows(g)[-1]["error"]["code"] == "needs_real_input"
+    assert g.status()["input_mode"] == "never"
+    # Background work goes on in every mode.
+    out = g.run(token, lease_id, "type", lambda t, p: p["background_target"](0x10, typing=True),
+                params={"text": "hi"})
+    assert out["ok"]
+
+
+def test_borrow_mode_uses_real_input_only_after_the_person_has_been_idle(tmp_path):
+    g, token, lease_id, path = _mode_gateway(tmp_path, idle_s=2.0)
+    _save_from_page(path, input_mode="borrow", borrow_idle_s="5")
+    with pytest.raises(E.PersonActive):
+        g.run(token, lease_id, "hotkey", lambda t, p: p["real_input"](), params={"combo": "ctrl+s"})
+    g.checks.person_idle_s = lambda: 6.0
+    assert g.run(token, lease_id, "hotkey", lambda t, p: p["real_input"](), params={"combo": "ctrl+s"})["ok"]
+
+
+def test_the_default_input_mode_borrows_and_a_broken_settings_file_falls_back_to_it(tmp_path):
+    g, token, lease_id, path = _mode_gateway(tmp_path, idle_s=0.5)
+    assert g.status()["input_mode"] == "borrow"  # no settings file yet
+    path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(E.PersonActive):
+        g.run(token, lease_id, "hotkey", lambda t, p: p["real_input"](), params={"combo": "ctrl+s"})
