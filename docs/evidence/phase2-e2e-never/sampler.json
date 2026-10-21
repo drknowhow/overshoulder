@@ -1,0 +1,20 @@
+{
+  "samples": 1124,
+  "seconds": 56.5,
+  "period_ms": 50,
+  "foreground_was_the_persons_window": true,
+  "samples_with_another_foreground": 0,
+  "foreground_excursions": [],
+  "cursor_positions_seen": [
+    [
+      48,
+      153
+    ]
+  ],
+  "cursor_unchanged": true,
+  "injected_input_events": 0,
+  "physical_input_events": 0,
+  "agent_seconds": 56.6,
+  "agent_exit_code": 0,
+  "file_on_disk": "Typed in the background by an agent (6 * 7 = 42)"
+}
