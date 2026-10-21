@@ -106,3 +106,17 @@ def test_person_idle_time_does_not_count_our_own_injected_input(monkeypatch):
 def test_tick_differences_survive_the_32_bit_wrap():
     assert inp._ms_after(5, 2**32 - 5) == 10
     assert inp._ms_after(2**32 - 5, 5) == -10
+
+
+def test_move_cursor_counts_as_our_input_not_the_persons(monkeypatch):
+    clock = {"now": 20_000, "last": 10_000}
+    monkeypatch.setattr(inp, "_tick_now", lambda: clock["now"])
+    monkeypatch.setattr(inp, "last_input_tick", lambda: clock["last"])
+    monkeypatch.setattr(inp, "_ticks", {"injected": None, "person": None})
+    moved = []
+    monkeypatch.setattr(inp.ctypes.windll.user32, "SetCursorPos", lambda x, y: moved.append((x, y)) or 1,
+                        raising=False)
+    inp.move_cursor(3, 4)
+    clock["last"] = 20_000  # Windows counts the move as the newest input
+    clock["now"] = 21_000
+    assert moved == [(3, 4)] and inp.person_idle_s() == 11.0

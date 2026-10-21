@@ -140,7 +140,7 @@ def _tick_now() -> int:
 # Windows' last-input clock also counts our own SendInput, so the person's last input is tracked around
 # every injection: input newer than our last injection (plus slack for Windows to process it) is
 # theirs. All of this process's SendInput goes through send().
-_INJECT_SLACK_MS = 250
+_INJECT_SLACK_MS = 50
 _ticks: dict[str, int | None] = {"injected": None, "person": None}
 
 
@@ -165,6 +165,13 @@ def person_idle_s() -> float:
     _note_person_input()
     person = _ticks["person"]
     return max(0, _ms_after(_tick_now(), person)) / 1000 if person is not None else 0.0
+
+
+def move_cursor(x: int, y: int) -> None:
+    """Put the real cursor at (x, y) physical pixels; counted as our input, not the person's."""
+    _note_person_input()
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
+    _mark_injected()
 
 
 def send(events: Iterable[INPUT]) -> int:

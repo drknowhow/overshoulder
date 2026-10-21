@@ -1,11 +1,12 @@
 """The watchdog: the person's side of the desk. A separate process the MCP server cannot stop.
 
 - Panic hotkey (Ctrl+Alt+P by default): revokes the active lease and pauses until an operator resumes.
-- Physical mouse or keyboard input while an agent drives pauses driving; it resumes by itself after a
-  few idle seconds. Low-level hooks tell physical from injected input (LLKHF_INJECTED/LLMHF_INJECTED),
+- Physical mouse or keyboard input while an agent holds a scope pauses the agent's use of the
+  person's real input (background work in the agent's own window goes on); it resumes by itself after
+  a few idle seconds. Low-level hooks tell physical from injected input (LLKHF_INJECTED/LLMHF_INJECTED),
   so the agent's own SendInput never trips it.
-- An outline around the active scope (green driving, amber paused), excluded from screen capture so
-  it never appears in recordings.
+- An outline around the active scope (green driving, amber while the person is using the PC, red
+  stopped), excluded from screen capture so it never appears in recordings.
 
 It talks to the daemon over the operator endpoints, and registers its own pid as protected so agents
 can never click or type into its windows.
@@ -90,30 +91,21 @@ class Operator:
 
 # -- low-level hooks and hotkey (runs on its own thread with a message loop) ----------------------
 
-WH_KEYBOARD_LL, WH_MOUSE_LL = 13, 14
-LLKHF_INJECTED, LLMHF_INJECTED = 0x10, 0x01
+from overshoulder.driver.person import (  # noqa: E402,F401  (re-exported for tests)
+    HOOKPROC,
+    KBDLLHOOKSTRUCT,
+    MSLLHOOKSTRUCT,
+    WH_KEYBOARD_LL,
+    WH_MOUSE_LL,
+    physical_key,
+    physical_mouse,
+)
+
 WM_HOTKEY = 0x0312
 MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_NOREPEAT = 0x1, 0x2, 0x4, 0x4000
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
-LRESULT = ctypes.c_ssize_t
-HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wt.WPARAM, wt.LPARAM)
-user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, wt.HINSTANCE, wt.DWORD]
-user32.SetWindowsHookExW.restype = wt.HHOOK
-user32.CallNextHookEx.argtypes = [wt.HHOOK, ctypes.c_int, wt.WPARAM, wt.LPARAM]
-user32.CallNextHookEx.restype = LRESULT
-kernel32.GetModuleHandleW.restype = wt.HMODULE
-
-
-class KBDLLHOOKSTRUCT(ctypes.Structure):
-    _fields_ = [("vkCode", wt.DWORD), ("scanCode", wt.DWORD), ("flags", wt.DWORD), ("time", wt.DWORD),
-                ("dwExtraInfo", ctypes.c_size_t)]
-
-
-class MSLLHOOKSTRUCT(ctypes.Structure):
-    _fields_ = [("pt", wt.POINT), ("mouseData", wt.DWORD), ("flags", wt.DWORD), ("time", wt.DWORD),
-                ("dwExtraInfo", ctypes.c_size_t)]
 
 
 def parse_hotkey(spec: str) -> tuple[int, int]:
@@ -139,13 +131,13 @@ def input_thread(on_physical, on_panic, hotkey: str, ready: threading.Event, err
 
     @HOOKPROC
     def kb_proc(n, w, l_):
-        if n == 0 and not ctypes.cast(l_, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents.flags & LLKHF_INJECTED:
+        if n == 0 and physical_key(l_):
             on_physical()
         return user32.CallNextHookEx(None, n, w, l_)
 
     @HOOKPROC
     def ms_proc(n, w, l_):
-        if n == 0 and not ctypes.cast(l_, ctypes.POINTER(MSLLHOOKSTRUCT)).contents.flags & LLMHF_INJECTED:
+        if n == 0 and physical_mouse(l_):
             on_physical()
         return user32.CallNextHookEx(None, n, w, l_)
 

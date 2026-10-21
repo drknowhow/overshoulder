@@ -84,6 +84,17 @@ def thread_focus(top_hwnd: int) -> int:
     return gti.hwndFocus or 0
 
 
+GUI_INMENUMODE, GUI_SYSTEMMENUMODE, GUI_POPUPMENUMODE = 0x4, 0x8, 0x10
+
+
+def in_menu_mode(top_hwnd: int) -> bool:
+    """A Win32 menu (menu bar, popup or system menu) is open in top_hwnd's thread."""
+    gti = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
+    if not user32.GetGUIThreadInfo(thread_of(top_hwnd), ctypes.byref(gti)):
+        return False
+    return bool(gti.flags & (GUI_INMENUMODE | GUI_SYSTEMMENUMODE | GUI_POPUPMENUMODE))
+
+
 def _first_child(top: int, cls: str) -> int:
     found = []
 
