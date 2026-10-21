@@ -3,7 +3,9 @@
 Window scopes are captured with PrintWindow(PW_RENDERFULLCONTENT): only the window's own pixels,
 even when something covers it, so nothing outside the scope can leak into a recording. Screen scopes
 use ffmpeg gdigrab on the monitor rect. The cursor is not captured; its position is sampled every
-frame into frames.jsonl and drawn later by the renderer, along with every other annotation.
+frame into frames.jsonl. The renderer draws every annotation later, and by default it draws the
+agent's own pointer from the action timeline, since in background mode the real cursor is the
+person's.
 
 Output directory:
   video.mp4      clean capture, constant size

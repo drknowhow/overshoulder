@@ -90,3 +90,44 @@ def test_tight_timing_drops_idle_frames_between_steps():
     assert R.keep_frame(0.5, steps, 40.0) and R.keep_frame(39.5, steps, 40.0)
     assert R.keep_frame(2.5, steps, 40.0) and R.keep_frame(30.1, steps, 40.0)
     assert not R.keep_frame(15.0, steps, 40.0)
+
+
+def test_the_agents_pointer_glides_to_each_target_and_rests_there():
+    rows = [_row("click", 2.0, target={"kind": "point", "x": 100, "y": 100}),
+            _row("invoke", 5.0, target={"kind": "element", "name": "OK", "rect": [200, 300, 240, 320]}),
+            _row("hotkey", 6.0, params={"combo": "ctrl+s"})]
+    steps = R.build_steps(rows, 0.0)
+    home = (0, 0)
+    assert R.pointer_at(0.0, steps, home) == home  # rests at home until the first glide
+    assert R.pointer_at(2.0 - R.GLIDE_S / 2, steps, home) == (50, 50)  # halfway there
+    assert R.pointer_at(2.0, steps, home) == (100, 100)  # arrives as the step happens
+    assert R.pointer_at(4.0, steps, home) == (100, 100)  # rests until the next glide
+    assert R.pointer_at(5.0, steps, home) == (220, 310)  # an element step aims at its centre
+    assert R.pointer_at(9.0, steps, home) == (220, 310)  # a keyboard step does not move it
+
+
+def test_close_steps_glide_only_after_the_previous_step():
+    rows = [_row("click", 1.0, target={"kind": "point", "x": 0, "y": 0}),
+            _row("click", 1.2, target={"kind": "point", "x": 100, "y": 0})]
+    steps = R.build_steps(rows, 0.0)
+    assert R.pointer_at(1.0, steps, (0, 0)) == (0, 0)
+    assert R.pointer_at(1.1, steps, (0, 0)) == (50, 0)
+
+
+def test_no_target_means_no_pointer_and_hidden_elements_are_not_aimed_at():
+    rows = [_row("hotkey", 1.0, params={"combo": "ctrl+s"}),
+            _row("type", 2.0, target={"kind": "element", "name": "editor", "rect": [10, 10, 10, 10]})]
+    steps = R.build_steps(rows, 0.0)
+    assert [s.aim for s in steps] == [None, None]
+    assert R.pointer_at(3.0, steps, (5, 5)) is None
+
+
+def test_invoke_ripples_like_a_click_at_the_controls_centre():
+    row = _row("invoke", 1.0, target={"kind": "element", "name": "Save", "rect": [10, 10, 30, 50]})
+    s = R.build_steps([row], 0.0)[0]
+    assert s.point == (20, 30) and s.aim == (20, 30)
+
+
+def test_render_rejects_an_unknown_pointer_style(tmp_path):
+    with pytest.raises(ValueError):
+        R.render(tmp_path, actions=[], pointer="laser")

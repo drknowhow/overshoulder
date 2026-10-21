@@ -1,8 +1,12 @@
 """Turn a clean recording + action timeline into a tutorial: MP4, per-step PNGs and steps.md.
 
-Everything is drawn here, after the fact, from the recording's tracks: the cursor, click ripples,
+Everything is drawn here, after the fact, from the recording's tracks: a pointer, click ripples,
 numbered step badges, a highlight around each target, and a caption bar. The recording itself never
 contains overlays, so a tutorial can be re-rendered with different styling or edits.
+
+The pointer is the agent's by default: it glides to each step's target just before the step. Agents
+mostly act in the background, where the real cursor belongs to the person and is somewhere else; the
+real cursor track is still recorded and can be drawn instead (pointer="real").
 """
 
 from __future__ import annotations
@@ -20,7 +24,11 @@ RIPPLE = (250, 204, 21)
 CAPTION_BG = (17, 24, 39, 215)
 STEP_ACTIONS = {"click", "double_click", "right_click", "invoke", "toggle", "select", "set_value", "type",
                 "hotkey", "activate", "focus"}
+# Actions a viewer would do with a click: they get a ripple where the pointer lands.
+PRESS_ACTIONS = {"click", "double_click", "right_click", "invoke", "toggle", "select"}
+POINTERS = ("agent", "real", "none")
 LEAD_S, HOLD_S, RIPPLE_S = 0.5, 2.2, 0.6
+GLIDE_S = 0.5  # the agent's pointer moves to a step's target over this long, ending at the step
 STRIP = 72  # caption strip under the video, so captions never cover the app
 # Tight timing keeps frames this close to a step and drops the idle time between agent actions.
 PAD_BEFORE, PAD_AFTER, EDGE_S = 0.6, 0.4, 1.0
@@ -36,6 +44,7 @@ class Step:
     point: tuple[int, int] | None
     start: float = 0.0  # when its annotations appear ...
     end: float = 0.0  # ... and disappear; never overlapping the next step
+    aim: tuple[int, int] | None = None  # where the agent's pointer goes for this step
 
 
 def _font(size: int) -> ImageFont.ImageFont:
@@ -83,15 +92,40 @@ def build_steps(actions: list[dict], start: float) -> list[Step]:
         t = (row.get("t_act") or (row["ts"] - row.get("ms", 0) / 1000)) - start
         target = row.get("target") or {}
         rect = tuple(target["rect"]) if target.get("rect") else None
+        if rect and (rect[2] <= rect[0] or rect[3] <= rect[1]):
+            rect = None  # hidden element (e.g. Chromium's editor input): nothing on screen to point at
+        center = ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2) if rect else None
         point = (target["x"], target["y"]) if target.get("kind") == "point" else None
-        if point is None and rect and row["action"] in ("click", "double_click", "right_click"):
-            point = ((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
-        steps.append(Step(len(steps) + 1, round(t, 3), row["action"], _caption(row), rect, point))
+        if point is None and center and row["action"] in PRESS_ACTIONS:
+            point = center
+        steps.append(Step(len(steps) + 1, round(t, 3), row["action"], _caption(row), rect, point,
+                          aim=point or center))
     for i, st in enumerate(steps):
         nxt = steps[i + 1].t if i + 1 < len(steps) else None
         st.end = min(st.t + HOLD_S, nxt - 0.05) if nxt is not None else st.t + HOLD_S
         st.start = max(st.t - LEAD_S, steps[i - 1].end if i else st.t - LEAD_S)
     return steps
+
+
+def pointer_at(t: float, steps: list[Step], home: tuple[int, int]) -> tuple[int, int] | None:
+    """Where the agent's pointer is at time t. It rests at `home` (the middle of the first frame) until
+    the first step with a target, glides to each target over GLIDE_S, arriving as the step happens, and
+    rests there until the next one. None when no step has a target."""
+    aimed = [s for s in steps if s.aim]
+    if not aimed:
+        return None
+    prev, prev_t = home, None
+    for s in aimed:
+        if t < s.t:
+            start = s.t - GLIDE_S if prev_t is None else max(prev_t, s.t - GLIDE_S)
+            k = 1.0 if s.t <= start else (t - start) / (s.t - start)
+            if k <= 0:
+                return prev
+            k = min(k, 1.0)
+            k = k * k * (3 - 2 * k)  # ease in and out
+            return round(prev[0] + (s.aim[0] - prev[0]) * k), round(prev[1] + (s.aim[1] - prev[1]) * k)
+        prev, prev_t = s.aim, s.t
+    return prev
 
 
 def still_time(step: Step) -> float:
@@ -175,8 +209,11 @@ def keep_frame(t: float, steps: list[Step], last_t: float) -> bool:
 
 
 def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | None = None,
-           tight: bool = True) -> dict:
-    """tight=True cuts the idle time between steps; tight=False keeps real-time pacing."""
+           tight: bool = True, pointer: str = "agent") -> dict:
+    """tight=True cuts the idle time between steps; tight=False keeps real-time pacing. pointer: "agent"
+    (the agent's own track), "real" (the recorded cursor) or "none"."""
+    if pointer not in POINTERS:
+        raise ValueError(f"pointer must be one of {POINTERS}")
     rec = Path(rec_dir)
     out = Path(out_dir or rec / "tutorial")
     out.mkdir(parents=True, exist_ok=True)
@@ -204,6 +241,14 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     saved: dict[int, str] = {}
     frame_bytes = width * height * 3
     last_t = track[-1]["t"] if track else 0.0
+    b0 = track[0]["bounds"] if track else [0, 0, width, height]
+    home = ((b0[0] + b0[2]) // 2, (b0[1] + b0[3]) // 2)
+
+    def pointer_for(fr: dict, t: float):
+        if pointer == "agent":
+            return pointer_at(t, steps, home)
+        return fr.get("cursor") if pointer == "real" else None
+
     i = written = 0
     try:
         while True:
@@ -215,7 +260,7 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
             t = fr["t"]
             img = Image.frombytes("RGB", (width, height), raw)
             if not tight or keep_frame(t, steps, last_t):
-                framed = annotate(img, t, (fr["bounds"][0], fr["bounds"][1]), fr.get("cursor"), steps, fonts)
+                framed = annotate(img, t, (fr["bounds"][0], fr["bounds"][1]), pointer_for(fr, t), steps, fonts)
                 enc.stdin.write(framed.tobytes())
                 written += 1
             for n, due in shots_due.items():
@@ -224,7 +269,7 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
                     # Each still shows its own step only, even if the video already moved on.
                     one = by_n[n]
                     solo = Step(one.n, one.t, one.action, one.caption, one.rect, one.point, t - 1, t + 1)
-                    annotate(img, t, (fr["bounds"][0], fr["bounds"][1]), fr.get("cursor"), [solo],
+                    annotate(img, t, (fr["bounds"][0], fr["bounds"][1]), pointer_for(fr, t), [solo],
                              fonts).save(path)
                     saved[n] = path.name
             i += 1

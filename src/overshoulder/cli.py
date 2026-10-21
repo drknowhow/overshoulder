@@ -91,6 +91,8 @@ def main(argv: list[str] | None = None) -> int:
     au.add_argument("action", choices=["install", "uninstall", "status"])
     rr = sub.add_parser("render", help="(re)render a recording directory into a tutorial")
     rr.add_argument("dir")
+    rr.add_argument("--pointer", default="agent", choices=["agent", "real", "none"],
+                    help="draw the agent's pointer (default), the recorded real cursor, or none")
 
     a = ap.parse_args(argv)
     if a.cmd == "serve":
@@ -132,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         from pathlib import Path
 
         from overshoulder.render import render
-        print(json.dumps(render(Path(a.dir)), indent=2))
+        print(json.dumps(render(Path(a.dir), pointer=a.pointer), indent=2))
         return 0
     if a.cmd == "home":
         print(default_home())
