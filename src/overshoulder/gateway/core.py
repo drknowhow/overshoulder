@@ -478,7 +478,8 @@ class Gateway:
         return b
 
     def _untouched_since(self, t: float) -> bool:
-        return self.checks.person_idle_s() >= time.monotonic() - t
+        # Strict: with a coarse clock no time may have passed, and idle 0 then means "just touched".
+        return self.checks.person_idle_s() > time.monotonic() - t
 
     def _restore(self, saved) -> dict:
         try:
