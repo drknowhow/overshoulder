@@ -1,0 +1,7 @@
+{
+  "what": "Calculator 7 x 6 = in input mode 'never', every action method='background', with a sentinel window holding the foreground; rendered with the agent's pointer",
+  "calculator_shows": "Display is 42",
+  "injected_input_events": 0,
+  "cursor_unchanged": true,
+  "persons_window_in_front": true
+}
