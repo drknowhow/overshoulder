@@ -212,3 +212,34 @@ def test_background_method_refuses_instead_of_using_real_input(desk, svc):
                 s.act(token, lease, "click", x=x, y=y, method="background")
     finally:
         _close(hwnd)
+
+
+def test_never_mode_refuses_what_only_real_input_could_do(desk, tmp_path):
+    """Input mode "never": even method="auto" may not fall back to the person's mouse or foreground."""
+    _no_running("CalculatorApp.exe")
+    from overshoulder import settings as st
+    from overshoulder.gateway.core import gateway_for_tests
+    from overshoulder.gateway.errors import NeedsRealInput
+    from overshoulder.service import Service
+    s = Service(gateway_for_tests(tmp_path, settings_source=lambda: st.Settings(input_mode="never")),
+                shots_dir=tmp_path / "shots")
+    token = s.gw.registry.add("never-test")
+    H = desk[0]
+    H.launch_noactivate(["calc.exe"])
+    hwnd = _wait_window(r"^Calculator$")
+    time.sleep(5.0)
+    try:
+        lease = s.acquire(token, f"window:{hwnd}")["lease_id"]
+        nine = s.find(token, lease, auto_id="num9Button")[0]
+        x = (nine["rect"][0] + nine["rect"][2]) // 2
+        y = (nine["rect"][1] + nine["rect"][3]) // 2
+        with Quiet(desk):
+            # A posted click cannot reach a UWP core window, and the mode forbids the real one.
+            with pytest.raises(NeedsRealInput):
+                s.act(token, lease, "click", x=x, y=y, method="auto")
+            with pytest.raises(NeedsRealInput):
+                s.act(token, lease, "activate", method="auto")
+        codes = [r["error"]["code"] for r in s.gw.log.tail(10) if r.get("ok") is False]
+        assert codes == ["needs_real_input", "needs_real_input"]
+    finally:
+        _close(hwnd)

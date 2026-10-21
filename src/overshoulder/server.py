@@ -41,13 +41,20 @@ INSTRUCTIONS = """Overshoulder lets you see and operate desktop apps on this Win
 3. act(action, ref=... | x=..,y=..) runs one action and verifies it. Prefer refs and invoke/set_value
    over coordinates. Actions: """ + ", ".join(ACTIONS) + """.
 4. Typing goes to the focused control in your scope; pass ref to focus a control first.
-5. Refusals are deliberate (out_of_scope, denied, approval_denied, paused, lease_revoked): observe again
-   or stop; never try to work around them. When the person at the desk uses the mouse or keyboard,
-   driving pauses and your call waits (up to ~20 s) for them to stop; "paused" after that means they are
-   still busy, so wait and retry later. A person can press the panic key at any time; after a panic only
-   they can resume.
-6. release_scope() when done.
-7. If you need the person to do something (sign in, approve, finish a form), don't ask them to tell you
+5. Refusals are deliberate (out_of_scope, denied, approval_denied, paused, lease_revoked,
+   needs_real_input, person_active): observe again or stop; never try to work around them. When the
+   person at the desk uses the mouse or keyboard, driving pauses and your call waits (up to ~20 s) for
+   them to stop; "paused" after that means they are still busy, so wait and retry later. A person can
+   press the panic key at any time; after a panic only they can resume.
+6. You work beside the person: act() reaches the window through UI Automation and messages to the
+   window itself, so their cursor and the app they are using stay theirs. They choose how much you may
+   use their real mouse and keyboard (status() shows input_mode): "never", "borrow" (only after they
+   have been idle a few seconds) or "full". needs_real_input means an action has no background method
+   and real input is not allowed: use a ref with invoke, select or set_value, or ask the person to do
+   that step and wait_for() it. person_active means they are using the PC right now: retry shortly.
+   Pass method="background" to make sure an action never touches their input.
+7. release_scope() when done.
+8. If you need the person to do something (sign in, approve, finish a form), don't ask them to tell you
    when they're done: wait_for() the window/control/file change that shows it is done."""
 
 
@@ -228,7 +235,8 @@ class Daemon:
 
         @mcp.tool()
         async def status(ctx: Context) -> dict:
-            """Who holds the desktop, the queue, and whether driving is paused."""
+            """Who holds the desktop, the queue, whether driving is paused, and the person's input mode
+            (never, borrow or full: how much you may use their real mouse and keyboard)."""
             def go(token):
                 d.gw.registry.authenticate(token)
                 return d.gw.status()

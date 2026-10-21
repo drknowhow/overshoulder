@@ -74,6 +74,7 @@ def test_notepad_type_into_element_and_save(svc, tmp_path):
     __import__("bghelpers").wait_no_window("Notepad")
     subprocess.Popen(["notepad.exe", str(path)])
     win = _wait_window("svc_notepad")
+    time.sleep(1.5)  # the title shows before the file has loaded; loading it would wipe typed text
     try:
         _focus(win.hwnd)
         lease = s.acquire(token, f"window:{win.hwnd}")["lease_id"]

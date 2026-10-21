@@ -141,3 +141,13 @@ def test_agent_drives_calculator_over_mcp(daemon):
             Desktop(backend="uia").window(handle=hwnd).close()
         except Exception:
             pass
+
+
+def test_input_mode_refusals_reach_the_agent_as_structured_errors(daemon):
+    from overshoulder.gateway.errors import NeedsRealInput, PersonActive
+
+    d, _, _ = daemon
+    for err in (NeedsRealInput("input mode is never"), PersonActive("the person is typing")):
+        def boom(err=err):
+            raise err
+        assert d.call(boom) == {"ok": False, "error": {"code": err.code, "message": str(err)}}
