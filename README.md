@@ -100,6 +100,19 @@ refusal is logged.
 - **Recordings stay in scope.** A window recording captures that window's own pixels, even when
   something covers it.
 
+## Working beside you
+
+Agents act on their window in the background first: UI Automation, then messages sent to the window
+itself. Your cursor doesn't move, and the app you're using keeps the keyboard. Some apps respond only
+to a real mouse or keyboard, and `overshoulder settings` sets whether an agent may then use yours:
+
+- **Never.** Those actions are refused with `needs_real_input`, and the agent has to ask you.
+- **Only while I'm idle** (the default). An agent may borrow them once you've left them alone for a
+  few seconds (5 unless you change it).
+- **Full control.** An agent may use them whenever it needs to.
+
+In every mode, touching the mouse or keyboard pauses an agent that is driving.
+
 ## Waiting for the person
 
 When an agent needs you to do something (sign in, approve, finish a form), it can watch for the

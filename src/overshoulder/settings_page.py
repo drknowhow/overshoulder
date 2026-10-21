@@ -75,10 +75,19 @@ PAGE = """<!doctype html>
 </style></head>
 <body><main>
 <h1>Overshoulder</h1>
-<p class="sub">Settings for this PC. Changes apply to the next wait an agent starts.</p>
+<p class="sub">Settings for this PC. Changes apply to the next action or wait an agent starts.</p>
 {saved}
 <form method="post" action="/settings">
 <input type="hidden" name="form_token" value="{form_token}">
+<section>
+  <h2>Your mouse and keyboard</h2>
+  <p class="hint">Agents work on their window in the background first, so your cursor stays put and the app
+  you are using keeps the keyboard. Some apps only respond to a real mouse or keyboard. Choose when an
+  agent may use yours for those.</p>
+  {input_modes}
+  <div class="field"><label for="idle">Idle time before borrowing (seconds)</label>
+    <input id="idle" type="number" name="borrow_idle_s" min="1" max="120" value="{borrow_idle_s}"></div>
+</section>
 <section>
   <h2>Automatic detection</h2>
   <p class="hint">Lets an agent that is waiting on you notice when you have finished, without you typing anything.
@@ -124,9 +133,17 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
     kinds = "\n".join(
         f'<label class="row"><input type="checkbox" name="kind_{k}" {"checked" if k in s.wait_kinds else ""}>'
         f"<span>{html.escape(desc)}</span></label>" for k, desc in st.WAIT_KINDS.items())
+    modes = "\n".join(
+        f'<label class="row"><input type="radio" name="input_mode" value="{m}" '
+        f'{"checked" if m == s.input_mode else ""}><span><b>{html.escape(label)}</b>'
+        f'{" (default)" if m == st.DEFAULT_INPUT_MODE else ""}<br>'
+        f'<span class="hint">{html.escape(desc)}</span></span></label>'
+        for m, (label, desc) in st.INPUT_MODES.items())
     return PAGE.format(
         saved='<div class="saved">Saved.</div>' if saved else "",
         form_token=html.escape(form_token),
+        input_modes=modes,
+        borrow_idle_s=s.borrow_idle_s,
         waits_enabled="checked" if s.waits_enabled else "",
         kinds=kinds,
         poll_interval_ms=s.poll_interval_ms,
@@ -151,6 +168,8 @@ def settings_from_form(form) -> st.Settings:
         max_wait_minutes=num("max_wait_minutes", 60),
         beep_on_detect=form.get("beep_on_detect") == "on",
         wait_processes=[p for p in str(form.get("wait_processes", "")).replace(";", ",").split(",")],
+        input_mode=str(form.get("input_mode", st.DEFAULT_INPUT_MODE)),
+        borrow_idle_s=num("borrow_idle_s", 5),
     ).clamp()
 
 

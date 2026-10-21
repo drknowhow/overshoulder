@@ -48,14 +48,18 @@ def test_settings_page_needs_a_one_time_link_and_saves(daemon):  # noqa: F811
     assert "samesite=strict" in set_cookie.lower() and "httponly" in set_cookie.lower()
     assert _http("GET", url)[0] == 403  # single-use link
     status, _, page = _http("GET", f"{base}/settings", cookie=cookie)
-    assert status == 200 and "Automatic detection" in page
+    assert status == 200 and "Automatic detection" in page and "Your mouse and keyboard" in page
+    assert 'value="borrow" checked' in page  # the default input mode is shown selected
     token = page.split('name="form_token" value="')[1].split('"')[0]
     hdr = {"content-type": "application/x-www-form-urlencoded"}
     form = urlencode({"form_token": token, "waits_enabled": "on", "kind_file": "on",
-                      "poll_interval_ms": "300", "max_wait_minutes": "15", "wait_processes": ""}).encode()
+                      "poll_interval_ms": "300", "max_wait_minutes": "15", "wait_processes": "",
+                      "input_mode": "never", "borrow_idle_s": "7"}).encode()
     assert _http("POST", f"{base}/settings", form, hdr, cookie)[0] == 303
     s = st.load()
     assert s.wait_kinds == ["file"] and s.poll_interval_ms == 300 and s.max_wait_minutes == 15
+    assert s.input_mode == "never" and s.borrow_idle_s == 7
+    assert 'value="never" checked' in _http("GET", f"{base}/settings", cookie=cookie)[2]
     forged = urlencode({"form_token": "forged", "waits_enabled": "on"}).encode()
     assert _http("POST", f"{base}/settings", forged, hdr, cookie)[0] == 403
     assert _http("GET", f"{base}/settings", headers={"Host": "evil.example"}, cookie=cookie)[0] == 403
