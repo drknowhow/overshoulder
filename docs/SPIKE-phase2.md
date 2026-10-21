@@ -94,6 +94,11 @@ another one closed, `print('hi') {x} + ~` posted as `WM_CHAR` read back as `prin
 keeps its meaning) or for windows that are not edit controls. Text that reads back changed but wrong
 is reported as `typing_mismatch` instead of as a success.
 
+**UI Automation on Win32 controls can take the foreground.** In the end-to-end run
+(`docs/evidence/phase2-e2e-never`), ValuePattern and Invoke on Character Map each brought it forward
+for about 0.1 s before the guard put the person's window back. Native Win32 controls now get
+`WM_SETTEXT` and `BM_CLICK` first, which never moved the foreground in any run.
+
 **Focus steals vary between runs.** In one run of the Character Map test a UIA call brought
 Character Map to the front; in the other runs it did not. The foreground-lock timeout (after the
 person has been idle that long, any app may take the foreground) does not explain it: on this PC
