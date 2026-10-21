@@ -1,7 +1,8 @@
 """The driver lease: one agent drives the desktop at a time.
 
 A lease has a TTL renewed by heartbeats. Others wait in a FIFO queue. The watchdog can revoke the
-active lease (panic key) or pause all driving (human took over); a revoked lease never comes back,
+active lease (panic key, which also pauses everything) or pause with HUMAN_PAUSE while the person uses
+the PC, which holds back only the person's real mouse and keyboard. A revoked lease never comes back;
 the holder must acquire a new one.
 """
 
@@ -20,7 +21,8 @@ DEFAULT_TTL_S = 60.0
 MAX_TTL_S = 600.0
 # A queued client that stops retrying loses its place, so an abandoned request cannot block everyone.
 QUEUE_STALE_S = 30.0
-# The watchdog's pause reason; the only pause an action may wait out (never a panic).
+# The watchdog's pause while the person uses the PC. It holds back only actions that need their real
+# input, which may wait it out; background work goes on. Every other pause (panic, operator) stops all.
 HUMAN_PAUSE = "human input"
 REVOKED_MEMORY = 1000
 
@@ -95,7 +97,7 @@ class LeaseManager:
         ttl_s = max(1.0, min(float(ttl_s), MAX_TTL_S))
         with self._lock:
             self._expire()
-            if self._paused:
+            if self._paused and self._paused != HUMAN_PAUSE:
                 raise Paused(f"driving is paused: {self._paused}")
             a = self._active
             if a and a.client != client:
@@ -120,8 +122,9 @@ class LeaseManager:
         self._queue_seen[client] = self._clock()
         return list(self._queue).index(client) + 1
 
-    def check(self, lease_id: str, client: str) -> Lease:
-        """The lease must be the active one, held by this client, unexpired and not paused."""
+    def check(self, lease_id: str, client: str, human_ok: bool = False) -> Lease:
+        """The lease must be the active one, held by this client, unexpired and not paused. human_ok lets
+        HUMAN_PAUSE through, for work that does not touch the person's input."""
         with self._lock:
             self._expire()
             if lease_id in self._revoked:
@@ -134,7 +137,7 @@ class LeaseManager:
             a = self._active
             if a is None or a.id != lease_id or a.client != client:
                 raise LeaseInvalid("not the active lease for this client")
-            if self._paused:
+            if self._paused and not (human_ok and self._paused == HUMAN_PAUSE):
                 raise Paused(f"driving is paused: {self._paused}")
             return a
 
@@ -151,7 +154,7 @@ class LeaseManager:
 
     def heartbeat(self, lease_id: str, client: str) -> Lease:
         with self._lock:
-            a = self.check(lease_id, client)
+            a = self.check(lease_id, client, human_ok=True)
             a.expires_at = self._clock() + a.ttl_s
             return a
 

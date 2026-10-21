@@ -115,6 +115,46 @@ def _foreground_checked(scope, not_elevated: Callable[[int], None]) -> int:
     return fg
 
 
+def _desk_state():
+    from overshoulder.driver import background as bg
+    return bg.cursor_pos(), w.foreground()
+
+
+def _restore_desk(state) -> dict:
+    """Put the person's cursor and foreground window back; says which of the two are back."""
+    from overshoulder.driver import background as bg
+    (x, y), fg = state
+    inp.move_cursor(x, y)
+    back = {"cursor": bg.cursor_pos() == (x, y), "foreground": False}
+    if fg and w.is_window(fg):
+        back["foreground"] = bg.set_foreground(fg)
+    return back
+
+
+def _bring_forward(hwnd: int) -> bool:
+    from overshoulder.driver import background as bg
+    return bg.set_foreground(hwnd)
+
+
+def _left_open(scope, front: int) -> bool:
+    """After a borrowed action: did it open a menu, or another window of the scope's app, that the
+    agent's next step needs in front? Giving the foreground back would close a menu."""
+    from overshoulder.driver import background as bg
+    fg = w.foreground()
+    top = (bg.root_of(fg) or fg) if fg else 0
+    try:
+        if top and top != front and scope.owns_window(top):
+            return True
+    except Exception:
+        pass
+    return bool(front) and bg.in_menu_mode(front)
+
+
+def _person_watch():
+    from overshoulder.driver.person import PersonWatch
+    return PersonWatch()
+
+
 @dataclass
 class Checks:
     """Environment checks, injectable for tests."""
@@ -137,6 +177,14 @@ class Checks:
         "overshoulder.driver.background", fromlist=["is_password_edit"]).is_password_edit(h)
     # Seconds since the person last touched the mouse or keyboard (our own SendInput not counted).
     person_idle_s: Callable[[], float] = inp.person_idle_s
+    # Borrowing the person's input: the foreground window, bringing a window forward, the person's
+    # cursor and foreground (saved, then put back), and a watch for their own input meanwhile.
+    foreground: Callable[[], int] = w.foreground
+    bring_forward: Callable[[int], bool] = _bring_forward
+    desk_state: Callable[[], Any] = _desk_state
+    restore_desk: Callable[[Any], dict] = _restore_desk
+    person_watch: Callable[[], Any] = _person_watch
+    left_open: Callable[[Any, int], bool] = _left_open
 
     def __post_init__(self):
         if self.foreground_in_scope is None:
@@ -144,6 +192,64 @@ class Checks:
 
 
 TEXT_PARAMS = ("text", "value")
+# How long a borrowed window may stay in front for the agent's next step (a menu or dialog it opened)
+# before the person's window is put back anyway.
+KEEP_MAX_S = 30.0
+
+
+class Borrow:
+    """One use of the person's real mouse and keyboard, opened by params["borrow"]() (Gateway._borrow).
+
+    By the time it exists the input mode has been checked, the gateway has waited for the person as
+    that mode asks, and the scope's window is in front. Inside it, call check() right before SendInput
+    and abort() between keys: abort() stops on any pause, or on the person touching the mouse or
+    keyboard. Leaving it in "borrow" mode puts the person's cursor and foreground window back, unless
+    they used the PC meanwhile; then the screen is theirs and is left alone. `report` says what happened.
+    """
+
+    def __init__(self, gw: Gateway, scope, action: str, target: Target | None, lease_id: str, client: str,
+                 mode: str, saved, waited_s: float):
+        self.gw, self.scope, self.action, self.target = gw, scope, action, target
+        self.lease_id, self.client, self.saved = lease_id, client, saved
+        self.front = 0  # the scope window in front while borrowing
+        self.report: dict = {"mode": mode, "waited_s": round(waited_s, 2)}
+        self.watch = gw.checks.person_watch()
+        self.watch.__enter__()
+
+    def __enter__(self) -> Borrow:
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        try:
+            acted = self.person_acted()
+        finally:
+            self.watch.__exit__(None, None, None)
+        self.report["person_active"] = acted
+        if self.saved is None:
+            return False
+        if acted:
+            self.report["restored"] = False
+        elif self.gw.checks.left_open(self.scope, self.front):
+            # A menu or dialog the agent opened: it goes when the agent's next step is done.
+            self.gw._kept[self.lease_id] = (self.saved, time.monotonic())
+            self.report["kept_in_front"] = True
+        else:
+            self.report["restored"] = self.gw._restore(self.saved)
+        return False
+
+    def person_acted(self) -> bool:
+        return bool(self.watch.seen) or self.gw.leases.paused_reason() == HUMAN_PAUSE
+
+    def abort(self) -> None:
+        self.gw.leases.check(self.lease_id, self.client, human_ok=True)  # panic, revoke, operator pause
+        if self.person_acted():
+            raise PersonActive("the person started using the mouse or keyboard, so the agent stopped and left "
+                               "the rest to them")
+
+    def check(self) -> int | None:
+        """The real-input checks, right before SendInput. Returns the in-scope foreground for keys."""
+        self.abort()
+        return self.gw._allow_real_input(self.scope, self.action, self.target)
 
 
 class Gateway:
@@ -169,6 +275,9 @@ class Gateway:
         self.human_wait_s = human_wait_s
         # The person's settings (input mode), read at each use so a save on the settings page applies at once.
         self.settings_source = settings_source or _current_settings
+        # Borrow mode: the person's cursor and window, kept while a menu or dialog an agent opened stays in
+        # front for its next step. lease id -> (saved desk state, monotonic time it was kept).
+        self._kept: dict[str, tuple[Any, float]] = {}
 
     # -- lease lifecycle -----------------------------------------------------------------------
 
@@ -202,6 +311,7 @@ class Gateway:
     def release(self, token: str, lease_id: str) -> None:
         client = self.registry.authenticate(token)
         self.leases.release(lease_id, client.name)
+        self._give_back(lease_id)
         self.log.write("lease_released", client=client.name, lease=lease_id)
 
     def status(self) -> dict:
@@ -234,19 +344,22 @@ class Gateway:
             read_only: bool = False) -> dict:
         """Run one action through every check. `perform` runs at most once.
 
-        perform receives params plus params["abort"], a callable that raises if the lease was revoked
-        or paused mid-action; long actions (typing) must call it between steps.
+        perform receives params plus params["abort"], which raises if the lease was revoked or paused
+        mid-action (long background actions call it between steps), and params["borrow"], which every
+        use of the person's mouse or keyboard must go through (see Borrow).
         """
         params = dict(params or {})
         t0 = time.time()
         client_name = None
         lease = None
         scope_desc = None
+        result = None  # what perform returned; logged with a failed verify to show which methods ran
         logged_params = {k: v for k, v in params.items() if k != "secret"}
         try:
             client = self.registry.authenticate(token)
             client_name = client.name
-            lease = self._check_waiting_out_human(lease_id, client.name)
+            lease = self.leases.check(lease_id, client.name, human_ok=True)
+            self._expire_kept()
             if not lease.meta.get("log_text"):
                 logged_params = _redact_text(logged_params)
             scope = lease.scope
@@ -283,11 +396,11 @@ class Gateway:
                         "kind": "action", "client": client.name, "action": action, "reason": reason,
                         "target": target.describe() if target else None, "scope": scope_desc})
 
-            params["abort"] = lambda: self.leases.check(lease_id, client.name)
-            # perform MUST call real_input() right before using the person's mouse/keyboard (SendInput),
-            # and background_target(hwnd) before posting to or messaging any window.
-            params["real_input"] = lambda: self._allow_real_input(scope, action, target)
-            params["input_mode"] = self._require_input_mode
+            params["abort"] = lambda: self._check_background(lease_id, client.name, scope)
+            # perform MUST wrap any use of the person's mouse/keyboard (SendInput) in borrow():
+            #   with params["borrow"]() as b: fg = b.check(); <SendInput, calling b.abort() between keys>
+            # and call background_target(hwnd) before posting to or messaging any window.
+            params["borrow"] = lambda: self._borrow(scope, action, target, lease_id, client.name)
             params["background_target"] = lambda hwnd, typing=False: self._allow_background_target(
                 scope, hwnd, typing)
             params["scope_focus"] = focus_info
@@ -304,7 +417,8 @@ class Gateway:
                 {"code": getattr(e, "code", type(e).__name__), "message": str(e)}
             self.log.write("action", client=client_name, lease=lease_id, action=action, params=logged_params,
                            target=target.describe() if target else None, ok=False, error=error,
-                           scope=scope_desc, ms=round((time.time() - t0) * 1000))
+                           scope=scope_desc, ms=round((time.time() - t0) * 1000),
+                           **({"result": result} if isinstance(result, dict) else {}))
             raise
         out = {"ok": True, "result": result, "verify": verdict}
         try:
@@ -319,35 +433,102 @@ class Gateway:
             out["log_error"] = str(e)
         return out
 
-    def _check_waiting_out_human(self, lease_id: str, client: str):
-        deadline = time.monotonic() + self.human_wait_s
-        while True:
-            try:
-                return self.leases.check(lease_id, client)
-            except Paused:
-                if self.leases.paused_reason() != HUMAN_PAUSE or time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.25)
-                self.leases.heartbeat_unchecked(lease_id, client)
+    def _check_background(self, lease_id: str, client: str, scope) -> None:
+        """Stop check between steps of background work. A panic, revoke or operator pause stops it. The
+        person using the PC does not, unless they are working in the agent's own window."""
+        self.leases.check(lease_id, client, human_ok=True)
+        if self.leases.paused_reason() == HUMAN_PAUSE and self._scope_in_front(scope):
+            raise Paused("the person is working in this window, so the agent stopped")
 
-    def _require_input_mode(self) -> None:
-        """The person's input mode allows their mouse and keyboard to be used now."""
+    def _scope_in_front(self, scope) -> bool:
+        fg = self.checks.foreground()
+        try:
+            return bool(fg) and scope.owns_window(self.checks.root_of(fg) or fg)
+        except Exception:
+            return False
+
+    def _borrow(self, scope, action: str, target: Target | None, lease_id: str, client: str) -> Borrow:
+        """Open a Borrow of the person's mouse and keyboard for one action."""
         s = self.settings_source()
         if s.input_mode == "never":
             raise NeedsRealInput(
                 "this needs the person's mouse or keyboard, and their input mode is 'never' (agents work in the "
                 "background only). Use a ref with invoke, select or set_value instead, or ask the person to do "
                 "this step and wait_for() it")
-        if s.input_mode == "borrow":
+        if action == "activate" and s.input_mode != "full":
+            raise NeedsRealInput(
+                "activate keeps a window in front, which needs input mode 'full'. In 'borrow' mode an action "
+                "that needs real input brings the window forward by itself and gives the foreground back")
+        kept = self._kept.pop(lease_id, None)
+        if kept is not None and s.input_mode == "borrow" and self._untouched_since(kept[1]):
+            # The agent's window is still in front from its last step and the person has not touched
+            # anything since: carry on, and later give back the window they had before.
+            waited, saved = 0.0, kept[0]
+        else:
+            waited = self._wait_for_person(s, lease_id, client)
+            saved = self.checks.desk_state() if s.input_mode == "borrow" else None
+        b = Borrow(self, scope, action, target, lease_id, client, s.input_mode, saved, waited)
+        try:
+            b.report["brought_forward"] = self._bring_scope_forward(scope, target)
+            fg = self.checks.foreground()
+            b.front = (self.checks.root_of(fg) or fg) if fg else 0
+        except BaseException:
+            b.__exit__(None, None, None)
+            raise
+        return b
+
+    def _untouched_since(self, t: float) -> bool:
+        return self.checks.person_idle_s() >= time.monotonic() - t
+
+    def _restore(self, saved) -> dict:
+        try:
+            return self.checks.restore_desk(saved)
+        except Exception as e:  # report it; the action itself already happened
+            return {"error": str(e)}
+
+    def _give_back(self, lease_id: str) -> None:
+        """Put back the person's window kept for this lease, unless they have taken over since."""
+        kept = self._kept.pop(lease_id, None)
+        if kept is not None and self._untouched_since(kept[1]):
+            self._restore(kept[0])
+
+    def _expire_kept(self) -> None:
+        """Give back kept windows whose lease is gone or that have been kept too long."""
+        active = self.leases.active()
+        for lease_id, (_, t) in list(self._kept.items()):
+            if active is None or active.id != lease_id or time.monotonic() - t > KEEP_MAX_S:
+                self._give_back(lease_id)
+
+    def _wait_for_person(self, s, lease_id: str, client: str) -> float:
+        """Wait until the person's input may be used: no human-input pause and, in "borrow" mode, idle
+        for s.borrow_idle_s. Gives up after human_wait_s. Returns the seconds waited."""
+        t0 = time.monotonic()
+        while True:
+            self.leases.check(lease_id, client, human_ok=True)  # a panic or operator pause stops it at once
+            human = self.leases.paused_reason() == HUMAN_PAUSE
             idle = self.checks.person_idle_s()
-            if idle < s.borrow_idle_s:
-                raise PersonActive(
-                    f"the person used the mouse or keyboard {idle:.1f}s ago; their input mode lets agents borrow "
-                    f"them only after {s.borrow_idle_s}s idle. Retry in a few seconds")
+            if not human and (s.input_mode != "borrow" or idle >= s.borrow_idle_s):
+                return time.monotonic() - t0
+            if time.monotonic() - t0 >= self.human_wait_s:
+                if s.input_mode == "borrow":
+                    raise PersonActive(
+                        f"the person is using the PC (last input {idle:.1f}s ago). Input mode 'borrow' waits for "
+                        f"{s.borrow_idle_s}s without input and gave up after {self.human_wait_s:g}s; retry later")
+                raise Paused(f"driving is paused: {HUMAN_PAUSE}")
+            time.sleep(0.25)
+            self.leases.heartbeat_unchecked(lease_id, client)
+
+    def _bring_scope_forward(self, scope, target: Target | None) -> bool:
+        """Put the scope's window (or the target's dialog) in front for real input. A screen scope acts
+        where the person approved, in place."""
+        binding = getattr(scope, "binding", None)
+        if binding is None or self._scope_in_front(scope):
+            return False
+        self.checks.bring_forward(target.hwnd if target is not None and target.hwnd else binding.hwnd)
+        return True
 
     def _allow_real_input(self, scope, action: str, target: Target | None) -> int | None:
         """Checks before the person's real mouse/keyboard is used. Returns the in-scope foreground for keys."""
-        self._require_input_mode()
         fg = None
         if action in KEYBOARD_ACTIONS:
             fg = self.checks.foreground_in_scope(scope)

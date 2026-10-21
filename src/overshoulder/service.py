@@ -217,8 +217,9 @@ class Service:
             elif action == "activate":
                 if scope.kind != "window":
                     raise ValueError("activate needs a window scope")
-                p["real_input"]()  # bringing a window to the front takes the person's foreground
-                uia.activate(scope.binding.hwnd)
+                with p["borrow"]() as b:  # keeps the window in front, so only input mode "full" allows it
+                    b.check()
+                    uia.activate(scope.binding.hwnd)
                 out = ladder._done("activate", background=False)
             elif action in ("click", "double_click", "right_click"):
                 if t is None:

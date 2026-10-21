@@ -73,6 +73,12 @@ class NeedsRealInput(GatewayError):
     code = "needs_real_input"
 
 
+class TypingMismatch(GatewayError):
+    """Typing reached the field, but it does not read back as the typed text (characters lost or out of
+    order). Nothing is retyped, because part of it arrived."""
+    code = "typing_mismatch"
+
+
 class PersonActive(GatewayError):
     """Input mode "borrow": the person used the mouse or keyboard too recently to borrow them."""
     code = "person_active"

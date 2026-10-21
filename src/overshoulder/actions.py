@@ -3,7 +3,8 @@
 Rungs, per action (docs/SPIKE-phase2.md has the measurements behind them):
   press a control   UIA Invoke/Toggle/Select/Expand  -> posted click -> real click
   click a point     posted click (one retry for Chromium, which can swallow the first) -> real click
-  type              WM_CHAR posted to the scope's input window -> EM_REPLACESEL -> real typing
+  type              EM_REPLACESEL for edit controls (one message, so nothing arrives out of order) ->
+                    WM_CHAR posted to the scope's input window -> real typing
                     (Chromium/Electron windows in the background go straight to real typing)
   set a value       UIA ValuePattern -> WM_SETTEXT
   hotkey            keys posted with modifiers in the target thread's key state -> (real, only if asked)
@@ -17,9 +18,10 @@ Real input is never used to retry something that may already have happened (a ho
 whose effect is just not visible), so nothing is done twice.
 
 Every rung asks the gateway first: p["background_target"](hwnd) before messaging a window, and
-p["real_input"]() before SendInput (p["input_mode"]() alone before anything that could move the
-person's foreground on the way there). A ForegroundGuard wraps each attempt and puts the person's
-foreground window back if the app grabs it.
+p["borrow"]() around any use of the person's mouse or keyboard. A borrow follows their input mode: it
+waits until they are idle, brings the window forward, and afterwards puts their cursor and foreground
+back. A ForegroundGuard wraps each background attempt and puts the person's foreground window back if
+the app grabs it.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from overshoulder.driver import capture, uia
 from overshoulder.driver import input as inp
 from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
-from overshoulder.gateway.errors import NeedsRealInput
+from overshoulder.gateway.errors import NeedsRealInput, TypingMismatch
 
 METHODS = ("auto", "background", "input")
 PRESSABLE = {"button", "menuitem", "hyperlink", "splitbutton", "checkbox", "radiobutton", "tabitem", "listitem",
@@ -42,6 +44,7 @@ REGION = 90  # half-size of the area checked for a visible change around a poste
 # arrived" is only concluded after read-back stays unchanged this long. Concluding it early would
 # make "auto" type the text a second time with real keys.
 LANDED_WAIT_S = 2.0
+MISMATCH = "mismatch"  # read-back: the field changed, but does not hold the typed text
 
 
 @dataclass
@@ -94,6 +97,10 @@ class Ladder:
 
     def _attempt(self, name: str, ok: bool, detail: str = "") -> None:
         self.out.attempts.append({"method": name, "ok": ok, **({"detail": detail} if detail else {})})
+
+    def _borrowed(self, b, name: str) -> None:
+        self._attempt(name, True)
+        self.out.extra["borrow"] = b.report
 
     def _done(self, name: str, background: bool = True) -> Outcome:
         self.out.method, self.out.background = name, background
@@ -167,9 +174,10 @@ class Ladder:
             except bg.BackgroundUnsupported as e:
                 self._attempt("posted_click", False, str(e))
                 self._no_background_left(str(e))
-        self.p["real_input"]()
-        inp.click(x, y, button=button, count=count)
-        self._attempt("real_click", True)
+        with self.p["borrow"]() as b:
+            b.check()
+            inp.click(x, y, button=button, count=count)
+        self._borrowed(b, "real_click")
         return self._done("real_click", background=False)
 
     def type_text(self, el, text: str) -> Outcome:
@@ -207,6 +215,19 @@ class Ladder:
             self._no_background_left("Chromium/Electron apps do not reliably accept posted typing in the background")
             return self._real_type(el, text)
         before = self._read(el, hwnd)
+        if bg.is_edit_class(hwnd) and "\n" not in text and "\r" not in text:
+            # One message inserts the whole text at the caret, so no character can arrive out of order
+            # (posted characters were seen to swap in Windows 11 Notepad: "{x}" read back as "x{}").
+            # Line breaks go as posted characters instead, where Enter keeps its meaning.
+            try:
+                self._guarded(lambda: bg.replace_selection(hwnd, text))
+                landed = self._wait_landed(el, hwnd, before, text)
+                self._attempt("replace_selection", landed is not False, _landed_detail(landed))
+                if landed is not False:
+                    return self._typed("replace_selection", landed)
+            except bg.BackgroundUnsupported as e:
+                self._attempt("replace_selection", False, str(e))
+        # Below here read-back has proved nothing arrived yet, so no method can type the text twice.
         try:
             self._guarded(lambda: bg.post_text(hwnd, text, abort=self.p["abort"]))
         except bg.BackgroundUnsupported as e:
@@ -216,32 +237,29 @@ class Ladder:
         landed = self._wait_landed(el, hwnd, before, text)
         self._attempt("posted_chars", landed is not False, _landed_detail(landed))
         if landed is not False:
-            if landed is None:
-                self.out.note = ("typed, but the text could not be read back to confirm it; check the result "
-                                 "(observe/read), and pass ref of the field next time")
-            return self._done("posted_chars")
-        # Read-back proves nothing arrived, so a second method cannot double-type.
-        if bg.is_edit_class(hwnd):
-            try:
-                self._guarded(lambda: bg.replace_selection(hwnd, text))
-                landed = self._wait_landed(el, hwnd, before, text)
-                self._attempt("replace_selection", landed is not False, _landed_detail(landed))
-                if landed is not False:
-                    return self._done("replace_selection")
-            except bg.BackgroundUnsupported as e:
-                self._attempt("replace_selection", False, str(e))
+            return self._typed("posted_chars", landed)
         self._no_background_left("the app did not accept posted characters")
         return self._real_type(el, text)
 
+    def _typed(self, name: str, landed) -> Outcome:
+        if landed == MISMATCH:
+            raise TypingMismatch("the field changed but does not read back as the typed text (characters may "
+                                 "have been lost or reordered); read it and correct it before going on")
+        if landed is None:
+            self.out.note = ("typed, but the text could not be read back to confirm it; check the result "
+                             "(observe/read), and pass ref of the field next time")
+        return self._done(name)
+
     def _real_type(self, el, text: str) -> Outcome:
-        # Ask before focusing: focusing can bring the window forward, which a refused mode must not do.
-        self.p["input_mode"]()
-        if el is not None:
-            uia.focus(el)
-            time.sleep(0.15)
-        fg = self.p["real_input"]()
-        inp.type_text(fg, text, abort=self.p["abort"])
-        self._attempt("real_typing", True)
+        # The borrow opens before focusing: focusing can bring the window forward, so the mode must allow
+        # it and the person's own foreground must be saved first.
+        with self.p["borrow"]() as b:
+            if el is not None:
+                uia.focus(el)
+                time.sleep(0.15)
+            fg = b.check()
+            inp.type_text(fg, text, abort=b.abort)
+        self._borrowed(b, "real_typing")
         return self._done("real_typing", background=False)
 
     def set_value(self, el, value: str) -> Outcome:
@@ -275,9 +293,10 @@ class Ladder:
             except bg.BackgroundUnsupported as e:
                 self._attempt("posted_keys", False, str(e))
                 self._no_background_left(str(e))
-        fg = self.p["real_input"]()
-        inp.hotkey(fg, combo)
-        self._attempt("real_keys", True)
+        with self.p["borrow"]() as b:
+            fg = b.check()
+            inp.hotkey(fg, combo)
+        self._borrowed(b, "real_keys")
         return self._done("real_keys", background=False)
 
     def pattern(self, name: str, fn) -> Outcome:
@@ -291,12 +310,14 @@ class Ladder:
 
     # -- read-back -------------------------------------------------------------------------------
 
-    def _wait_landed(self, el, hwnd: int, before: str | None, text: str) -> bool | None:
+    def _wait_landed(self, el, hwnd: int, before: str | None, text: str):
+        """Poll read-back until the text is there or cannot be read. Nothing yet, or only part of it
+        (MISMATCH), is concluded only at the deadline: slow apps take characters in over time."""
         deadline = time.monotonic() + LANDED_WAIT_S
         while True:
             time.sleep(0.15)
             landed = _landed(before, self._read(el, hwnd), text)
-            if landed is not False or time.monotonic() >= deadline:
+            if landed is True or landed is None or time.monotonic() >= deadline:
                 return landed
 
     @staticmethod
@@ -315,8 +336,9 @@ class Ladder:
             return None
 
 
-def _landed(before: str | None, after: str | None, text: str) -> bool | None:
-    """True if the text arrived, False if read-back proves it did not, None if it cannot be told."""
+def _landed(before: str | None, after: str | None, text: str):
+    """True if the text arrived; False if read-back proves nothing changed; MISMATCH if the field changed
+    but does not hold the text; None if it cannot be read."""
     if before is None or after is None:
         return None
     needle = text.replace("\r\n", "\n").replace("\n", "\r")[-40:] or text[-40:]
@@ -325,8 +347,9 @@ def _landed(before: str | None, after: str | None, text: str) -> bool | None:
     plain = text[-40:]
     if plain and after.count(plain) > before.count(plain):
         return True
-    return False if after == before else None
+    return False if after == before else MISMATCH
 
 
-def _landed_detail(landed: bool | None) -> str:
-    return {True: "read back", False: "read-back shows nothing arrived", None: "could not read back"}[landed]
+def _landed_detail(landed) -> str:
+    return {True: "read back", False: "read-back shows nothing arrived", None: "could not read back",
+            MISMATCH: "read-back differs from the typed text"}[landed]

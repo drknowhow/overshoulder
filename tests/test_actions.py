@@ -30,10 +30,32 @@ class Calls(list):
         return f
 
 
+class FakeBorrow:
+    """Stands in for the gateway's Borrow: records when it opens, checks and closes."""
+
+    def __init__(self, calls):
+        self.calls, self.report = calls, {"mode": "full", "waited_s": 0.0}
+        calls.append("borrow")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.calls.append("borrow_end")
+        return False
+
+    def check(self):
+        self.calls.append("real_input")
+        return 0x10
+
+    def abort(self):
+        pass
+
+
 @pytest.fixture
 def env(monkeypatch):
     calls = Calls()
-    p = {"abort": lambda: None, "real_input": calls.hook("real_input", 0x10), "input_mode": calls.hook("input_mode"),
+    p = {"abort": lambda: None, "borrow": lambda: FakeBorrow(calls),
          "background_target": calls.hook("background_target"), "scope_focus": {"hwnd": 0x20, "type": "Document"}}
     monkeypatch.setattr(A.uia, "roots_for_window", lambda h: [h])
     monkeypatch.setattr(A.w, "frame_bounds", lambda h: Rect(0, 0, 1000, 1000))
@@ -185,6 +207,7 @@ def test_landed_detection():
     assert A._landed("ab", "ab", "xyz") is False
     assert A._landed(None, "ab", "x") is None
     assert A._landed("ab", "ab\rcd", "\ncd") is True
+    assert A._landed("ab", "abyxz", "xyz") == A.MISMATCH  # changed, but not into the typed text
 
 
 
@@ -228,11 +251,13 @@ def test_background_chromium_typing_is_not_trusted_to_posted_messages(env, monke
     assert out["method"] == "posted_chars"  # in front, posted characters are fine
 
 
-def test_real_typing_asks_the_input_mode_before_focusing_anything(env, monkeypatch):
+def test_real_typing_opens_the_borrow_before_focusing_anything(env, monkeypatch):
     calls, p = env
     monkeypatch.setattr(A.uia, "focus", calls.hook("uia_focus"))
-    A.Ladder(FakeScope(), p, "input").type_text(object(), "abc")
-    assert calls.index("input_mode") < calls.index("uia_focus") < calls.index("real_input")
+    out = A.Ladder(FakeScope(), p, "input").type_text(object(), "abc").to_dict()
+    assert calls.index("borrow") < calls.index("uia_focus") < calls.index("real_input") \
+        < calls.index("real_typing") < calls.index("borrow_end")
+    assert out["borrow"] == {"mode": "full", "waited_s": 0.0}
 
 
 def test_a_refused_input_mode_leaves_the_persons_foreground_alone(env, monkeypatch):
@@ -242,7 +267,58 @@ def test_a_refused_input_mode_leaves_the_persons_foreground_alone(env, monkeypat
     def never():
         raise A.NeedsRealInput("input mode is never")
 
-    p["input_mode"] = never
+    p["borrow"] = never
     with pytest.raises(A.NeedsRealInput):
         A.Ladder(FakeScope(), p, "input").type_text(object(), "abc")
     assert "uia_focus" not in calls and "real_typing" not in calls
+
+
+def test_real_clicks_and_keys_happen_inside_a_borrow(env):
+    calls, p = env
+    A.Ladder(FakeScope(), p, "input").press(None, POINT)
+    A.Ladder(FakeScope(), p, "input").hotkey("ctrl+s")
+    assert calls == ["borrow", "real_input", "real_click", "borrow_end",
+                     "borrow", "real_input", "real_keys", "borrow_end"]
+
+
+def test_edit_controls_get_the_whole_text_in_one_message(env, monkeypatch):
+    calls, p = env
+    monkeypatch.setattr(A.bg, "is_edit_class", lambda h: True)
+    monkeypatch.setattr(A.bg, "replace_selection", calls.hook("replace_selection"))
+    monkeypatch.setattr(A.bg, "post_text", calls.hook("posted_chars"))
+    reads = iter(["x = 1", "x = 1{y}"])
+    monkeypatch.setattr(A.Ladder, "_read", staticmethod(lambda el, h: next(reads)))
+    out = A.Ladder(FakeScope(), p, "background").type_text(None, "{y}").to_dict()
+    assert out["method"] == "replace_selection" and "posted_chars" not in calls
+
+
+def test_line_breaks_go_as_posted_characters_so_enter_keeps_its_meaning(env, monkeypatch):
+    calls, p = env
+    monkeypatch.setattr(A.bg, "is_edit_class", lambda h: True)
+    monkeypatch.setattr(A.bg, "replace_selection", calls.hook("replace_selection"))
+    monkeypatch.setattr(A.bg, "post_text", calls.hook("posted_chars"))
+    reads = iter(["", "a\rb"])
+    monkeypatch.setattr(A.Ladder, "_read", staticmethod(lambda el, h: next(reads)))
+    out = A.Ladder(FakeScope(), p, "background").type_text(None, "a\nb").to_dict()
+    assert out["method"] == "posted_chars" and "replace_selection" not in calls
+
+
+def test_text_that_arrives_garbled_is_an_error_not_a_success(env, monkeypatch):
+    calls, p = env
+    monkeypatch.setattr(A.bg, "post_text", calls.hook("posted_chars"))
+    monkeypatch.setattr(A, "LANDED_WAIT_S", 0.0)
+    reads = iter(["print() ", "print() x{}"])  # typed "{x}", characters swapped on the way
+    monkeypatch.setattr(A.Ladder, "_read", staticmethod(lambda el, h: next(reads)))
+    with pytest.raises(A.TypingMismatch):
+        A.Ladder(FakeScope(), p, "auto").type_text(None, "{x}")
+    assert "real_typing" not in calls  # part of it arrived, so nothing is typed again
+
+
+def test_partial_text_is_waited_for_not_reported_as_garbled(env, monkeypatch):
+    calls, p = env
+    monkeypatch.setattr(A.bg, "post_text", calls.hook("posted_chars"))
+    monkeypatch.setattr(A, "LANDED_WAIT_S", 5.0)
+    reads = iter(["x = 1", "x = 1y", "x = 1y =", "x = 1y = 2"])
+    monkeypatch.setattr(A.Ladder, "_read", staticmethod(lambda el, h: next(reads)))
+    out = A.Ladder(FakeScope(), p, "auto").type_text(None, "y = 2").to_dict()
+    assert out["method"] == "posted_chars" and out["attempts"][-1]["detail"] == "read back"

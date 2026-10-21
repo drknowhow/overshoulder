@@ -42,6 +42,18 @@ class Clock:
 
 
 DOC_FOCUS = {"name": "", "type": "Document", "pid": 1, "password": False, "hwnd": 0x10}
+PERSON_WINDOW = 0x99  # the person's own app, in front unless a test says otherwise
+
+
+class FakeWatch:
+    seen = False
+    ok = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
 
 
 def ok_checks(**over):
@@ -49,7 +61,11 @@ def ok_checks(**over):
                 window_at_point=lambda s, x, y: 0x10, element_at_point=lambda x, y: None,
                 focused_element=lambda: dict(DOC_FOCUS), pid_of=lambda h: 1,
                 scope_focus=lambda s: dict(DOC_FOCUS), element_in_scope_at=lambda s, x, y: None,
-                root_of=lambda h: h, is_password_window=lambda h: False, person_idle_s=lambda: 999.0)
+                root_of=lambda h: h, is_password_window=lambda h: False, person_idle_s=lambda: 999.0,
+                foreground=lambda: PERSON_WINDOW, bring_forward=lambda h: True,
+                desk_state=lambda: ((7, 8), PERSON_WINDOW),
+                restore_desk=lambda s: {"cursor": True, "foreground": True}, person_watch=FakeWatch,
+                left_open=lambda s, front: False)
     return Checks(**{**base, **over})
 
 
@@ -123,21 +139,50 @@ def test_revoked_lease_stays_revoked():
 def test_pause_blocks_actions_and_new_leases():
     lm = LeaseManager(clock=Clock())
     lease = lm.acquire("a", FakeScope())
-    lm.pause("human input")
+    lm.pause("operator pause")
     with pytest.raises(E.Paused):
-        lm.check(lease.id, "a")
+        lm.check(lease.id, "a", human_ok=True)
     with pytest.raises(E.Paused):
         lm.acquire("b", FakeScope())
     lm.resume()
     lm.check(lease.id, "a")
 
 
-def test_action_waits_out_a_brief_human_pause(gw):
+def test_a_human_pause_holds_back_only_the_persons_input():
+    lm = LeaseManager(clock=Clock())
+    lease = lm.acquire("a", FakeScope())
+    lm.pause("human input")
+    with pytest.raises(E.Paused):
+        lm.check(lease.id, "a")
+    assert lm.check(lease.id, "a", human_ok=True) is lease
+    lm.release(lease.id, "a")
+    assert lm.acquire("b", FakeScope())  # taking a scope does not touch the person's input
+
+
+def test_background_and_read_actions_go_on_while_the_person_uses_the_pc(gw):
+    g, token, lease_id, _ = gw
+    g.pause("human input")
+    assert g.run(token, lease_id, "observe", lambda t, p: {}, read_only=True)["ok"]
+    out = g.run(token, lease_id, "type", lambda t, p: (p["abort"](), p["background_target"](0x10, typing=True)),
+                params={"text": "hi"})
+    assert out["ok"]
+
+
+def test_background_work_stops_when_the_person_works_in_the_agents_window(gw):
+    g, token, lease_id, _ = gw
+    g.pause("human input")
+    g.checks.foreground = lambda: 0x10  # the person clicked into the scope's window
+    with pytest.raises(E.Paused):
+        g.run(token, lease_id, "type", lambda t, p: p["abort"](), params={"text": "hi"})
+
+
+def test_real_input_waits_out_a_brief_human_pause(gw):
     import threading
     g, token, lease_id, _ = gw
     g.pause("human input")
     threading.Timer(0.5, lambda: g.resume(only_if="human input")).start()
-    assert g.run(token, lease_id, "observe", lambda t, p: {}, read_only=True)["ok"]
+    out = g.run(token, lease_id, "click", lambda t, p: real(p), target=Target("point", x=5, y=5))
+    assert out["ok"]
 
 
 def test_action_does_not_wait_out_a_panic(gw):
@@ -156,7 +201,7 @@ def test_human_pause_that_outlasts_the_wait_is_reported(gw):
     g.human_wait_s = 0.3
     g.pause("human input")
     with pytest.raises(E.Paused):
-        g.run(token, lease_id, "observe", lambda t, p: {}, read_only=True)
+        g.run(token, lease_id, "click", lambda t, p: real(p), target=Target("point", x=5, y=5))
 
 
 def test_automatic_resume_cannot_undo_a_panic(tmp_path):
@@ -464,7 +509,8 @@ def test_gateway_refuses_to_run_elevated(tmp_path, monkeypatch):
 # -- real input vs background (phase 2) ---------------------------------------------------------
 
 def real(p):
-    p["real_input"]()
+    with p["borrow"]() as b:
+        return b.check()
 
 
 def test_real_input_typing_checks_foreground_after_focusing_the_target(gw):
@@ -473,9 +519,10 @@ def test_real_input_typing_checks_foreground_after_focusing_the_target(gw):
     g.checks.foreground_in_scope = lambda s: order.append("fg") or 0x10
 
     def perform(t, p):
-        order.append("focus")
-        p["real_input"]()
-        order.append("type")
+        with p["borrow"]() as b:
+            order.append("focus")
+            b.check()
+            order.append("type")
 
     g.run(token, lease_id, "type", perform, target=Target("element", rect=Rect(10, 10, 30, 30)),
           params={"text": "x"})
@@ -631,7 +678,7 @@ def test_changing_the_input_mode_on_the_settings_page_changes_what_the_gateway_a
     clicked = []
 
     def real_click(t, p):
-        p["real_input"]()
+        real(p)
         clicked.append(1)
 
     _save_from_page(path, input_mode="full")
@@ -650,16 +697,143 @@ def test_changing_the_input_mode_on_the_settings_page_changes_what_the_gateway_a
 
 def test_borrow_mode_uses_real_input_only_after_the_person_has_been_idle(tmp_path):
     g, token, lease_id, path = _mode_gateway(tmp_path, idle_s=2.0)
+    g.human_wait_s = 0.3
     _save_from_page(path, input_mode="borrow", borrow_idle_s="5")
     with pytest.raises(E.PersonActive):
-        g.run(token, lease_id, "hotkey", lambda t, p: p["real_input"](), params={"combo": "ctrl+s"})
+        g.run(token, lease_id, "hotkey", lambda t, p: real(p), params={"combo": "ctrl+s"})
     g.checks.person_idle_s = lambda: 6.0
-    assert g.run(token, lease_id, "hotkey", lambda t, p: p["real_input"](), params={"combo": "ctrl+s"})["ok"]
+    assert g.run(token, lease_id, "hotkey", lambda t, p: real(p), params={"combo": "ctrl+s"})["ok"]
 
 
 def test_the_default_input_mode_borrows_and_a_broken_settings_file_falls_back_to_it(tmp_path):
     g, token, lease_id, path = _mode_gateway(tmp_path, idle_s=0.5)
+    g.human_wait_s = 0.3
     assert g.status()["input_mode"] == "borrow"  # no settings file yet
     path.write_text("{not json", encoding="utf-8")
     with pytest.raises(E.PersonActive):
-        g.run(token, lease_id, "hotkey", lambda t, p: p["real_input"](), params={"combo": "ctrl+s"})
+        g.run(token, lease_id, "hotkey", lambda t, p: real(p), params={"combo": "ctrl+s"})
+
+
+# -- borrowing politely ----------------------------------------------------------------------------------
+
+class BoundScope(FakeScope):
+    class binding:  # noqa: N801
+        hwnd, pid = 0x10, 1
+
+
+def _borrow_gateway(tmp_path, idles):
+    """A borrow-mode gateway whose person goes idle along `idles` (one value per check, last one repeats)."""
+    from overshoulder import settings as st
+    seen = {"forward": [], "restored": [], "saved": 0}
+    left = list(idles)
+
+    def desk_state():
+        seen["saved"] += 1
+        return ((7, 8), PERSON_WINDOW)
+
+    checks = ok_checks(person_idle_s=lambda: left.pop(0) if len(left) > 1 else left[0],
+                       bring_forward=lambda h: seen["forward"].append(h) or True, desk_state=desk_state,
+                       restore_desk=lambda s: seen["restored"].append(s) or {"cursor": True, "foreground": True})
+    scope = BoundScope()
+    g = gateway_for_tests(tmp_path, checks=checks, scope_factory=lambda s: scope,
+                          settings_source=lambda: st.Settings(input_mode="borrow", borrow_idle_s=5))
+    token = g.registry.add("agent-a")
+    return g, token, g.acquire(token, "window:16")["lease_id"], seen
+
+
+def test_borrow_waits_for_idle_then_puts_the_cursor_and_foreground_back(tmp_path):
+    g, token, lease_id, seen = _borrow_gateway(tmp_path, [1.0, 2.5, 4.0, 6.0])
+    out = g.run(token, lease_id, "click", lambda t, p: real(p), target=Target("point", x=5, y=5))
+    assert out["ok"]
+    assert seen["forward"] == [0x10]  # the scope's window came forward for the click
+    assert seen["restored"] == [((7, 8), PERSON_WINDOW)]  # and the person's cursor and window went back
+
+
+def test_borrow_reports_what_it_did(tmp_path):
+    g, token, lease_id, _ = _borrow_gateway(tmp_path, [6.0])
+
+    def perform(t, p):
+        with p["borrow"]() as b:
+            b.check()
+        return b.report
+
+    report = g.run(token, lease_id, "click", perform, target=Target("point", x=5, y=5))["result"]
+    assert report["mode"] == "borrow" and report["brought_forward"] and not report["person_active"]
+    assert report["restored"] == {"cursor": True, "foreground": True}
+
+
+def test_borrow_stops_and_leaves_things_alone_when_the_person_takes_over(tmp_path):
+    g, token, lease_id, seen = _borrow_gateway(tmp_path, [6.0])
+    typed = []
+
+    def perform(t, p):
+        with p["borrow"]() as b:
+            b.check()
+            for i, ch in enumerate("abcdef"):
+                b.abort()
+                typed.append(ch)
+                if i == 1:
+                    b.watch.seen = True  # the person touches the keyboard
+
+    with pytest.raises(E.PersonActive):
+        g.run(token, lease_id, "type", perform, params={"text": "abcdef"})
+    assert typed == ["a", "b"] and seen["restored"] == []
+
+
+def test_borrow_gives_up_while_the_person_keeps_working(tmp_path):
+    g, token, lease_id, seen = _borrow_gateway(tmp_path, [0.5])
+    g.human_wait_s = 0.3
+    with pytest.raises(E.PersonActive):
+        g.run(token, lease_id, "click", lambda t, p: real(p), target=Target("point", x=5, y=5))
+    assert seen["forward"] == [] and seen["restored"] == []
+
+
+def test_activate_needs_full_control(tmp_path):
+    g, token, lease_id, _ = _borrow_gateway(tmp_path, [6.0])
+    with pytest.raises(E.NeedsRealInput):
+        g.run(token, lease_id, "activate", lambda t, p: real(p))
+    from overshoulder import settings as st
+    g.settings_source = lambda: st.Settings(input_mode="full")
+    assert g.run(token, lease_id, "activate", lambda t, p: real(p))["ok"]
+
+
+def test_full_mode_brings_the_window_forward_and_leaves_it_there(tmp_path):
+    from overshoulder import settings as st
+    g, token, lease_id, seen = _borrow_gateway(tmp_path, [0.1])  # idle time does not matter in full mode
+    g.settings_source = lambda: st.Settings(input_mode="full")
+    assert g.run(token, lease_id, "hotkey", lambda t, p: real(p), params={"combo": "ctrl+s"})["ok"]
+    assert seen["forward"] == [0x10] and seen["restored"] == []
+
+
+def test_a_menu_opened_by_a_borrowed_click_stays_until_the_next_step(tmp_path):
+    g, token, lease_id, seen = _borrow_gateway(tmp_path, [999.0])
+    g.checks.left_open = lambda s, front: True  # the click opened a menu
+    first = g.run(token, lease_id, "click", lambda t, p: real(p), target=Target("point", x=5, y=5))
+    assert seen["restored"] == []  # giving the foreground back would close the menu
+    g.checks.left_open = lambda s, front: False  # the next click picks an item and the menu closes
+
+    def perform(t, p):
+        with p["borrow"]() as b:
+            b.check()
+        return b.report
+
+    report = g.run(token, lease_id, "click", perform, target=Target("point", x=6, y=6))["result"]
+    assert first["ok"] and seen["saved"] == 1  # the second step reuses what the first saved
+    assert seen["restored"] == [((7, 8), PERSON_WINDOW)] and report["waited_s"] == 0.0
+
+
+def test_release_gives_back_a_kept_window(tmp_path):
+    g, token, lease_id, seen = _borrow_gateway(tmp_path, [999.0])
+    g.checks.left_open = lambda s, front: True
+    g.run(token, lease_id, "click", lambda t, p: real(p), target=Target("point", x=5, y=5))
+    g.release(token, lease_id)
+    assert seen["restored"] == [((7, 8), PERSON_WINDOW)]
+
+
+def test_a_kept_window_is_left_alone_once_the_person_takes_over(tmp_path):
+    g, token, lease_id, seen = _borrow_gateway(tmp_path, [999.0])
+    g.checks.left_open = lambda s, front: True
+    g.run(token, lease_id, "click", lambda t, p: real(p), target=Target("point", x=5, y=5))
+    g.checks.person_idle_s = lambda: 0.0  # they clicked something since
+    g.release(token, lease_id)
+    assert seen["restored"] == []
