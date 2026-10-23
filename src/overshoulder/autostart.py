@@ -23,7 +23,7 @@ def _pythonw() -> Path:
 
 def _ps(script: str) -> subprocess.CompletedProcess:
     return subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
 
 
 def _quote(s: str) -> str:

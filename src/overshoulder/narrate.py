@@ -21,7 +21,7 @@ from pathlib import Path
 RATE = 22050  # mono 16-bit throughout
 GAP_S = 0.25  # silence after a line before the video moves on
 LONG_TEXT = 40  # typed text longer than this is not read out character by character
-NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0  # no console over the person's apps
 SPOKEN_KEYS = {"Ctrl": "Control", "Del": "Delete", "Esc": "Escape", "Win": "Windows", "PgUp": "Page Up",
                "PgDn": "Page Down", "Ins": "Insert"}
 

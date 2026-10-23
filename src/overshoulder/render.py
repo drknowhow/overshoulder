@@ -319,12 +319,13 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
             lines = nr.prepare(steps, layer.step_edits(), Path(work), engine or nr.sapi(voice), rec, outside_audio)
 
     dec = subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(rec / "video.mp4"),
-                            "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE)
+                            "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE,
+                           creationflags=nr.NO_WINDOW)
     enc = subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt",
                             "rgb24", "-s", f"{width}x{height + STRIP}", "-r", str(fps), "-i", "-", "-c:v",
                             "libx264",
                             "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
-                            str(out / "tutorial.mp4")], stdin=subprocess.PIPE)
+                            str(out / "tutorial.mp4")], stdin=subprocess.PIPE, creationflags=nr.NO_WINDOW)
     shots_due = {s.n: still_time(s) for s in steps}
     by_n = {s.n: s for s in steps}
     windows = {s.id: (s.start, s.end) for s in steps}
@@ -453,7 +454,7 @@ def export_gif(video: Path, gif: Path, width: int = GIF_WIDTH, fps: int = GIF_FP
     vf = (f"fps={fps},scale='min({width},iw)':-1:flags=lanczos,split[a][b];"
           "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle")
     subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(video), "-vf", vf, "-loop", "0",
-                    str(gif)], check=True)
+                    str(gif)], check=True, creationflags=nr.NO_WINDOW)
     return {"gif": str(gif), "gif_bytes": gif.stat().st_size}
 
 

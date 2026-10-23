@@ -33,6 +33,9 @@ gdi32 = ctypes.windll.gdi32
 PW_RENDERFULLCONTENT = 0x2
 DIB_RGB_COLORS = 0
 SRCCOPY = 0x00CC0020
+# The daemon runs under pythonw, so a console program it starts gets a console window of its own,
+# which would sit on top of the app being recorded.
+NO_WINDOW = subprocess.CREATE_NO_WINDOW
 
 user32.GetWindowDC.restype = wt.HDC
 user32.GetWindowDC.argtypes = [wt.HWND]
@@ -128,14 +131,14 @@ class Recording:
                 [_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgra",
                  "-s", f"{self.size[0]}x{self.size[1]}", "-r", str(self.fps), "-i", "-", "-c:v", "libx264",
                  "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(self.dir / "video.mp4")],
-                stdin=subprocess.PIPE)
+                stdin=subprocess.PIPE, creationflags=NO_WINDOW)
         else:
             self._proc = subprocess.Popen(
                 [_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-f", "gdigrab", "-framerate", str(self.fps),
                  "-draw_mouse", "0", "-offset_x", str(b.left), "-offset_y", str(b.top),
                  "-video_size", f"{self.size[0]}x{self.size[1]}", "-i", "desktop", "-c:v", "libx264",
                  "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(self.dir / "video.mp4")],
-                stdin=subprocess.PIPE)
+                stdin=subprocess.PIPE, creationflags=NO_WINDOW)
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
