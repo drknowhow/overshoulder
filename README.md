@@ -114,7 +114,8 @@ refusal is logged.
   If one of these checks can't tell, the answer is no.
 - **Approvals.** Clicking a control named like *Send*, *Delete*, *Buy*, *Pay* or *Install*, pressing
   Delete or Alt+F4, or pressing Enter in a single-line field all need a one-time Yes from the person
-  at the desk. The prompt defaults to No after 60 seconds.
+  at the desk. No answer within 60 seconds is No. The same question can also go to your phone; see
+  [Approvals on your phone](#approvals-on-your-phone).
 - **Narrowing.** A session can do less than its scope allows. `read_only` refuses every action but
   observing, screenshots and recording; `no_typing` refuses typing, `set_value` and hotkeys;
   `deny_processes` (for example `chrome.exe`) takes a program's windows out of the scope, so agents
@@ -180,6 +181,46 @@ overshoulder wait --json '{"kind": "element_appears", "title_re": "Setup", "name
 Detection only reads window titles, on-screen controls and files. `overshoulder settings` opens a
 local page where you switch it on or off, choose what agents may watch, limit it to particular apps,
 and set how often it checks and how long it may wait.
+
+## Approvals on your phone
+
+When an agent needs your Yes, Overshoulder can ask your phone at the same time as the box on your
+desk. The first answer counts and closes the other prompt. No answer before the time runs out (60
+seconds unless you change it) is No. Set it up in `overshoulder settings` under "Approvals on your
+phone", then press "Send a test question" to check it.
+
+Your PC only makes outgoing requests; nothing on it listens for your phone. The phone is told what
+the agent wants to do, the program's name and when the question expires. The window's title and a
+screenshot of the window are sent only if you tick those boxes. The log records which channel
+answered, as `approved_by`.
+
+**ntfy.** Install the [ntfy](https://ntfy.sh) app and subscribe to the topic the settings page shows,
+on the same server: ntfy.sh, or your own with an access token if it needs one. A question arrives as
+a notification with Allow and Deny buttons. A button posts the answer to a second, secret topic. The
+answer names that question's one-time id and carries an HMAC under a key that never leaves your PC,
+so a forged answer, or a copy of an answer to an earlier question, is ignored. When the question is
+answered anywhere or expires, its notification is deleted. Anyone who knows the topics can read the
+questions, so keep them to yourself; "Make new topics" replaces them.
+
+**Webhook.** For your own server or another app. Each question is POSTed to the webhook URL:
+
+```json
+{"type": "overshoulder.approval", "id": "<one-time id>", "reason": "click on 'Send'",
+ "process": "outlook.exe", "expires_at": 1761240000.0, "text": "<what the phone shows>"}
+```
+
+with `title` and `screenshot_png_base64` added if you share them. The request carries
+`X-Overshoulder-Signature: sha256=<hex>`, an HMAC-SHA256 of the body under the webhook secret from the
+settings page. Answer in the response, or later at the answer URL, which Overshoulder polls every two
+seconds with `GET <answer URL>?id=<id>` (signed the same way, over the id):
+
+```json
+{"id": "<id>", "answer": "yes", "mac": "<hex HMAC-SHA256 of '<id>.yes' under the webhook secret>"}
+```
+
+`answer` is `yes` or `no`. Anything else counts as no answer yet. When the question closes,
+Overshoulder POSTs `{"type": "overshoulder.approval.closed", "id": "<id>", "outcome": "answered"}`
+(or `"closed"` if it was answered elsewhere or expired), signed the same way.
 
 ## Tutorials
 

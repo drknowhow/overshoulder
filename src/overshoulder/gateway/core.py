@@ -310,12 +310,15 @@ class Gateway:
             scope = NarrowedScope(inner, lambda n=client.name, s=session: self.lease_limits(n, s),
                                   window_processes=self.checks.window_processes)
             grant = self.registry.grant_for(client, scope.kind)
+            approved_by = None
             if grant == "approve":
                 eff = lim.effective
-                policy.require_approval(self.approver, {
-                    "kind": "lease", "client": client.name, "scope": scope.describe(),
-                    "reason": f"{client.name} wants {scope.kind} scope {scope.describe()}"
-                              + (f" (limits: {eff.describe()})" if eff else "")})
+                req = {"kind": "lease", "client": client.name, "scope": scope.describe(),
+                       "reason": f"{client.name} wants {scope.kind} scope {scope.describe()}"
+                                 + (f" (limits: {eff.describe()})" if eff else ""),
+                       **self._asked_about(scope, None)}
+                policy.require_approval(self.approver, req)
+                approved_by = req.get("answered_by")
             lease = self.leases.acquire(client.name, scope, ttl_s)
             lease.meta["log_text"] = bool(log_text)
             lease.meta["session_limits"] = session
@@ -324,7 +327,8 @@ class Gateway:
                            error=e.to_dict())
             raise
         self.log.write("lease_acquired", client=client.name, lease=lease.id, scope=scope.describe(),
-                       ttl_s=lease.ttl_s, log_text=bool(log_text), limits=lim.to_dict())
+                       ttl_s=lease.ttl_s, log_text=bool(log_text), limits=lim.to_dict(),
+                       **({"approved_by": approved_by} if approved_by else {}))
         return {"lease_id": lease.id, "scope": scope.describe(), "ttl_s": lease.ttl_s, "limits": lim.to_dict()}
 
     def hidden_for(self, client_name: str) -> Limits:
@@ -395,6 +399,7 @@ class Gateway:
         """
         params = dict(params or {})
         t0 = time.time()
+        approved_by = None
         client_name = None
         lease = None
         scope_desc = None
@@ -449,9 +454,11 @@ class Gateway:
                     name = (under or {}).get("name", "")
                 reason = policy.approval_reason(action, name, params, focused_type=focused_type)
                 if reason:
-                    policy.require_approval(self.approver, {
-                        "kind": "action", "client": client.name, "action": action, "reason": reason,
-                        "target": named.describe() if named else None, "scope": scope_desc})
+                    req = {"kind": "action", "client": client.name, "action": action, "reason": reason,
+                           "target": named.describe() if named else None, "scope": scope_desc,
+                           **self._asked_about(scope, named)}
+                    policy.require_approval(self.approver, req)
+                    approved_by = req.get("answered_by")
 
             shown = to_target if to_target is not None else target  # where the pointer ends up
             if shown is not None and (shown.kind == "point" or (shown.rect and not shown.rect.empty)):
@@ -490,7 +497,8 @@ class Gateway:
                                  verify=_loggable(verdict, lease.meta.get("log_text")), scope=scope_desc,
                                  t_act=round(t_act, 3),
                                  ms=round((time.time() - t0) * 1000),
-                                 **({"to": to_target.describe()} if to_target is not None else {}))
+                                 **({"to": to_target.describe()} if to_target is not None else {}),
+                                 **({"approved_by": approved_by} if approved_by else {}))
             out["ts"] = row["ts"]
         except OSError as e:
             # The action already happened; report the log failure instead of inviting a retry.
@@ -511,6 +519,26 @@ class Gateway:
             procs += self.checks.window_processes(self.checks.root_of(hwnd) or hwnd)
         for proc in procs:
             lim.check_process(proc, "the target")
+
+    def _asked_about(self, scope, target: Target | None) -> dict:
+        """Which program an approval is about, and its window. The window handle stays on this PC: a
+        phone approval sends the program's name, and the title or a screenshot only if the person
+        turned that on."""
+        binding = getattr(scope, "binding", None)
+        hwnd = (target.hwnd if target is not None else 0) or 0
+        if not hwnd and target is not None and target.kind == "point":
+            hwnd = self.checks.window_under(*target.point()) or 0
+        hwnd = (self.checks.root_of(hwnd) or hwnd) if hwnd else (binding.hwnd if binding is not None else 0)
+        try:
+            procs = [p for p in (self.checks.window_processes(hwnd) if hwnd else []) if p]
+            if not procs and target is not None and target.pid:
+                procs = [self.checks.pid_process(target.pid)]
+            if not procs and binding is not None:
+                procs = [self.checks.pid_process(binding.pid)]
+        except Exception:  # the window may have closed; the question still goes out without it
+            procs = []
+        hosted = [p for p in procs if p and p != "applicationframehost.exe"]
+        return {"process": (hosted or procs or [""])[0], "hwnd": hwnd}
 
     def _check_background(self, lease_id: str, client: str, scope) -> None:
         """Stop check between steps of background work. A panic, revoke or operator pause stops it. The

@@ -23,7 +23,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from overshoulder import __version__
-from overshoulder.approvals import MessageBoxApprover
+from overshoulder.approvals import SettingsApprover
 from overshoulder.driver import input as inp
 from overshoulder.gateway.clients import default_home
 from overshoulder.gateway.core import Gateway
@@ -84,7 +84,7 @@ def ensure_operator_key() -> str:
 
 class Daemon:
     def __init__(self, service: Service | None = None, port: int = DEFAULT_PORT):
-        self.svc = service or Service(Gateway(approver=MessageBoxApprover()))
+        self.svc = service or Service(Gateway(approver=SettingsApprover()))
         self.port_ref = {"port": port}
         self.settings_sessions = Sessions()
         self.gw = self.svc.gw

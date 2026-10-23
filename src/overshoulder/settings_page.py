@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
-from overshoulder import brand
+from overshoulder import brand, phone
 from overshoulder import settings as st
 
 LINK_TTL_S = 15 * 60
@@ -70,11 +70,13 @@ PAGE = """<!doctype html>
   label.row {{ display:flex; gap:10px; align-items:flex-start; padding:6px 0; }}
   label.row input {{ margin-top:4px; }}
   .field {{ display:grid; grid-template-columns:220px 1fr; gap:12px; align-items:center; padding:6px 0; }}
-  input[type=number], input[type=text] {{ width:100%; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; }}
+  input[type=number], input[type=text], input[type=password] {{ width:100%; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; }}
   button {{ background:var(--accent); color:#fff; border:0; border-radius:8px; padding:9px 18px; font:inherit; font-weight:600; cursor:pointer; }}
   .saved {{ background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; padding:10px 14px; border-radius:8px; margin-bottom:18px; }}
   code {{ background:#f1f5f9; padding:1px 5px; border-radius:4px; }}
   ul.plain {{ margin:0; padding-left:18px; }}
+  .secret {{ font-family:Consolas,monospace; font-size:13px; word-break:break-all; }}
+  .result {{ background:#eff6ff; border:1px solid #bfdbfe; padding:10px 14px; border-radius:8px; margin-bottom:12px; }}
 </style></head>
 <body><main>
 <h1><span class="mark" aria-hidden="true">{mark}</span>Overshoulder</h1>
@@ -114,7 +116,48 @@ PAGE = """<!doctype html>
   <label class="row"><input type="checkbox" name="beep_on_detect" {beep_on_detect}>
     <span>Play a sound when an agent detects that you finished</span></label>
 </section>
+<section>
+  <h2>Approvals on your phone</h2>
+  <p class="hint">When an agent asks to do something consequential, a box on this PC asks you. You can be asked
+  on your phone at the same time: the first answer counts, and no answer in time is No. Your phone is told
+  what the agent wants to do, the program's name and when the question expires, and nothing else unless you
+  tick the boxes at the bottom. This PC only sends requests out; nothing on it listens for the phone.</p>
+  <label class="row"><input type="checkbox" name="ntfy_enabled" {ntfy_enabled}>
+    <span><b>Ask on my phone with ntfy</b><br><span class="hint">Install the ntfy app and subscribe to the topic
+    below on the same server. Anyone who knows the topic can read the questions, so keep it to yourself.</span></span></label>
+  <div class="field"><label for="ntfy_server">ntfy server</label>
+    <input id="ntfy_server" type="text" name="ntfy_server" value="{ntfy_server}"></div>
+  <div class="field"><label>Topic to subscribe to</label><span class="secret">{ntfy_topic}</span></div>
+  <div class="field"><label for="ntfy_token">Access token (only if your server needs one)</label>
+    <input id="ntfy_token" type="password" name="ntfy_token" value="{ntfy_token}" autocomplete="off"></div>
+  <label class="row"><input type="checkbox" name="renew_topics">
+    <span>Make new topics (your phone has to subscribe again)</span></label>
+  <label class="row"><input type="checkbox" name="webhook_enabled" {webhook_enabled}>
+    <span><b>Ask through a webhook</b><br><span class="hint">For your own server or another app. Questions and
+    answers are signed with the secret below; the README describes the format.</span></span></label>
+  <div class="field"><label for="webhook_url">Webhook URL</label>
+    <input id="webhook_url" type="text" name="webhook_url" value="{webhook_url}" placeholder="https://..."></div>
+  <div class="field"><label for="webhook_poll_url">Answer URL (if not the same)</label>
+    <input id="webhook_poll_url" type="text" name="webhook_poll_url" value="{webhook_poll_url}"></div>
+  <div class="field"><label>Webhook secret</label><span class="secret">{webhook_secret}</span></div>
+  <div class="field"><label for="phone_timeout">Time to answer (seconds)</label>
+    <input id="phone_timeout" type="number" name="phone_timeout_s" min="10" max="600" value="{phone_timeout_s}"></div>
+  <label class="row"><input type="checkbox" name="share_title" {share_title}>
+    <span>Also send the window's title</span></label>
+  <label class="row"><input type="checkbox" name="share_screenshot" {share_screenshot}>
+    <span>Also send a screenshot of the window</span></label>
+</section>
 <p><button type="submit">Save</button></p>
+</form>
+<form method="post" action="/settings/phone-test">
+<input type="hidden" name="form_token" value="{form_token}">
+<section>
+  <h2>Test the phone</h2>
+  <p class="hint">Sends a test question to the phone channels saved above and waits for your answer. The box on
+  this PC is not shown.</p>
+  {phone_test}
+  <button type="submit">Send a test question</button>
+</section>
 </form>
 <section>
   <h2>Agents</h2>
@@ -143,7 +186,22 @@ def _client_lines(registry) -> list[str]:
     return out
 
 
-def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, saved: bool) -> str:
+def _test_result(r: dict | None) -> str:
+    if not r:
+        return ""
+    if r.get("answer") is True:
+        text = f"Allowed on {r['by']} after {r.get('seconds', '?')} s."
+    elif r.get("answer") is False:
+        text = f"Denied on {r['by']} after {r.get('seconds', '?')} s."
+    else:
+        text = "No answer arrived in time."
+    errs = "".join(f"<br>{html.escape(k)}: {html.escape(str(v))}" for k, v in (r.get("errors") or {}).items())
+    return f'<div class="result">{html.escape(text)}{errs}</div>'
+
+
+def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, saved: bool,
+                ph: phone.PhoneSettings | None = None, phone_test: dict | None = None) -> str:
+    ph = ph or phone.PhoneSettings().ensure_secrets()
     kinds = "\n".join(
         f'<label class="row"><input type="checkbox" name="kind_{k}" {"checked" if k in s.wait_kinds else ""}>'
         f"<span>{html.escape(desc)}</span></label>" for k, desc in st.WAIT_KINDS.items())
@@ -167,7 +225,19 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
         wait_processes=html.escape(", ".join(s.wait_processes)),
         beep_on_detect="checked" if s.beep_on_detect else "",
         clients="".join(f"<li>{html.escape(c)}</li>" for c in clients) or "<li>none yet</li>",
-        logs=html.escape(logs))
+        logs=html.escape(logs),
+        ntfy_enabled="checked" if ph.ntfy_enabled else "",
+        ntfy_server=html.escape(ph.ntfy_server),
+        ntfy_topic=html.escape(ph.ntfy_topic),
+        ntfy_token=html.escape(ph.ntfy_token),
+        webhook_enabled="checked" if ph.webhook_enabled else "",
+        webhook_url=html.escape(ph.webhook_url),
+        webhook_poll_url=html.escape(ph.webhook_poll_url),
+        webhook_secret=html.escape(ph.webhook_secret),
+        phone_timeout_s=ph.timeout_s,
+        share_title="checked" if ph.share_title else "",
+        share_screenshot="checked" if ph.share_screenshot else "",
+        phone_test=_test_result(phone_test))
 
 
 def settings_from_form(form) -> st.Settings:
@@ -189,8 +259,32 @@ def settings_from_form(form) -> st.Settings:
     ).clamp()
 
 
-def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str) -> None:
+def phone_from_form(form, current: phone.PhoneSettings) -> phone.PhoneSettings:
+    """The phone settings the form asks for. Topics and secrets are kept unless renewal is ticked."""
+    try:
+        timeout = int(form.get("phone_timeout_s", current.timeout_s))
+    except (TypeError, ValueError):
+        timeout = current.timeout_s
+    s = phone.PhoneSettings(
+        ntfy_enabled=form.get("ntfy_enabled") == "on",
+        ntfy_server=str(form.get("ntfy_server", current.ntfy_server)),
+        ntfy_topic=current.ntfy_topic, ntfy_reply_topic=current.ntfy_reply_topic,
+        ntfy_token=str(form.get("ntfy_token", current.ntfy_token)),
+        webhook_enabled=form.get("webhook_enabled") == "on",
+        webhook_url=str(form.get("webhook_url", current.webhook_url)),
+        webhook_poll_url=str(form.get("webhook_poll_url", current.webhook_poll_url)),
+        webhook_secret=current.webhook_secret, answer_key=current.answer_key,
+        share_title=form.get("share_title") == "on",
+        share_screenshot=form.get("share_screenshot") == "on",
+        timeout_s=timeout)
+    return s.ensure_secrets(renew_topics=form.get("renew_topics") == "on").clamp()
+
+
+def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
+           phone_tester=None) -> None:
     """Attach /settings handlers to an MCPServer. port_ref["port"] is filled in at serve time."""
+
+    last_test: dict = {}
 
     def guard(request: Request) -> Response | None:
         if not host_ok(request, port_ref["port"]):
@@ -213,7 +307,8 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str) -> 
         if not form_token:
             return HTMLResponse("Open this page with <code>overshoulder settings</code>.", 403)
         return HTMLResponse(render_page(st.load(), form_token, _client_lines(registry), logs_dir,
-                                        saved=request.query_params.get("saved") == "1"))
+                                        saved=request.query_params.get("saved") == "1", ph=phone.load(),
+                                        phone_test=last_test.get("result")))
 
     @mcp.custom_route("/settings", methods=["POST"])
     async def settings_post(request: Request):
@@ -224,4 +319,21 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str) -> 
         if not expected or not secrets.compare_digest(str(form.get("form_token", "")), expected):
             return HTMLResponse("Session expired. Run <code>overshoulder settings</code> again.", 403)
         st.save(settings_from_form(form))
+        phone.save(phone_from_form(form, phone.load()))
         return RedirectResponse("/settings?saved=1", status_code=303)
+
+    @mcp.custom_route("/settings/phone-test", methods=["POST"])
+    async def phone_test(request: Request):
+        import anyio
+
+        from overshoulder import approvals
+        if (bad := guard(request)) is not None:
+            return bad
+        form = await request.form()
+        expected = sessions.form_token(request.cookies.get(COOKIE))
+        if not expected or not secrets.compare_digest(str(form.get("form_token", "")), expected):
+            return HTMLResponse("Session expired. Run <code>overshoulder settings</code> again.", 403)
+        s = phone.load()
+        tester = phone_tester or approvals.try_phone
+        last_test["result"] = await anyio.to_thread.run_sync(lambda: tester(s, s.timeout_s))
+        return RedirectResponse("/settings", status_code=303)
