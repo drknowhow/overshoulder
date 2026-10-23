@@ -10,7 +10,8 @@
 <p align="center">
   <img alt="Platform: Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%2F11-2563eb">
   <img alt="Protocol: MCP" src="https://img.shields.io/badge/protocol-MCP-111827">
-  <img alt="Status: private, phase 2" src="https://img.shields.io/badge/status-private%20%C2%B7%20phase%202-f5a623">
+  <img alt="Status: phase 2" src="https://img.shields.io/badge/status-phase%202-f5a623">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-22c55e">
 </p>
 
 A desktop hand for AI agents on Windows. An agent leases one window (or a whole screen), sees its
@@ -25,7 +26,7 @@ Windows Calculator". Video, step images and `steps.md` are in [docs/demo/calcula
 Agents work on their window in the background, so the person at the desk keeps their own cursor and
 keyboard. See [Working beside you](#working-beside-you).
 
-Status: private, phase 2. Windows 10/11 only.
+Status: phase 2. Windows 10/11 only.
 
 ## Install
 
@@ -256,3 +257,7 @@ $env:OVERSHOULDER_DESKTOP_TESTS = "1"; pytest -q   # plus live tests that open r
 Design notes: [docs/PLAN.md](docs/PLAN.md), [docs/SPIKE-phase0.md](docs/SPIKE-phase0.md),
 [docs/SPIKE-phase2.md](docs/SPIKE-phase2.md).
 Evidence from live runs: [docs/evidence](docs/evidence).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
