@@ -69,7 +69,15 @@ class ApprovalRequired(GatewayError):
 
 
 class ApprovalDenied(GatewayError):
+    """The person said No (answered_by names where), or nobody answered in time (answered_by None)."""
     code = "approval_denied"
+
+    def __init__(self, message: str, answered_by: str | None = None):
+        super().__init__(message)
+        self.answered_by = answered_by
+
+    def to_dict(self) -> dict:
+        return {**super().to_dict(), "answered_by": self.answered_by}
 
 
 class TargetStale(GatewayError):

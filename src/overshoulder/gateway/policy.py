@@ -190,4 +190,6 @@ class CallbackApprover:
 
 def require_approval(approver: Approver, request: dict) -> None:
     if not approver.approve(request):
-        raise ApprovalDenied(f"not approved: {request.get('reason')}")
+        by = request.get("answered_by")
+        why = "" if "answered_by" not in request else f"denied on {by}: " if by else "no answer in time: "
+        raise ApprovalDenied(f"not approved: {why}{request.get('reason')}", by)

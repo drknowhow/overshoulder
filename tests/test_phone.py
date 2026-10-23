@@ -403,8 +403,15 @@ def test_the_approval_request_names_the_program_and_the_log_says_who_answered(tm
     row = [json.loads(x) for x in g.log.path.read_text(encoding="utf-8").splitlines()][-1]
     assert row["approved_by"] == "ntfy"
     g.approver = chain(Fake("ntfy", False, after=0.05))
-    with pytest.raises(E.ApprovalDenied):
+    with pytest.raises(E.ApprovalDenied) as denied:
         g.run(token, lease_id, "click", lambda t, p: "sent", target=send)
+    assert denied.value.to_dict()["answered_by"] == "ntfy" and "denied on ntfy" in str(denied.value)
+    row = [json.loads(x) for x in g.log.path.read_text(encoding="utf-8").splitlines()][-1]
+    assert row["error"]["answered_by"] == "ntfy"
+    g.approver = chain(Fake("ntfy", None), timeout=0.2)
+    with pytest.raises(E.ApprovalDenied) as silent:
+        g.run(token, lease_id, "click", lambda t, p: "sent", target=send)
+    assert silent.value.answered_by is None and "no answer in time" in str(silent.value)
 
 
 # -- settings -----------------------------------------------------------------------------------------
