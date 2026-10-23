@@ -75,6 +75,14 @@ def test_a_view_follows_a_window_that_moved():
     assert b[0] == pytest.approx(a[0] - 100)
 
 
+def test_a_steps_own_annotations_stay_inside_its_view():
+    steps = R.build_steps([_click(1.0, (500, 400, 520, 420))], 0.0)
+    plain = Z.camera_at(1.0, Z.plan(steps, SIZE), SIZE, (0, 0))
+    wide = Z.camera_at(1.0, Z.plan(steps, SIZE, {1: [(720, 520, 760, 560)]}), SIZE, (0, 0))
+    assert plain[2] < 760
+    assert wide is not None and wide[2] >= 760 and wide[3] >= 560
+
+
 def test_keyboard_only_recordings_never_zoom():
     steps = R.build_steps([_row("hotkey", 1.0, params={"combo": "ctrl+s"})], 0.0)
     assert Z.plan(steps, SIZE) == []

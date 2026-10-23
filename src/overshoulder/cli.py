@@ -49,6 +49,59 @@ def _wait(a) -> int:
     return 0 if out["fired"] else 3
 
 
+def _pair(v: str) -> list[float]:
+    return [float(x) for x in v.split(",")]
+
+
+def _item_flags(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--rect", type=_pair, metavar="L,T,R,B")
+    p.add_argument("--at", type=_pair, metavar="X,Y")
+    p.add_argument("--tail", type=_pair, metavar="X,Y", help="arrow start")
+    p.add_argument("--head", type=_pair, metavar="X,Y", help="arrow point")
+    p.add_argument("--text")
+    p.add_argument("--size", type=int)
+    p.add_argument("--color")
+    p.add_argument("--width", type=int)
+    p.add_argument("--style", choices=["blur", "pixelate", "solid"])
+    p.add_argument("--step", type=int, help="step id from steps.json")
+    p.add_argument("--t0", type=float, help="seconds from the recording start")
+    p.add_argument("--t1", type=float)
+    p.add_argument("--caption")
+    p.add_argument("--hide", dest="hidden", action="store_const", const=True)
+    p.add_argument("--show", dest="hidden", action="store_const", const=False)
+    p.add_argument("--narration")
+    p.add_argument("--audio")
+    p.add_argument("--note")
+    p.add_argument("--json", dest="raw", help="fields as a JSON object, merged over the flags")
+
+
+def _annotate(a) -> int:
+    from pathlib import Path
+
+    from overshoulder.layer import Layer, LayerError
+
+    target = Path(a.target)
+    layer = Layer.for_recording(target) if target.is_dir() else Layer.for_image(target)
+    fields = ("rect", "at", "tail", "head", "text", "size", "color", "width", "style", "step", "t0", "t1",
+              "caption", "hidden", "narration", "audio", "note")
+    try:
+        if a.acmd == "list":
+            print(json.dumps(layer.items(), indent=2))
+            return 0
+        if a.acmd == "remove":
+            print(json.dumps({"removed": layer.remove(a.id)}))
+            return 0
+        item = {k: getattr(a, k) for k in fields if getattr(a, k, None) is not None}
+        if a.raw:
+            item.update(json.loads(a.raw))
+        out = layer.add({"kind": a.kind, **item}) if a.acmd == "add" else layer.edit(a.id, item)
+    except (LayerError, json.JSONDecodeError) as e:
+        print(json.dumps({"error": str(e)}), file=sys.stderr)
+        return 2
+    print(json.dumps(out))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     from overshoulder.server import DEFAULT_PORT
 
@@ -89,8 +142,18 @@ def main(argv: list[str] | None = None) -> int:
     wt.add_argument("--timeout", type=float, default=None, help="seconds (capped by settings)")
     au = sub.add_parser("autostart", help="start the gateway and watchdog at login (scheduled tasks)")
     au.add_argument("action", choices=["install", "uninstall", "status"])
-    rr = sub.add_parser("render", help="(re)render a recording directory into a tutorial")
-    rr.add_argument("dir")
+    an = sub.add_parser("annotate", help="edit the annotation layer of a recording or a screenshot")
+    an.add_argument("target", help="recording directory or image file")
+    asub = an.add_subparsers(dest="acmd", required=True)
+    asub.add_parser("list")
+    from overshoulder.layer import KINDS
+    _item_flags(asub.add_parser("add", help="add an item (see overshoulder.layer for kinds)"))
+    asub.choices["add"].add_argument("kind", choices=KINDS)
+    _item_flags(asub.add_parser("edit", help="change an item's fields"))
+    asub.choices["edit"].add_argument("id")
+    asub.add_parser("remove").add_argument("id")
+    rr = sub.add_parser("render", help="(re)render a recording directory into a tutorial, or an annotated image")
+    rr.add_argument("dir", help="recording directory, or an image with a .annotations.json beside it")
     rr.add_argument("--pointer", default="agent", choices=["agent", "real", "none"],
                     help="draw the agent's pointer (default), the recorded real cursor, or none")
     rr.add_argument("--zoom", default="auto", choices=["auto", "off"],
@@ -133,11 +196,17 @@ def main(argv: list[str] | None = None) -> int:
         fn = {"install": autostart.install, "uninstall": autostart.uninstall, "status": autostart.status}
         print(json.dumps(fn[a.action](), indent=2))
         return 0
+    if a.cmd == "annotate":
+        return _annotate(a)
     if a.cmd == "render":
         from pathlib import Path
 
-        from overshoulder.render import render
-        print(json.dumps(render(Path(a.dir), pointer=a.pointer, zoom=a.zoom, keys=not a.no_keys), indent=2))
+        from overshoulder.render import render, render_image
+        target = Path(a.dir)
+        if target.is_file():
+            print(json.dumps(render_image(target), indent=2))
+        else:
+            print(json.dumps(render(target, pointer=a.pointer, zoom=a.zoom, keys=not a.no_keys), indent=2))
         return 0
     if a.cmd == "home":
         print(default_home())

@@ -33,31 +33,37 @@ class View:
     w: float  # crop width in frame pixels; the height follows the frame's aspect
 
 
-def view_for(step, size: tuple[int, int]) -> View | None:
-    """The view that frames a step's target, or None when the target is too big to be worth a zoom."""
+def view_for(step, size: tuple[int, int], extra: list | None = None) -> View | None:
+    """The view that frames a step's target and any `extra` rects (screen pixels, such as the step's
+    own annotations), or None when that is too big to be worth a zoom."""
     width, height = size
+    boxes = list(extra or [])
     if step.rect:
-        left, top, right, bottom = step.rect
+        boxes.append(step.rect)
     elif step.point:
         x, y = step.point
-        left, top, right, bottom = x - POINT_BOX / 2, y - POINT_BOX / 2, x + POINT_BOX / 2, y + POINT_BOX / 2
-    else:
+        boxes.append((x - POINT_BOX / 2, y - POINT_BOX / 2, x + POINT_BOX / 2, y + POINT_BOX / 2))
+    if not boxes:
         return None
+    left, top = min(b[0] for b in boxes), min(b[1] for b in boxes)
+    right, bottom = max(b[2] for b in boxes), max(b[3] for b in boxes)
     w = max((right - left) / FILL, (bottom - top) / FILL * width / height, width / ZOOM_MAX)
     if width / w < MIN_ZOOM:
         return None
     return View((left + right) / 2, (top + bottom) / 2, w)
 
 
-def plan(steps: list, size: tuple[int, int]) -> list[tuple[float, View | None]]:
+def plan(steps: list, size: tuple[int, int], extra: dict | None = None) -> list[tuple[float, View | None]]:
     """Camera keyframes (time, view), times in seconds from the recording start; None is the whole
-    frame. Between two keyframes the camera eases from one to the other."""
+    frame. Between two keyframes the camera eases from one to the other. extra maps a step id to more
+    rects its view must show."""
     keys: list[tuple[float, View | None]] = []
     cur: View | None = None  # what the camera holds after the last keyframe
     prev = None
+    extra = extra or {}
     for s in steps:
-        if s.rect or s.point:
-            v = view_for(s, size)
+        if s.rect or s.point or extra.get(s.id):
+            v = view_for(s, size, extra.get(s.id))
         elif prev is not None and s.t - prev.end <= FOLLOW_S:
             v = cur
         else:

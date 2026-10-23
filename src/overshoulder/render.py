@@ -21,6 +21,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from overshoulder import keys as kc
+from overshoulder import layer as lay
 from overshoulder import zoom as zm
 
 ACCENT = (37, 99, 235)  # badge / highlight
@@ -53,6 +54,7 @@ class Step:
     keys: list[str] | None = None  # a hotkey's keycaps
     typed: str | None = None  # typed text as a caption may show it
     typing_s: float = 0.0  # how long the typed text takes to appear
+    id: int = 0  # stable number from the recording; n is the number shown, after hidden steps go
 
 
 def _font(size: int) -> ImageFont.ImageFont:
@@ -111,12 +113,30 @@ def build_steps(actions: list[dict], start: float) -> list[Step]:
                           aim=point or center,
                           keys=kc.keycaps(params.get("combo", "")) if row["action"] == "hotkey" else None,
                           typed=kc.typed_text(params.get("text")) if row["action"] == "type" else None,
-                          typing_s=kc.typing_seconds(row) if row["action"] == "type" else 0.0))
+                          typing_s=kc.typing_seconds(row) if row["action"] == "type" else 0.0,
+                          id=len(steps) + 1))
+    return _pace(steps)
+
+
+def _pace(steps: list[Step]) -> list[Step]:
+    """Set when each step's annotations show, so neighbours never overlap."""
     for i, st in enumerate(steps):
         nxt = steps[i + 1].t if i + 1 < len(steps) else None
         st.end = min(st.t + HOLD_S, nxt - 0.05) if nxt is not None else st.t + HOLD_S
         st.start = max(st.t - LEAD_S, steps[i - 1].end if i else st.t - LEAD_S)
     return steps
+
+
+def edit_steps(steps: list[Step], edits: dict[int, dict], cuts: list[tuple[float, float]]) -> list[Step]:
+    """Apply a layer's step edits: drop hidden steps and steps inside a cut, replace captions, and
+    number what is left from 1."""
+    kept = []
+    for s in steps:
+        e = edits.get(s.id, {})
+        if e.get("hidden") or lay.in_cut(s.t, cuts):
+            continue
+        kept.append(replace(s, n=len(kept) + 1, caption=e.get("caption", s.caption)))
+    return _pace(kept)
 
 
 def pointer_at(t: float, steps: list[Step], home: tuple[int, int]) -> tuple[int, int] | None:
@@ -167,14 +187,20 @@ def _fit(d: ImageDraw.ImageDraw, text: str, max_w: float, size: int) -> tuple[st
 
 
 def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[int, int] | None,
-             steps: list[Step], fonts: dict, view: zm.Crop | None = None, keys: bool = True) -> Image.Image:
+             steps: list[Step], fonts: dict, view: zm.Crop | None = None, keys: bool = True,
+             items: list[dict] | None = None) -> Image.Image:
     """Draw every annotation active at time t onto a frame whose top-left is `origin` on screen.
 
     view: a crop of the frame (frame pixels) to scale up to full size before drawing, so the zoom
-    magnifies the app but not the annotations. keys: draw keystroke captions. Returns the frame with a
-    caption strip of STRIP pixels added underneath.
+    magnifies the app but not the annotations. keys: draw keystroke captions. items: layer items
+    showing now, in screen pixels (layer.active); redactions are applied to the pixels before the
+    zoom, so no output can show what they cover. Returns the frame with a caption strip of STRIP
+    pixels added underneath.
     """
     ox, oy = origin
+    items = items or []
+    if any(x["kind"] == "redact" for x in items):
+        img = lay.redact(img.copy(), items, lambda x, y: (x - ox, y - oy))
     if view is not None:
         img = img.resize(img.size, Image.Resampling.BICUBIC, box=view)
         sx, sy = img.width / (view[2] - view[0]), img.height / (view[3] - view[1])
@@ -189,6 +215,8 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     active = [s for s in steps if s.start <= t < s.end]
+    fonts.setdefault("make", _font)
+    lay.draw_spotlights(d, base.size, items, at)
 
     for s in active:
         if s.rect:
@@ -209,6 +237,8 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
             px, py = at(*s.point)
             d.ellipse((px - rad, py - rad, px + rad, py + rad), outline=RIPPLE + (int(255 * (1 - k)),), width=4)
 
+    lay.draw(d, items, at, fonts)
+
     if cursor:
         cx, cy = at(*cursor)
         if -40 < cx < base.width + 40 and -40 < cy < base.height + 40:
@@ -216,7 +246,6 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
             d.polygon(_cursor_shape(cx, cy, 1.3), fill=(255, 255, 255, 255), outline=(0, 0, 0, 255))
 
     if keys and active:
-        fonts.setdefault("make", _font)
         kc.draw(d, base.size, active[-1], t, fonts)
 
     framed = Image.alpha_composite(base, layer).convert("RGB")
@@ -253,14 +282,23 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     meta = json.loads((rec / "meta.json").read_text(encoding="utf-8"))
     if actions is None:
         actions = json.loads((rec / "actions.json").read_text(encoding="utf-8"))
-    steps = build_steps(actions, meta["start"])
+    layer = lay.Layer.for_recording(rec)
+    all_steps = build_steps(actions, meta["start"])
+    cuts = layer.cuts()
+    steps = edit_steps(all_steps, layer.step_edits(), cuts)
+    drawn = layer.drawn()
     track = _frames_track(rec)
-    width, height = meta["size"]
+    clean_w, clean_h = meta["size"]
+    crop = layer.crop((clean_w, clean_h))
+    cl, ct = (crop[0], crop[1]) if crop else (0, 0)
+    width, height = (crop[2] - crop[0], crop[3] - crop[1]) if crop else (clean_w, clean_h)
     fps = meta["fps"]
     fonts = {"badge": _font(18), "caption": _font(26), "make": _font}
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg not found on PATH")
+    for old in out.glob("step-*.png"):
+        old.unlink()  # a re-render with hidden or cut steps must not leave their old stills behind
 
     dec = subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(rec / "video.mp4"),
                             "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE)
@@ -271,12 +309,20 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
                             str(out / "tutorial.mp4")], stdin=subprocess.PIPE)
     shots_due = {s.n: still_time(s) for s in steps}
     by_n = {s.n: s for s in steps}
+    windows = {s.id: (s.start, s.end) for s in steps}
     saved: dict[int, str] = {}
-    frame_bytes = width * height * 3
+    frame_bytes = clean_w * clean_h * 3
     last_t = track[-1]["t"] if track else 0.0
-    b0 = track[0]["bounds"] if track else [0, 0, width, height]
-    home = ((b0[0] + b0[2]) // 2, (b0[1] + b0[3]) // 2)
-    camera = zm.plan(steps, (width, height)) if zoom == "auto" else []
+    b0 = track[0]["bounds"] if track else [0, 0, clean_w, clean_h]
+    home = (b0[0] + cl + width // 2, b0[1] + ct + height // 2)
+    extra: dict[int, list] = {}  # a step's own annotations must stay in its zoomed view
+    for x in drawn:
+        s = next((s for s in steps if s.id == x.get("step")), None)
+        if s is not None and x["kind"] not in ("redact", "spotlight"):
+            ox, oy = _frame_at(track, s.t)["bounds"][:2]
+            b = lay.bbox(x)
+            extra.setdefault(s.id, []).append((b[0] + ox, b[1] + oy, b[2] + ox, b[3] + oy))
+    camera = zm.plan(steps, (width, height), extra) if zoom == "auto" else []
 
     def pointer_for(fr: dict, t: float):
         if pointer == "agent":
@@ -289,14 +335,18 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
             raw = dec.stdout.read(frame_bytes)
             if len(raw) < frame_bytes:
                 break
-            fr = track[min(i, len(track) - 1)] if track else {"t": i / fps, "bounds": [0, 0, width, height],
+            fr = track[min(i, len(track) - 1)] if track else {"t": i / fps, "bounds": [0, 0, clean_w, clean_h],
                                                                "cursor": None}
             t = fr["t"]
-            img = Image.frombytes("RGB", (width, height), raw)
-            if not tight or keep_frame(t, steps, last_t):
-                origin = (fr["bounds"][0], fr["bounds"][1])
+            img = Image.frombytes("RGB", (clean_w, clean_h), raw)
+            if crop:
+                img = img.crop(crop)
+            frame_origin = (fr["bounds"][0], fr["bounds"][1])  # where the clean frame's (0, 0) is on screen
+            origin = (frame_origin[0] + cl, frame_origin[1] + ct)
+            if (not tight or keep_frame(t, steps, last_t)) and not lay.in_cut(t, cuts):
                 framed = annotate(img, t, origin, pointer_for(fr, t), steps, fonts,
-                                  view=zm.camera_at(t, camera, (width, height), origin), keys=keys)
+                                  view=zm.camera_at(t, camera, (width, height), origin), keys=keys,
+                                  items=lay.active(drawn, t, windows, frame_origin))
                 enc.stdin.write(framed.tobytes())
                 written += 1
             for n, due in shots_due.items():
@@ -304,8 +354,8 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
                     path = out / f"step-{n:02d}.png"
                     # Each still shows its own step only, even if the video already moved on.
                     solo = replace(by_n[n], start=t - 1, end=t + 1)
-                    annotate(img, t, (fr["bounds"][0], fr["bounds"][1]), pointer_for(fr, t), [solo],
-                             fonts, keys=keys).save(path)
+                    annotate(img, t, origin, pointer_for(fr, t), [solo], fonts, keys=keys,
+                             items=lay.active(drawn, t, windows, frame_origin, still_of=solo.id)).save(path)
                     saved[n] = path.name
             i += 1
     finally:
@@ -320,5 +370,49 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
         if s.n in saved:
             lines.append(f"\n   ![Step {s.n}]({saved[s.n]})\n")
     (out / "steps.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    shown = {s.id: s for s in steps}
+    (out / "steps.json").write_text(json.dumps(
+        [_step_record(s, shown.get(s.id), track, saved) for s in all_steps], indent=1), encoding="utf-8")
     return {"video": str(out / "tutorial.mp4"), "frames": written, "source_frames": i, "steps": len(steps),
-            "images": len(saved), "seconds": round(written / fps, 1), "markdown": str(out / "steps.md")}
+            "images": len(saved), "seconds": round(written / fps, 1), "markdown": str(out / "steps.md"),
+            "steps_json": str(out / "steps.json"), "annotations": len(layer.items())}
+
+
+def render_image(image: Path, out: Path | None = None) -> dict:
+    """Apply a screenshot's layer (<name>.annotations.json) and write <name>.annotated.png. Step and
+    time fields mean nothing for one image: every drawn item and redaction shows."""
+    image = Path(image)
+    layer = lay.Layer.for_image(image)
+    items = layer.drawn()
+    img = lay.redact(Image.open(image).convert("RGB"), items, lambda x, y: (x, y))
+    crop = layer.crop(img.size)
+    cl, ct = (crop[0], crop[1]) if crop else (0, 0)
+    if crop:
+        img = img.crop(crop)
+    base = img.convert("RGBA")
+    over = Image.new("RGBA", base.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(over)
+
+    def at(x: float, y: float) -> tuple[float, float]:
+        return x - cl, y - ct
+
+    lay.draw_spotlights(d, base.size, items, at)
+    lay.draw(d, items, at, {"make": _font})
+    path = Path(out or image.with_name(image.stem + ".annotated.png"))
+    Image.alpha_composite(base, over).convert("RGB").save(path)
+    return {"image": str(path), "annotations": len(items), "size": list(base.size)}
+
+
+def _frame_at(track: list[dict], t: float) -> dict:
+    return min(track, key=lambda f: abs(f["t"] - t)) if track else {"bounds": [0, 0, 0, 0]}
+
+
+def _step_record(s: Step, shown: Step | None, track: list[dict], saved: dict[int, str]) -> dict:
+    """One step as steps.json lists it, with its target in clean-frame pixels (the layer's
+    coordinates) so annotations can be placed against it."""
+    ox, oy = _frame_at(track, s.t)["bounds"][:2]
+    return {"id": s.id, "n": shown.n if shown else None, "t": s.t, "action": s.action,
+            "caption": shown.caption if shown else s.caption, "hidden": shown is None,
+            "rect": [s.rect[0] - ox, s.rect[1] - oy, s.rect[2] - ox, s.rect[3] - oy] if s.rect else None,
+            "point": [s.point[0] - ox, s.point[1] - oy] if s.point else None,
+            "still": saved.get(shown.n) if shown else None}
