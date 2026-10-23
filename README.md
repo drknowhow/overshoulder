@@ -154,12 +154,65 @@ and set how often it checks and how long it may wait.
 
 ## Tutorials
 
-`record_start` captures a clean video of the scope. `record_stop` renders `tutorial.mp4` with a pointer,
-click ripples, numbered highlights and a caption strip, plus one PNG per step and a `steps.md`. Idle
-time between steps is cut. The pointer is the agent's own: it glides to each step's target, so a
-tutorial made in the background looks like someone doing the steps
-([example](docs/evidence/phase2-pointer)). Re-render any recording with `overshoulder render <dir>`
-(`--pointer real` draws the recorded cursor instead).
+![Frames of a Notepad tutorial an agent recorded and annotated](docs/evidence/tutorial-annotate/contact-sheet.png)
+
+`record_start` captures a clean video of the scope. `record_stop` renders it into `tutorial/` inside
+the recording's folder (`%LOCALAPPDATA%\Overshoulder\recordings\<stamp>-<name>`):
+
+- `tutorial.mp4`: the agent's pointer gliding to each target, click ripples, numbered highlights and
+  a caption strip, with the idle time between steps cut. The camera zooms in on small targets and
+  back out. Hotkeys show as keycaps, and typed text appears as a caption while it is typed.
+- `tutorial.gif`, 640 px wide, for a README or a chat.
+- `step-NN.png` for each step (always the whole frame), `steps.md` and `steps.json`.
+- With narration: a voice track in the MP4, plus `narration.wav` and `narration.srt`. Each line starts
+  with its step's caption. When a line runs longer than its step, the video holds on the frame just
+  before the pointer moves on, until the line ends.
+
+The original video is never changed. Everything added on top comes from `annotations.json` beside it,
+which the agent or you can edit before rendering again:
+
+| Kind | Fields | Does |
+|---|---|---|
+| `box` | `rect`, `text`?, `color`? | Outlined box, optionally labelled |
+| `arrow` | `tail`, `head`, `color`? | Arrow pointing at `head` |
+| `text` | `at`, `text`, `size`?, `color`? | Label on a dark pill |
+| `badge` | `at`, `text`? | Round badge |
+| `spotlight` | `rect` | Dims everything outside `rect` |
+| `redact` | `rect`, `style`? | `blur` (default), `pixelate` or `solid`, in every output |
+| `step` | `step`, `caption`?, `hidden`?, `narration`?, `audio`? | Edits one step: its caption, whether it shows, what it says |
+| `cut` | `t0`, `t1` | Drops that part of the recording and the steps in it |
+| `crop` | `rect` | Crops every output |
+
+Coordinates are pixels of the recorded frame, the same pixels `steps.json` uses for each step's
+`rect`. A drawn item shows during one step (`step`: that step's id), between `t0` and `t1` seconds,
+or throughout. Items from the [example](docs/evidence/tutorial-annotate):
+
+```json
+{"id": "a1", "kind": "redact", "rect": [56, 12, 363, 52], "style": "blur", "note": "redacted by ref e72"},
+{"id": "a2", "kind": "arrow", "step": 4, "head": [387, 55], "tail": [507, 145]},
+{"id": "a4", "kind": "step", "step": 3, "narration": "Press Control S to save the first note."}
+```
+
+Agents do the same over MCP. `redact(ref)` while recording hides an element's rectangle in every
+frame. `annotate(recording, op)` lists the steps and items, or adds, edits or removes items.
+`render(recording, ...)` renders again (`zoom`, `keys`, `gif`, `narrate`, `voice`, `pointer`). An
+agent can annotate and render only its own recordings, and these two still work after it releases
+the scope. From the command line:
+
+```powershell
+overshoulder annotate <dir> list
+overshoulder annotate <dir> add arrow --step 4 --tail 507,145 --head 387,55
+overshoulder annotate <dir> add step --step 3 --narration "Press Control S to save."
+overshoulder render <dir> --narrate --voice Zira     # also: --zoom off, --no-keys, --no-gif, --pointer real
+overshoulder render <dir> --tts-cmd "piper -m en.onnx -f {out} < {text_file}"
+overshoulder voices
+```
+
+A screenshot takes a layer too: `overshoulder annotate shot.png add box --rect 10,10,200,80` writes
+`shot.annotations.json`, and `overshoulder render shot.png` writes `shot.annotated.png`.
+
+In [docs/evidence/tutorial-annotate](docs/evidence/tutorial-annotate), a headless agent records,
+redacts, annotates and narrates a Notepad tutorial on its own, working in the background.
 
 ## Limits (phase 2)
 

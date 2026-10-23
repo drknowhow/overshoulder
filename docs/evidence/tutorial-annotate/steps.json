@@ -1,0 +1,121 @@
+[
+ {
+  "id": 1,
+  "n": 1,
+  "t": 5.96,
+  "action": "click",
+  "caption": "Click \"Text editor\"",
+  "hidden": false,
+  "rect": [
+   1,
+   93,
+   1905,
+   792
+  ],
+  "point": [
+   953,
+   442
+  ],
+  "still": "step-01.png"
+ },
+ {
+  "id": 2,
+  "n": 2,
+  "t": 8.391,
+  "action": "type",
+  "caption": "Type \"Pip: feed at 8 and 6\"",
+  "hidden": false,
+  "rect": [
+   1,
+   93,
+   1905,
+   792
+  ],
+  "point": null,
+  "still": "step-02.png"
+ },
+ {
+  "id": 3,
+  "n": 3,
+  "t": 18.059,
+  "action": "hotkey",
+  "caption": "Press Ctrl+S",
+  "hidden": false,
+  "rect": null,
+  "point": null,
+  "still": "step-03.png"
+ },
+ {
+  "id": 4,
+  "n": 4,
+  "t": 20.759,
+  "action": "invoke",
+  "caption": "Click \"Add New Tab\"",
+  "hidden": false,
+  "rect": [
+   367,
+   19,
+   407,
+   49
+  ],
+  "point": [
+   387,
+   34
+  ],
+  "still": "step-04.png"
+ },
+ {
+  "id": 5,
+  "n": 5,
+  "t": 28.695,
+  "action": "click",
+  "caption": "Click \"Text editor\"",
+  "hidden": false,
+  "rect": [
+   1,
+   93,
+   1905,
+   792
+  ],
+  "point": [
+   953,
+   442
+  ],
+  "still": "step-05.png"
+ },
+ {
+  "id": 6,
+  "n": 6,
+  "t": 34.909,
+  "action": "type",
+  "caption": "Type \"Buy cat food\"",
+  "hidden": false,
+  "rect": [
+   1,
+   93,
+   1905,
+   792
+  ],
+  "point": null,
+  "still": "step-06.png"
+ },
+ {
+  "id": 7,
+  "n": 7,
+  "t": 39.591,
+  "action": "select",
+  "caption": "Go back to the first note",
+  "hidden": false,
+  "rect": [
+   61,
+   12,
+   128,
+   52
+  ],
+  "point": [
+   94,
+   32
+  ],
+  "still": "step-07.png"
+ }
+]

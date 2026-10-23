@@ -1,0 +1,27 @@
+1
+00:00:01,600 --> 00:00:03,519
+Click Text editor.
+
+2
+00:00:04,300 --> 00:00:07,409
+Type Pip: feed at 8 and 6.
+
+3
+00:00:08,700 --> 00:00:11,754
+Press Control S to save the first note.
+
+4
+00:00:12,200 --> 00:00:14,069
+Click Add New Tab.
+
+5
+00:00:15,900 --> 00:00:17,819
+Click Text editor.
+
+6
+00:00:19,600 --> 00:00:21,599
+Type Buy cat food.
+
+7
+00:00:23,300 --> 00:00:25,554
+Go back to the first note.

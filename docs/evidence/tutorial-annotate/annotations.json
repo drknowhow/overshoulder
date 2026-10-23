@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "a1",
+      "kind": "redact",
+      "rect": [
+        56.0,
+        12.0,
+        363.0,
+        52.0
+      ],
+      "style": "blur",
+      "note": "redacted by ref e72"
+    },
+    {
+      "id": "a2",
+      "kind": "arrow",
+      "step": 4,
+      "head": [
+        387.0,
+        55.0
+      ],
+      "tail": [
+        507.0,
+        145.0
+      ]
+    },
+    {
+      "id": "a3",
+      "kind": "text",
+      "step": 4,
+      "at": [
+        517.0,
+        155.0
+      ],
+      "text": "Open a new tab"
+    },
+    {
+      "id": "a4",
+      "kind": "step",
+      "step": 3,
+      "narration": "Press Control S to save the first note."
+    },
+    {
+      "id": "a5",
+      "kind": "step",
+      "step": 7,
+      "caption": "Go back to the first note"
+    }
+  ]
+}
