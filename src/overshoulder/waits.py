@@ -17,6 +17,7 @@ Condition shapes (JSON):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import time
@@ -165,15 +166,21 @@ class Waiter:
 
 
 def wait(conditions: list[dict], settings: Settings, timeout_s: float | None = None,
-         on_poll=None) -> dict:
-    """Block until a condition holds or the timeout passes. Returns {"fired": bool, ...}."""
-    waiter = Waiter(conditions, settings)
+         on_poll=None, lock=None) -> dict:
+    """Block until a condition holds or the timeout passes. Returns {"fired": bool, ...}.
+
+    lock: held around each look at the desktop (UI Automation is not safe from many threads at once)
+    and released while sleeping, so a long wait does not hold up other callers."""
+    lock = lock or contextlib.nullcontext()
+    with lock:
+        waiter = Waiter(conditions, settings)
     limit = settings.max_wait_minutes * 60
     timeout_s = limit if timeout_s is None else min(float(timeout_s), limit)
     t0 = time.monotonic()
     period = settings.poll_interval_ms / 1000
     while True:
-        fired = waiter.check()
+        with lock:
+            fired = waiter.check()
         if fired:
             if settings.beep_on_detect:
                 import winsound

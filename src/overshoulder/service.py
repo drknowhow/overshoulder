@@ -6,6 +6,8 @@ approvals and the action log apply uniformly. Results are plain JSON-able dicts.
 
 from __future__ import annotations
 
+import json
+import threading
 import time
 from pathlib import Path
 
@@ -24,6 +26,10 @@ ACTIONS = ("click", "double_click", "right_click", "invoke", "toggle", "select",
 METHODS = ("auto", "background", "input")
 # Below this share of changed pixels a screenshot pair counts as "nothing visible happened".
 CHANGE_EPSILON = 0.0002
+# What an agent may choose when it renders. Not engine or outside_audio: another TTS program and audio
+# from anywhere on disk are for a person at the CLI.
+RENDER_OPTIONS = ("pointer", "zoom", "keys", "gif", "narrate", "voice")
+LAYER_OPS = ("list", "add", "edit", "remove")
 
 
 class Service:
@@ -35,6 +41,8 @@ class Service:
         self.shots_dir = shots_dir or default_home() / "shots"
         self.recordings_dir = self.shots_dir.parent / "recordings"
         self._recordings: dict = {}  # lease id -> Recording
+        self._rendering: set[str] = set()  # recording names being rendered now
+        self._rendering_lock = threading.Lock()
 
     # -- discovery and lease -------------------------------------------------------------------
 
@@ -146,16 +154,15 @@ class Service:
 
         return self.gw.run(token, lease_id, "record_start", perform, read_only=True, params={"fps": fps})["result"]
 
-    def record_stop(self, token: str, lease_id: str, render: bool = True) -> dict:
+    def record_stop(self, token: str, lease_id: str) -> dict:
+        """Stop recording and save the action timeline. Rendering is separate (render_recording),
+        so it can run without holding up the desktop."""
         def perform(_t, p):
-            return self._finish_recording(lease_id, render)
+            return self._finish_recording(lease_id)
 
         return self.gw.run(token, lease_id, "record_stop", perform, read_only=True)["result"]
 
-    def _finish_recording(self, lease_id: str, render: bool) -> dict:
-        import json as _json
-
-        from overshoulder import render as rnd
+    def _finish_recording(self, lease_id: str) -> dict:
         from overshoulder.recorder import collect_actions
 
         rec = self._recordings.pop(lease_id, None)
@@ -163,18 +170,101 @@ class Service:
             raise ValueError("not recording")
         meta = rec.stop()
         actions = collect_actions(self.gw.log.path, lease_id, meta["start"], meta["end"])
-        (rec.dir / "actions.json").write_text(_json.dumps(actions, indent=1), encoding="utf-8")
-        out = {"recording": str(rec.dir), "frames": meta["frames"], "actions": len(actions),
-               "error": meta.get("error")}
-        if render and meta["frames"]:
-            out["tutorial"] = rnd.render(rec.dir, actions)
-        return out
+        (rec.dir / "actions.json").write_text(json.dumps(actions, indent=1), encoding="utf-8")
+        return {"recording": str(rec.dir), "frames": meta["frames"], "actions": len(actions),
+                "error": meta.get("error")}
 
     def stop_recordings_for(self, lease_id: str) -> dict | None:
-        """Called on release: finish (and render) a recording the agent forgot to stop."""
+        """Called on release: stop a recording the agent forgot to stop. The caller renders it."""
         if lease_id in self._recordings:
-            return self._finish_recording(lease_id, render=True)
+            return self._finish_recording(lease_id)
         return None
+
+    def redact(self, token: str, lease_id: str, ref: str, style: str = "blur") -> dict:
+        """While recording, hide an element in every frame of the tutorial: its rect, in the recorded
+        frame's pixels, goes into the recording's layer as a redaction."""
+        from overshoulder.layer import Layer
+
+        target = self._element_target(ref)
+
+        def perform(t: Target, p):
+            rec = self._recordings.get(lease_id)
+            if rec is None:
+                raise ValueError("not recording; call record_start first")
+            b = self._scope(lease_id).bounds()
+            r = t.rect
+            item = {"kind": "redact", "rect": [r.left - b.left, r.top - b.top, r.right - b.left, r.bottom - b.top],
+                    "style": style, "note": f"redacted by ref {ref}"}
+            return {"ok": True, "recording": rec.dir.name, "item": Layer.for_recording(rec.dir).add(item)}
+
+        return self.gw.run(token, lease_id, "redact", perform, target=target, read_only=True,
+                           params={"ref": ref, "style": style})["result"]
+
+    # -- tutorials (no desktop: callers run these without the desktop lock) ---------------------
+
+    def own_recording(self, token: str, recording: str) -> Path:
+        """One of the caller's recordings, by the name or path record_stop returned. Only its name is
+        used, so nothing outside the recordings directory can be reached."""
+        client = self.gw.registry.authenticate(token)
+        name = Path(str(recording or "")).name
+        rec = self.recordings_dir / name
+        live = next((r for r in self._recordings.values() if r.dir.name == name), None)
+        if live is not None:
+            owner = live.meta.get("client")
+        elif name and (rec / "meta.json").is_file():
+            owner = json.loads((rec / "meta.json").read_text(encoding="utf-8")).get("client")
+        else:
+            raise ValueError(f"no recording named {name!r}")
+        if owner != client.name:
+            raise GatewayError(f"recording {name!r} belongs to another client")
+        return rec
+
+    def annotate(self, token: str, recording: str, op: str = "list", item: dict | None = None,
+                 item_id: str | None = None, changes: dict | None = None) -> dict:
+        """Read or edit a recording's annotation layer. list also returns the steps of its last render
+        (ids, captions, targets in frame pixels) and the frame size, which is what items are placed by."""
+        from overshoulder.layer import Layer
+
+        if op not in LAYER_OPS:
+            raise ValueError(f"op must be one of {LAYER_OPS}")
+        rec = self.own_recording(token, recording)
+        layer = Layer.for_recording(rec)
+        if op == "list":
+            steps = rec / "tutorial" / "steps.json"
+            meta = rec / "meta.json"
+            return {"ok": True, "recording": rec.name, "items": layer.items(),
+                    "steps": json.loads(steps.read_text(encoding="utf-8")) if steps.is_file() else None,
+                    "size": json.loads(meta.read_text(encoding="utf-8"))["size"] if meta.is_file() else None}
+        if op == "add":
+            return {"ok": True, "item": layer.add(dict(item or {}))}
+        if not item_id:
+            raise ValueError(f"{op} needs an id")
+        if op == "edit":
+            return {"ok": True, "item": layer.edit(item_id, dict(changes or {}))}
+        return {"ok": True, "removed": layer.remove(item_id)}
+
+    def render_recording(self, token: str, recording: str, **options) -> dict:
+        """(Re)render one of the caller's stopped recordings with its layer."""
+        from overshoulder import render as rnd
+
+        bad = set(options) - set(RENDER_OPTIONS)
+        if bad:
+            raise ValueError(f"unknown render options {sorted(bad)}; allowed: {RENDER_OPTIONS}")
+        rec = self.own_recording(token, recording)
+        if any(r.dir.name == rec.name for r in self._recordings.values()):
+            raise ValueError("still recording; call record_stop first")
+        with self._rendering_lock:
+            if rec.name in self._rendering:
+                raise ValueError("this recording is already being rendered")
+            self._rendering.add(rec.name)
+        try:
+            out = rnd.render(rec, **options)
+        finally:
+            with self._rendering_lock:
+                self._rendering.discard(rec.name)
+        self.gw.log.write("render", client=self.gw.registry.authenticate(token).name, recording=rec.name,
+                          options=options, seconds=out.get("seconds"))
+        return {"ok": True, **out}
 
     # -- actions -------------------------------------------------------------------------------
 

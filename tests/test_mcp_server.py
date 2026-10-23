@@ -74,7 +74,38 @@ def call(port, token, tool, args=None):
 def test_lists_the_agent_tools(daemon):
     _, port, token = daemon
     names = {t.name for t in call(port, token, None).tools}
-    assert {"windows", "take_scope", "observe", "find", "act", "release_scope", "status"} <= names
+    assert {"windows", "take_scope", "observe", "find", "act", "release_scope", "status", "record_start",
+            "record_stop", "redact", "annotate", "render", "wait_for"} <= names
+
+
+@pytest.mark.skipif(not __import__("shutil").which("ffmpeg"), reason="needs ffmpeg on PATH")
+def test_annotate_and_render_run_while_another_caller_holds_the_desktop(daemon):
+    from tests.rechelpers import make_recording
+
+    d, port, token = daemon
+    rec = make_recording(d.svc.recordings_dir)
+    meta = json.loads((rec / "meta.json").read_text(encoding="utf-8"))
+    (rec / "meta.json").write_text(json.dumps({**meta, "client": "mcp-test"}), encoding="utf-8")
+    results = {}
+
+    def agent():
+        results["add"] = call(port, token, "annotate", {"recording": "rec", "op": "add",
+                                                        "item": {"kind": "redact", "rect": [20, 20, 120, 60]}})
+        results["render"] = call(port, token, "render", {"recording": "rec", "gif": False, "zoom": "off"})
+
+    with d._desk:  # someone else is driving the desktop for the whole time
+        t = threading.Thread(target=agent)
+        t.start()
+        t.join(timeout=60)
+        assert not t.is_alive(), "annotate/render waited for the desktop lock"
+    assert results["add"]["ok"] and results["add"]["item"]["id"] == "a1"
+    assert results["render"]["ok"] and results["render"]["steps"] == 2
+
+    other = d.gw.registry.add("someone-else")
+    out = call(port, other, "render", {"recording": "rec"})
+    assert out["ok"] is False and "another client" in out["error"]["message"]
+    out = call(port, token, "annotate", {"recording": "rec", "op": "add", "item": {"kind": "laser"}})
+    assert out["ok"] is False and out["error"]["code"] == "bad_request"
 
 
 def test_tool_call_without_token_is_refused(daemon):

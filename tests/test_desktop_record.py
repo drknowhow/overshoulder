@@ -37,13 +37,16 @@ def test_record_and_render_a_notepad_session(tmp_path):
         time.sleep(1.0)
         doc = s.find(token, lease, control_type="Document")[0]["ref"]
         s.act(token, lease, "click", ref=doc)
+        red = s.redact(token, lease, doc, style="pixelate")
+        assert red["item"]["kind"] == "redact" and red["item"]["rect"][2] > red["item"]["rect"][0], red
         s.act(token, lease, "type", text="Hello from an Overshoulder tutorial.")
         s.act(token, lease, "hotkey", combo="ctrl+s")
         time.sleep(1.5)
         out = s.record_stop(token, lease)
         assert out["frames"] > 30, out
-        tut = out["tutorial"]
-        assert tut["steps"] == 4 and tut["images"] == 4, tut  # activate, click, type, ctrl+s
+        tut = s.render_recording(token, out["recording"])
+        assert tut["steps"] == 4 and tut["images"] == 4, tut  # activate, click, type, ctrl+s (not redact)
+        assert s.annotate(token, out["recording"])["items"][0]["style"] == "pixelate"
         rec_dir = started["recording"]
         meta = json.loads((tmp_path / "x").parent.joinpath(rec_dir, "meta.json").read_text())
         assert meta["frames"] == out["frames"]

@@ -27,6 +27,7 @@ from overshoulder.driver import input as inp
 from overshoulder.gateway.clients import default_home
 from overshoulder.gateway.core import Gateway
 from overshoulder.gateway.errors import GatewayError, Paused, Unauthorized
+from overshoulder.narrate import NarrationError
 from overshoulder.scope import ScopeError
 from overshoulder.service import ACTIONS, Service
 from overshoulder.settings_page import Sessions
@@ -58,7 +59,10 @@ INSTRUCTIONS = """Overshoulder lets you see and operate desktop apps on this Win
    Pass method="background" to make sure an action never touches their input.
 7. release_scope() when done.
 8. If you need the person to do something (sign in, approve, finish a form), don't ask them to tell you
-   when they're done: wait_for() the window/control/file change that shows it is done."""
+   when they're done: wait_for() the window/control/file change that shows it is done.
+9. Tutorials: record_start, do the task, record_stop (renders it). While recording, redact(ref) hides a
+   secret in every frame. Afterwards annotate(recording) to add arrows, boxes, labels, redactions,
+   captions or narration text, then render(recording) again; both work after release_scope too."""
 
 
 def operator_key_path() -> Path:
@@ -106,15 +110,24 @@ class Daemon:
         return lease_id
 
     def call(self, fn, *args, **kwargs):
+        """Run fn holding the desktop: everything that reads or drives it goes one at a time."""
         with self._desk:
-            try:
-                return fn(*args, **kwargs)
-            except (GatewayError, ScopeError, inp.FocusLost, inp.KeysHeld, inp.InputError) as e:
-                code = getattr(e, "code", "error")
-                extra = e.to_dict() if isinstance(e, GatewayError) else {}
-                return {"ok": False, "error": {**extra, "code": code, "message": str(e)}}
-            except ValueError as e:
-                return {"ok": False, "error": {"code": "bad_request", "message": str(e)}}
+            return self.guard(fn, *args, **kwargs)
+
+    @staticmethod
+    def guard(fn, *args, **kwargs):
+        """Run fn, turning expected refusals into {"ok": false, "error": {...}}. Without the desktop
+        lock, this is for work that never touches the desktop (rendering, annotation files)."""
+        try:
+            return fn(*args, **kwargs)
+        except (GatewayError, ScopeError, inp.FocusLost, inp.KeysHeld, inp.InputError) as e:
+            code = getattr(e, "code", "error")
+            extra = e.to_dict() if isinstance(e, GatewayError) else {}
+            return {"ok": False, "error": {**extra, "code": code, "message": str(e)}}
+        except NarrationError as e:
+            return {"ok": False, "error": {"code": "narration_failed", "message": str(e)}}
+        except ValueError as e:
+            return {"ok": False, "error": {"code": "bad_request", "message": str(e)}}
 
     # -- MCP app -------------------------------------------------------------------------------
 
@@ -126,6 +139,14 @@ class Daemon:
             """Run fn(token) with the caller's token; auth failures come back as {"ok": false}."""
             headers = ctx.headers
             return await asyncio.to_thread(d.call, lambda: fn(d.token_from_headers(headers)))
+
+        async def offline(ctx: Context, fn):
+            """authed without the desktop lock, for work that never touches the desktop."""
+            headers = ctx.headers
+            return await asyncio.to_thread(d.guard, lambda: fn(d.token_from_headers(headers)))
+
+        def failed(out) -> bool:
+            return isinstance(out, dict) and out.get("ok") is False
 
         @mcp.tool()
         async def windows(ctx: Context, title_re: str | None = None, process: str | None = None) -> dict:
@@ -152,7 +173,11 @@ class Daemon:
                 out = d.svc.release(token, lease_id) if lease_id else {}
                 return {"ok": True, "released": bool(lease_id), **{k: v for k, v in out.items() if k != "released"}}
 
-            return await authed(ctx, go)
+            out = await authed(ctx, go)
+            rec = out.get("recording") if not failed(out) else None
+            if rec and rec.get("frames"):  # a recording left running: render it now the desktop is free
+                rec["tutorial"] = await offline(ctx, lambda token: d.svc.render_recording(token, rec["recording"]))
+            return out
 
         @mcp.tool()
         async def observe(ctx: Context, max_nodes: int = 300, only_named: bool = True,
@@ -199,10 +224,52 @@ class Daemon:
             return await authed(ctx, lambda token: d.svc.record_start(token, d.lease_for(token), fps, name))
 
         @mcp.tool()
-        async def record_stop(ctx: Context, render: bool = True) -> dict:
-            """Stop recording. With render=true, returns a tutorial MP4 with cursor, click ripples, numbered
-            step callouts and captions, plus one PNG per step and a steps.md."""
-            return await authed(ctx, lambda token: d.svc.record_stop(token, d.lease_for(token), render))
+        async def record_stop(ctx: Context, render: bool = True, zoom: str = "auto", keys: bool = True,
+                              gif: bool = True, narrate: bool = False, voice: str | None = None) -> dict:
+            """Stop recording. With render=true, also returns a tutorial: an MP4 with a pointer, click
+            ripples, numbered step callouts, captions, a zoom onto each step's target (zoom="off" to
+            stop it) and keystroke captions (keys), one PNG per step, steps.md, steps.json and
+            tutorial.gif (gif). narrate=true speaks each step with the Windows voice (voice: part of a
+            voice's name, e.g. "Zira"); the video waits for each line. Rendering runs after the desktop
+            is free, so other agents are not held up."""
+            out = await authed(ctx, lambda token: d.svc.record_stop(token, d.lease_for(token)))
+            if render and not failed(out) and out.get("frames"):
+                out["tutorial"] = await offline(ctx, lambda token: d.svc.render_recording(
+                    token, out["recording"], zoom=zoom, keys=keys, gif=gif, narrate=narrate, voice=voice))
+            return out
+
+        @mcp.tool()
+        async def redact(ctx: Context, ref: str, style: str = "blur") -> dict:
+            """While recording, hide an element (ref from observe/find) in every frame of the tutorial and
+            its stills and GIF: a password, an email address, an account number, anything viewers should
+            not see. style: blur, pixelate or solid. It becomes a redact item in the recording's layer."""
+            return await authed(ctx, lambda token: d.svc.redact(token, d.lease_for(token), ref, style))
+
+        @mcp.tool()
+        async def annotate(ctx: Context, recording: str, op: str = "list", item: dict | None = None,
+                           id: str | None = None, changes: dict | None = None) -> dict:
+            """Read or edit the annotation layer of one of your recordings (the name or path record_stop
+            returned); render() then applies it. op: "list" (the items, the steps of the last render with
+            their ids, captions and targets, and the frame size), "add" (item=), "edit" (id=, changes=;
+            a null value removes a field) or "remove" (id=).
+            Item kinds: box {rect, text?, color?}, arrow {tail, head}, text {at, text, size?},
+            badge {at, text?}, spotlight {rect}, redact {rect, style: blur|pixelate|solid},
+            step {step, caption?, hidden?, narration?, audio?}, cut {t0, t1}, crop {rect}.
+            Positions are pixels of the recorded frame: rect [left, top, right, bottom], points [x, y].
+            Show an item during one step (step: an id from list's steps), between t0 and t1 seconds of
+            the recording, or, with neither, the whole time. A step item changes that step: a new
+            caption, hidden=true to drop it, narration text to speak instead of the caption ("" for
+            silence), or audio: a sound file inside the recording directory."""
+            return await offline(ctx, lambda token: d.svc.annotate(token, recording, op, item, id, changes))
+
+        @mcp.tool()
+        async def render(ctx: Context, recording: str, zoom: str = "auto", keys: bool = True, gif: bool = True,
+                         narrate: bool = False, voice: str | None = None, pointer: str = "agent") -> dict:
+            """Render one of your stopped recordings again, with its annotation layer: after annotate(), or
+            to change zoom, keys, gif or narration (see record_stop). pointer: "agent" (your pointer,
+            gliding to each step), "real" (the recorded cursor) or "none". Needs no scope."""
+            return await offline(ctx, lambda token: d.svc.render_recording(
+                token, recording, zoom=zoom, keys=keys, gif=gif, narrate=narrate, voice=voice, pointer=pointer))
 
         @mcp.tool()
         async def screenshot(ctx: Context) -> list:
@@ -227,14 +294,13 @@ class Daemon:
             def go(token):
                 client = d.gw.registry.authenticate(token)
                 try:
-                    out = wait(conditions, st.load(), timeout_s)
+                    out = wait(conditions, st.load(), timeout_s, lock=d._desk)  # locked per look, not per wait
                 except WaitError as e:
                     return {"ok": False, "error": {"code": e.code, "message": str(e)}}
                 d.gw.log.write("wait", client=client.name, conditions=len(conditions), **out)
                 return {"ok": True, **out}
 
-            headers = ctx.headers
-            return await asyncio.to_thread(lambda: d.call(lambda: go(d.token_from_headers(headers))))
+            return await offline(ctx, go)
 
         @mcp.tool()
         async def status(ctx: Context) -> dict:

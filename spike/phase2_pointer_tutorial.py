@@ -53,7 +53,8 @@ def main(evidence: bool) -> None:
             s.act(token, lease, "invoke", ref=ref, method="background")
             time.sleep(1.2)
         time.sleep(1.0)
-        out = s.record_stop(token, lease, render=True)
+        out = s.record_stop(token, lease)
+        out["tutorial"] = s.render_recording(token, out["recording"])
         shown = s.read(token, lease, s.find(token, lease, auto_id="CalculatorResults")[0]["ref"])["name"]
         result = {
             "what": "Calculator 7 x 6 = in input mode 'never', every action method='background', with a sentinel "
