@@ -95,14 +95,20 @@ class FakeNtfy:
     def close(self):
         self.server.shutdown()
 
-    def wait_question(self, topic, timeout=5.0):
+    def wait_question(self, topic, timeout=5.0, nth=1):
+        """The nth question published on the topic (the confirmation after an Allow is the second)."""
         end = time.time() + timeout
         while time.time() < end:
             got = [m for m in self.messages if m["topic"] == topic]
-            if got:
-                return got[-1]
+            if len(got) >= nth:
+                return got[nth - 1]
             time.sleep(0.05)
-        raise AssertionError("no question was published")
+        raise AssertionError(f"question {nth} was not published")
+
+    def allow_and_confirm(self, topic):
+        """Allow on the question, then Confirm on the confirmation; returns both posted bodies."""
+        allow = self.tap(self.wait_question(topic), "Allow")
+        return allow, self.tap(self.wait_question(topic, nth=2), "Confirm")
 
     def tap(self, question, label):
         """What the ntfy app does for an http action button: POST its body to its URL."""
@@ -140,21 +146,59 @@ def ask_async(channel, q):
 
 # -- ntfy ---------------------------------------------------------------------------------------------
 
-def test_an_allow_tapped_on_the_phone_approves_and_the_notification_is_removed(ntfy):
+def test_allow_then_confirm_on_the_phone_approves_and_both_notifications_are_removed(ntfy):
     s = ntfy_settings(ntfy.base)
     ch = phone.Ntfy(s)
     q = phone.make_question(REQUEST, s, 10)
     t, out, _ = ask_async(ch, q)
     question = ntfy.wait_question(s.ntfy_topic)
     ntfy.tap(question, "Allow")
+    confirm = ntfy.wait_question(s.ntfy_topic, nth=2)
+    assert t.is_alive()  # Allow alone has approved nothing
+    ntfy.tap(confirm, "Confirm")
     t.join(5)
     assert out["answer"] is True
     h = question["headers"]
     assert h["x-sequence-id"] == q.id and h["x-title"] == phone.TITLE
     assert question["message"].splitlines()[:2] == ["click on 'Send'", "in mail.exe"]
-    assert "expires " in question["message"]
-    assert f"/{s.ntfy_topic}/{q.id}" in ntfy.deleted  # taken off the phone once answered
-    assert s.answer_key not in json.dumps(question)  # the key never leaves the PC
+    assert "expires " in question["message"] and "Allow asks you to confirm" in question["message"]
+    second = confirm["headers"]["x-sequence-id"]
+    assert second != q.id and confirm["headers"]["x-title"] == phone.CONFIRM_TITLE
+    assert confirm["message"].splitlines()[:2] == ["Tap Confirm to allow:", "click on 'Send'"]
+    assert [a.split(", ")[1] for a in confirm["headers"]["x-actions"].split("; ")] == ["Cancel", "Confirm"]
+    assert {f"/{s.ntfy_topic}/{q.id}", f"/{s.ntfy_topic}/{second}"} <= set(ntfy.deleted)  # both taken off the phone
+    assert s.answer_key not in json.dumps([question, confirm])  # the key never leaves the PC
+
+
+def test_an_allow_left_unconfirmed_approves_nothing(ntfy):
+    s = ntfy_settings(ntfy.base)
+    q = phone.make_question(REQUEST, s, 1.5)
+    t, out, _ = ask_async(phone.Ntfy(s), q)
+    ntfy.tap(ntfy.wait_question(s.ntfy_topic), "Allow")
+    ntfy.wait_question(s.ntfy_topic, nth=2)
+    t.join(5)
+    assert out["answer"] is None  # expired unconfirmed, which the chain counts as No
+
+
+def test_cancel_on_the_confirmation_refuses(ntfy):
+    s = ntfy_settings(ntfy.base)
+    q = phone.make_question(REQUEST, s, 10)
+    t, out, _ = ask_async(phone.Ntfy(s), q)
+    ntfy.tap(ntfy.wait_question(s.ntfy_topic), "Allow")
+    ntfy.tap(ntfy.wait_question(s.ntfy_topic, nth=2), "Cancel")
+    t.join(5)
+    assert out["answer"] is False
+
+
+def test_the_allow_posted_again_does_not_count_as_the_confirmation(ntfy):
+    s = ntfy_settings(ntfy.base)
+    q = phone.make_question(REQUEST, s, 1.5)
+    t, out, _ = ask_async(phone.Ntfy(s), q)
+    allow = ntfy.tap(ntfy.wait_question(s.ntfy_topic), "Allow")
+    ntfy.wait_question(s.ntfy_topic, nth=2)
+    ntfy.post(s.ntfy_reply_topic, allow)  # a second tap that lands on the first question's Allow again
+    t.join(5)
+    assert out["answer"] is None
 
 
 def test_a_deny_tapped_on_the_phone_refuses(ntfy):
@@ -164,6 +208,7 @@ def test_a_deny_tapped_on_the_phone_refuses(ntfy):
     ntfy.tap(ntfy.wait_question(s.ntfy_topic), "Deny")
     t.join(5)
     assert out["answer"] is False
+    assert len([m for m in ntfy.messages if m["topic"] == s.ntfy_topic]) == 1  # no confirmation after a Deny
 
 
 def test_a_forged_reply_is_ignored_and_the_question_times_out(ntfy):
@@ -183,12 +228,13 @@ def test_a_replayed_allow_from_an_earlier_question_is_ignored(ntfy):
     s = ntfy_settings(ntfy.base)
     first = phone.make_question(REQUEST, s, 10)
     t, out, _ = ask_async(phone.Ntfy(s), first)
-    allow = ntfy.tap(ntfy.wait_question(s.ntfy_topic), "Allow")
+    allow, confirm = ntfy.allow_and_confirm(s.ntfy_topic)
     t.join(5)
     assert out["answer"] is True
     second = phone.make_question(REQUEST, s, 1.5)
     t, out, _ = ask_async(phone.Ntfy(s), second)
-    ntfy.post(s.ntfy_reply_topic, allow)  # the same signed Allow, sent again
+    ntfy.post(s.ntfy_reply_topic, allow)  # the same signed Allow and Confirm, sent again
+    ntfy.post(s.ntfy_reply_topic, confirm)
     t.join(5)
     assert out["answer"] is None
 
@@ -200,7 +246,7 @@ def test_answers_are_read_by_polling_when_the_stream_is_unavailable():
         q = phone.make_question(REQUEST, s, 10)
         ch = phone.Ntfy(s, poll_s=0.2)
         t, out, _ = ask_async(ch, q)
-        f.tap(f.wait_question(s.ntfy_topic), "Allow")
+        f.allow_and_confirm(s.ntfy_topic)
         t.join(5)
         assert out["answer"] is True
     finally:
@@ -380,7 +426,7 @@ def test_settings_approver_asks_the_desk_and_the_phone_channels_switched_on(monk
     result = {}
     t = threading.Thread(target=lambda: result.update(ok=a.approve(dict(REQUEST))), daemon=True)
     t.start()
-    ntfy.tap(ntfy.wait_question(s.ntfy_topic), "Allow")
+    ntfy.allow_and_confirm(s.ntfy_topic)
     t.join(5)
     assert result["ok"] is True and a.last["by"] == "ntfy" and seen == ["your phone (ntfy)"]
 

@@ -199,10 +199,13 @@ answered, as `approved_by`.
 
 **ntfy.** Install the [ntfy](https://ntfy.sh) app and subscribe to the topic the settings page shows,
 on the same server: ntfy.sh, or your own with an access token if it needs one. A question arrives as
-a notification with Allow and Deny buttons. A button posts the answer to a second, secret topic. The
-answer names that question's one-time id and carries an HMAC under a key that never leaves your PC,
-so a forged answer, or a copy of an answer to an earlier question, is ignored. When the question is
-answered anywhere or expires, its notification is deleted. Anyone who knows the topics can read the
+a notification with Allow and Deny buttons. Allow then asks again: a second notification has Cancel
+where Allow was and Confirm beside it, and only Confirm approves. In testing, phone taps sometimes
+landed on the other button, so one stray tap can refuse an action but cannot approve one. A button
+posts the answer to a second, secret topic. The answer names that question's one-time id and carries
+an HMAC under a key that never leaves your PC, so a forged answer, or a copy of an answer to an
+earlier question, is ignored. When a question is answered anywhere or expires, its notification is
+deleted. Anyone who knows the topics can read the
 questions, so keep them to yourself; "Make new topics" replaces them.
 
 **Webhook.** For your own server or another app. Each question is POSTed to the webhook URL:

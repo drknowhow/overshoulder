@@ -8,8 +8,11 @@ screenshot only when the person turns them on.
 
 ntfy: the question goes to a topic the person subscribes to in the ntfy app, with Allow and Deny
 buttons. Each button POSTs `<nonce>.<yes|no>.<mac>` to a second, secret reply topic, which this PC
-reads as a stream. When the question is answered anywhere or expires, its notification is deleted
-from the phone (ntfy's sequence IDs; servers too old for them ignore it).
+reads as a stream. Allow does not count yet: a second notification with its own nonce asks the person
+to confirm, with Cancel where Allow was, and only Confirm approves. A tap that lands on the wrong
+button can then refuse an action but not approve one. When a question is answered anywhere or
+expires, its notification is deleted from the phone (ntfy's sequence IDs; servers too old for them
+ignore it).
 
 Webhook: the question is POSTed as JSON, signed with `X-Overshoulder-Signature: sha256=<hex>` over the
 body. The receiver answers in that response or later at the poll URL (GET `?id=<nonce>`), as JSON
@@ -34,7 +37,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
 from overshoulder.gateway.clients import default_home
@@ -43,6 +46,7 @@ log = logging.getLogger(__name__)
 
 NTFY_DEFAULT = "https://ntfy.sh"
 TITLE = "Overshoulder: allow this?"
+CONFIRM_TITLE = "Overshoulder: confirm Allow?"
 ANSWERS = {"yes": True, "no": False}
 
 
@@ -224,16 +228,17 @@ class Ntfy:
             return None
         return ANSWERS[parts[1]]
 
-    def actions(self, nonce: str) -> str:
+    def actions(self, nonce: str, confirm: bool = False) -> str:
         reply = self._url(self.s.ntfy_reply_topic)
         auth = f", headers.Authorization=Bearer {self.s.ntfy_token}" if self.s.ntfy_token else ""
+        buttons = (("Cancel", "no"), ("Confirm", "yes")) if confirm else (("Allow", "yes"), ("Deny", "no"))
         return "; ".join(f"http, {label}, {reply}, method=POST, body={self.answer_body(nonce, a)}, clear=true{auth}"
-                         for label, a in (("Allow", "yes"), ("Deny", "no")))
+                         for label, a in buttons)
 
-    def publish(self, q: Question) -> None:
-        headers = {"X-Title": TITLE, "X-Priority": "high", "X-Tags": "warning",
-                   "X-Actions": self.actions(q.id), "X-Sequence-ID": q.id, **self._auth()}
-        text = phone_text(q)
+    def publish(self, q: Question, confirm: bool = False) -> None:
+        headers = {"X-Title": CONFIRM_TITLE if confirm else TITLE, "X-Priority": "high", "X-Tags": "warning",
+                   "X-Actions": self.actions(q.id, confirm), "X-Sequence-ID": q.id, **self._auth()}
+        text = f"Tap Confirm to allow:\n{phone_text(q)}" if confirm else f"{phone_text(q)}\nAllow asks you to confirm"
         if q.screenshot:
             headers.update({"X-Filename": "overshoulder.png", "X-Message": _header_text(text)})
             status, body = _http("PUT", self._url(self.s.ntfy_topic), q.screenshot, headers)
@@ -306,6 +311,14 @@ class Ntfy:
         return None
 
     def ask(self, q: Question, stop: threading.Event) -> bool | None:
+        """Allow, then Confirm on a second question with its own nonce, approves. Deny or Cancel refuses;
+        an Allow left unconfirmed until the question expires is no answer."""
+        answer = self._ask_one(q, stop)
+        if answer is not True:
+            return answer
+        return self._ask_one(replace(q, id=secrets.token_urlsafe(16), screenshot=None), stop, confirm=True)
+
+    def _ask_one(self, q: Question, stop: threading.Event, confirm: bool = False) -> bool | None:
         since = int(time.time()) - 2
         got: queue.Queue = queue.Queue()
         try:
@@ -316,7 +329,7 @@ class Ntfy:
         threading.Thread(target=self._read, args=(resp, q.id, got), daemon=True).start()
         try:
             try:
-                self.publish(q)
+                self.publish(q, confirm)
             except (OSError, ChannelError) as e:
                 self.last_error = str(e)
                 return None
