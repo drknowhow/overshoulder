@@ -13,6 +13,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # The renderer's tests need ffmpeg and skip without it; the runner image has none.
+      - run: choco install ffmpeg -y --no-progress
       - run: python -m pip install -e ".[dev]"
       - run: python -m ruff check .
-      - run: python -m pytest -q
+      - run: python -m pytest -q -rs
