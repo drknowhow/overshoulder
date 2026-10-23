@@ -43,7 +43,7 @@ INSTRUCTIONS = """Overshoulder lets you see and operate desktop apps on this Win
 3. act(action, ref=... | x=..,y=..) runs one action and verifies it. Prefer refs and invoke/set_value
    over coordinates. Actions: """ + ", ".join(ACTIONS) + """.
 4. Typing goes to the focused control in your scope; pass ref to focus a control first.
-5. Refusals are deliberate (out_of_scope, denied, approval_denied, paused, lease_revoked,
+5. Refusals are deliberate (out_of_scope, denied, approval_denied, narrowed, paused, lease_revoked,
    needs_real_input, person_active): observe again or stop; never try to work around them. While the
    person uses the mouse or keyboard, background actions go on, but an action that needs their real
    input waits (up to ~20 s) for them to stop; person_active or paused after that means they are still
@@ -59,6 +59,9 @@ INSTRUCTIONS = """Overshoulder lets you see and operate desktop apps on this Win
    that step and wait_for() it. person_active means they are using the PC right now: retry shortly.
    Pass method="background" to make sure an action never touches their input.
 7. release_scope() when done.
+   To do less than your scope allows, take it with read_only, no_typing or deny_processes; the person
+   may also have set such limits for you (take_scope and status() show them). A narrowed refusal names
+   the limit and who set it.
 8. If you need the person to do something (sign in, approve, finish a form), don't ask them to tell you
    when they're done: wait_for() the window/control/file change that shows it is done.
 9. Tutorials: record_start, do the task, record_stop (renders it). While recording, redact(ref) hides a
@@ -155,11 +158,20 @@ class Daemon:
             return await authed(ctx, lambda token: {"windows": d.svc.windows(token, title_re, process)})
 
         @mcp.tool()
-        async def take_scope(ctx: Context, scope: str, ttl_s: float = 120, log_text: bool = False) -> dict:
+        async def take_scope(ctx: Context, scope: str, ttl_s: float = 120, log_text: bool = False,
+                             read_only: bool = False, no_typing: bool = False,
+                             deny_processes: list[str] | None = None) -> dict:
             """Lease a scope: "window:<hwnd>", "screen:<n>" or "screen:all". log_text records typed
-            text in the action log (needed for tutorial captions; off by default)."""
+            text in the action log (needed for tutorial captions; off by default). To narrow the
+            session: read_only refuses every act (observe, find, screenshot and recording still work),
+            no_typing refuses type/set_value/hotkey, deny_processes (e.g. ["chrome.exe"]) takes those
+            programs' windows out of the scope and blacks them out of screen screenshots and recordings.
+            Taking a scope again while you hold one keeps the limits you had. The result's limits are
+            all that apply, including any the person set for you."""
+            limits = {"read_only": read_only, "no_typing": no_typing, "deny_processes": deny_processes or []}
+
             def go(token):
-                out = d.svc.acquire(token, scope, ttl_s, log_text=log_text)
+                out = d.svc.acquire(token, scope, ttl_s, log_text=log_text, limits=limits)
                 d._leases[d.gw.registry.authenticate(token).name] = out["lease_id"]
                 return {"ok": True, **{k: v for k, v in out.items() if k != "lease_id"}}
 
@@ -294,8 +306,10 @@ class Daemon:
 
             def go(token):
                 client = d.gw.registry.authenticate(token)
+                hidden = d.gw.hidden_for(client.name).deny_processes
                 try:
-                    out = wait(conditions, st.load(), timeout_s, lock=d._desk)  # locked per look, not per wait
+                    # locked per look, not per wait
+                    out = wait(conditions, st.load(), timeout_s, lock=d._desk, hidden=hidden)
                 except WaitError as e:
                     return {"ok": False, "error": {"code": e.code, "message": str(e)}}
                 d.gw.log.write("wait", client=client.name, conditions=len(conditions), **out)

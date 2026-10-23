@@ -112,6 +112,18 @@ refusal is logged.
 - **Approvals.** Clicking a control named like *Send*, *Delete*, *Buy*, *Pay* or *Install*, pressing
   Delete or Alt+F4, or pressing Enter in a single-line field all need a one-time Yes from the person
   at the desk. The prompt defaults to No after 60 seconds.
+- **Narrowing.** A session can do less than its scope allows. `read_only` refuses every action but
+  observing, screenshots and recording; `no_typing` refuses typing, `set_value` and hotkeys;
+  `deny_processes` (for example `chrome.exe`) takes a program's windows out of the scope, so agents
+  can't act on them or see them in `windows()`, `observe` or `wait_for`, and screen screenshots and
+  recordings show them as black boxes. An agent can ask for these in `take_scope`. You can set them
+  for a client, and its agent can't lift them:
+
+  ```bash
+  overshoulder client limit claude-code --no-typing --deny-process chrome.exe
+  ```
+
+  A refusal comes back as `narrowed`, with the limit and who set it.
 - **The person always wins.** While you use the mouse or keyboard, agents keep to background work,
   and anything that needs your real input waits until you've been idle for a few seconds. Touching
   them during such an action stops it. **Ctrl+Alt+P** revokes the lease and pauses until you run
@@ -239,7 +251,8 @@ redacts, annotates and narrates a Notepad tutorial on its own, working in the ba
   does not. The new Notepad's menus (XAML flyouts) do not open in the background.
 - Apps that hide their controls from UI Automation (canvases, games) can only be driven by
   coordinates. Verification for them is a screenshot difference.
-- Screen-scope recordings use desktop capture, so anything on that screen is recorded.
+- Screen-scope recordings use desktop capture, so anything on that screen is recorded, except the
+  windows of programs the session is denied.
 - A redaction is a fixed rectangle of the recorded frame. If the control it covers scrolls or moves
   inside the window, the redaction stays where the control was.
 - Narration uses the voices System.Speech can see (`overshoulder voices` lists them; an English

@@ -36,6 +36,7 @@ from overshoulder.gateway.errors import (
     VerifyFailed,
 )
 from overshoulder.gateway.lease import DEFAULT_TTL_S, HUMAN_PAUSE, LeaseManager
+from overshoulder.gateway.limits import PROCESS_NAMES, LeaseLimits, Limits, NarrowedScope
 from overshoulder.gateway.log import ActionLog
 
 KEYBOARD_ACTIONS = frozenset({"type", "hotkey"})
@@ -185,6 +186,10 @@ class Checks:
     restore_desk: Callable[[Any], dict] = _restore_desk
     person_watch: Callable[[], Any] = _person_watch
     left_open: Callable[[Any, int], bool] = _left_open
+    # Narrowing: the program names a window belongs to, a pid's program, and the window under a point.
+    window_processes: Callable[[int], list[str]] = PROCESS_NAMES.of_window
+    pid_process: Callable[[int], str] = PROCESS_NAMES.of_pid
+    window_under: Callable[[int, int], int] = w.window_at
 
     def __post_init__(self):
         if self.foreground_in_scope is None:
@@ -284,26 +289,54 @@ class Gateway:
     # -- lease lifecycle -----------------------------------------------------------------------
 
     def acquire(self, token: str, scope_spec: str, ttl_s: float = DEFAULT_TTL_S,
-                log_text: bool = False) -> dict:
-        """log_text=True records typed text in the action log (for tutorial captions); off by default."""
+                log_text: bool = False, limits: dict | Limits | None = None) -> dict:
+        """log_text=True records typed text in the action log (for tutorial captions); off by default.
+        limits: the caller's own narrowing (gateway.limits). Re-scoping on the lease it already holds keeps
+        the limits it had and adds these; the person's standing limits for the client always apply."""
         client = None
         try:
             client = self.registry.authenticate(token)
-            scope = self.scope_factory(scope_spec)
+            session = limits if isinstance(limits, Limits) else Limits.from_dict(limits)
+            held = self.leases.active()
+            if held is not None and held.client == client.name:
+                session = held.meta.get("session_limits", Limits()).merge(session)
+            inner = self.scope_factory(scope_spec)
+            lim = self.lease_limits(client.name, session)
+            binding = getattr(inner, "binding", None)
+            if binding is not None:
+                for proc in [*self.checks.window_processes(binding.hwnd), self.checks.pid_process(binding.pid)]:
+                    lim.check_process(proc, "that window")
+            scope = NarrowedScope(inner, lambda n=client.name, s=session: self.lease_limits(n, s),
+                                  window_processes=self.checks.window_processes)
             grant = self.registry.grant_for(client, scope.kind)
             if grant == "approve":
+                eff = lim.effective
                 policy.require_approval(self.approver, {
                     "kind": "lease", "client": client.name, "scope": scope.describe(),
-                    "reason": f"{client.name} wants {scope.kind} scope {scope.describe()}"})
+                    "reason": f"{client.name} wants {scope.kind} scope {scope.describe()}"
+                              + (f" (limits: {eff.describe()})" if eff else "")})
             lease = self.leases.acquire(client.name, scope, ttl_s)
             lease.meta["log_text"] = bool(log_text)
+            lease.meta["session_limits"] = session
         except GatewayError as e:
             self.log.write("lease_refused", client=getattr(client, "name", None), scope=scope_spec,
                            error=e.to_dict())
             raise
         self.log.write("lease_acquired", client=client.name, lease=lease.id, scope=scope.describe(),
-                       ttl_s=lease.ttl_s, log_text=bool(log_text))
-        return {"lease_id": lease.id, "scope": scope.describe(), "ttl_s": lease.ttl_s}
+                       ttl_s=lease.ttl_s, log_text=bool(log_text), limits=lim.to_dict())
+        return {"lease_id": lease.id, "scope": scope.describe(), "ttl_s": lease.ttl_s, "limits": lim.to_dict()}
+
+    def hidden_for(self, client_name: str) -> Limits:
+        """Every limit on what this client may see now: the person's, plus its lease's own if it holds one.
+        For the calls that need no lease (windows, wait_for)."""
+        lease = self.leases.active()
+        session = lease.meta.get("session_limits", Limits()) if lease and lease.client == client_name else Limits()
+        return self.lease_limits(client_name, session).effective
+
+    def lease_limits(self, client_name: str, session: Limits) -> LeaseLimits:
+        """The person's standing limits for the client, read now, with the session's own."""
+        c = self.registry.get(client_name)
+        return LeaseLimits(self.registry.limits_for(c) if c else Limits(), session)
 
     def heartbeat(self, token: str, lease_id: str) -> dict:
         client = self.registry.authenticate(token)
@@ -318,6 +351,10 @@ class Gateway:
 
     def status(self) -> dict:
         out = {**self.leases.status(), "input_mode": self.settings_source().input_mode}
+        lease = self.leases.active()
+        if out.get("active") and lease is not None:
+            session = lease.meta.get("session_limits", Limits())
+            out["active"]["limits"] = self.lease_limits(lease.client, session).to_dict()
         pointer = self.pointer
         active = out.get("active")
         out["pointer"] = pointer if active and pointer and pointer["client"] == active["client"] else None
@@ -372,8 +409,12 @@ class Gateway:
             scope_desc = scope.describe()
             scope.check_alive()
             self.checks.desktop()
+            lim = self.lease_limits(client.name, lease.meta.get("session_limits", Limits()))
+            if not read_only:
+                lim.check_action(action)
 
             if target is not None:
+                self._check_target_processes(lim, target)
                 target = self._bind(scope, target, action)
                 if target.pid:
                     self.checks.not_elevated(target.pid)
@@ -389,6 +430,8 @@ class Gateway:
                 if action in KEYBOARD_ACTIONS and target is None:
                     # The scope's own focus, which is where background keys go.
                     focus_info = self.checks.scope_focus(scope)
+                    if focus_info and focus_info.get("pid"):
+                        lim.check_process(self.checks.pid_process(focus_info["pid"]), "the focused control")
                     if action == "type":
                         policy.require_not_password("type", None if focus_info is None else focus_info["password"])
                 focused_type = target.control_type if target is not None else (focus_info or {}).get("type", "")
@@ -441,6 +484,21 @@ class Gateway:
             # The action already happened; report the log failure instead of inviting a retry.
             out["log_error"] = str(e)
         return out
+
+    def _check_target_processes(self, lim: LeaseLimits, target: Target) -> None:
+        """deny_processes, before binding, so the refusal names the limit rather than the scope."""
+        if not lim.effective.deny_processes:
+            return
+        procs = []
+        if target.pid:
+            procs.append(self.checks.pid_process(target.pid))
+        hwnd = target.hwnd
+        if hwnd is None and target.kind == "point":
+            hwnd = self.checks.window_under(*target.point())
+        if hwnd:
+            procs += self.checks.window_processes(self.checks.root_of(hwnd) or hwnd)
+        for proc in procs:
+            lim.check_process(proc, "the target")
 
     def _check_background(self, lease_id: str, client: str, scope) -> None:
         """Stop check between steps of background work. A panic, revoke or operator pause stops it. The

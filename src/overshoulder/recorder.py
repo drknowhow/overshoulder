@@ -2,7 +2,8 @@
 
 Window scopes are captured with PrintWindow(PW_RENDERFULLCONTENT): only the window's own pixels,
 even when something covers it, so nothing outside the scope can leak into a recording. Screen scopes
-use ffmpeg gdigrab on the monitor rect. The cursor is not captured; its position is sampled every
+grab the monitor rect, with the windows of any program the session may not see blacked out before the
+frame reaches the encoder (gateway.limits). The cursor is not captured; its position is sampled every
 frame into frames.jsonl. The renderer draws every annotation later, and by default it draws the
 agent's own pointer from the action timeline, since in background mode the real cursor is the
 person's.
@@ -26,6 +27,7 @@ from pathlib import Path
 
 from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
+from overshoulder.gateway.limits import black_out, hidden_rects
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
@@ -126,25 +128,29 @@ class Recording:
         b = self.scope.bounds()
         self.size = (b.width // 2 * 2, b.height // 2 * 2)
         self.meta.update({"size": list(self.size), "start": time.time()})
-        if self.scope.kind == "window":
-            self._proc = subprocess.Popen(
-                [_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgra",
-                 "-s", f"{self.size[0]}x{self.size[1]}", "-r", str(self.fps), "-i", "-", "-c:v", "libx264",
-                 "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(self.dir / "video.mp4")],
-                stdin=subprocess.PIPE, creationflags=NO_WINDOW)
-        else:
-            self._proc = subprocess.Popen(
-                [_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-f", "gdigrab", "-framerate", str(self.fps),
-                 "-draw_mouse", "0", "-offset_x", str(b.left), "-offset_y", str(b.top),
-                 "-video_size", f"{self.size[0]}x{self.size[1]}", "-i", "desktop", "-c:v", "libx264",
-                 "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(self.dir / "video.mp4")],
-                stdin=subprocess.PIPE, creationflags=NO_WINDOW)
+        # Frames are piped in, window or screen: the recorder sees every frame before the encoder does.
+        self._origin = Rect(b.left, b.top, b.left + self.size[0], b.top + self.size[1])
+        pix = "bgra" if self.scope.kind == "window" else "rgb24"
+        self._proc = subprocess.Popen(
+            [_ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", pix,
+             "-s", f"{self.size[0]}x{self.size[1]}", "-r", str(self.fps), "-i", "-", "-c:v", "libx264",
+             "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(self.dir / "video.mp4")],
+            stdin=subprocess.PIPE, creationflags=NO_WINDOW)
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
     def _loop(self) -> None:
+        import mss
         period = 1.0 / self.fps
         t0 = time.time()
+        grabber = None if self.scope.kind == "window" else (mss.MSS() if hasattr(mss, "MSS") else mss.mss())
+        try:
+            self._frames(period, t0, grabber)
+        finally:
+            if grabber is not None:
+                grabber.close()
+
+    def _frames(self, period: float, t0: float, grabber) -> None:
         with open(self.dir / "frames.jsonl", "w", encoding="utf-8") as track:
             i = 0
             while not self._stop.is_set():
@@ -160,7 +166,8 @@ class Recording:
                 except Exception as e:  # scope went stale: stop recording, keep what we have
                     self.error = f"scope ended: {e}"
                     break
-                if self.scope.kind == "window" and not self._write_window_frame(b):
+                wrote = self._write_window_frame(b) if grabber is None else self._write_screen_frame(grabber)
+                if not wrote:
                     i += 1
                     continue
                 track.write(json.dumps({"i": i, "t": round(time.time() - t0, 3),
@@ -181,6 +188,20 @@ class Recording:
             canvas = Image.new("RGBA", self.size, (0, 0, 0, 255))
             canvas.paste(img.crop((0, 0, min(width, self.size[0]), min(height, self.size[1]))), (0, 0))
             data = canvas.tobytes("raw", "BGRA")
+        return self._feed(data)
+
+    def _write_screen_frame(self, grabber) -> bool:
+        """The monitor rect, with denied programs' windows painted black (gateway.limits)."""
+        o = self._origin
+        shot = grabber.grab({"left": o.left, "top": o.top, "width": o.width, "height": o.height})
+        rects = hidden_rects(self.scope)
+        if not rects:
+            return self._feed(shot.rgb)
+        from PIL import Image
+        img = black_out(Image.frombytes("RGB", shot.size, shot.rgb), o, rects)
+        return self._feed(img.tobytes())
+
+    def _feed(self, data: bytes) -> bool:
         try:
             self._proc.stdin.write(data)
         except (BrokenPipeError, OSError) as e:
@@ -195,10 +216,7 @@ class Recording:
             self._thread.join(timeout=10)
         if self._proc:
             try:
-                if self.scope.kind == "window":
-                    self._proc.stdin.close()
-                else:
-                    self._proc.communicate(b"q", timeout=20)
+                self._proc.stdin.close()
                 self._proc.wait(timeout=60)
             except (subprocess.TimeoutExpired, OSError):
                 self._proc.kill()

@@ -50,6 +50,20 @@ class Denied(GatewayError):
     code = "denied"
 
 
+class Narrowed(GatewayError):
+    """A limit on this session refused the action: read_only, no_typing or deny_processes. set_by says
+    whether the caller asked for it in take_scope ("session") or the person set it ("person")."""
+    code = "narrowed"
+
+    def __init__(self, message: str, limit: str, set_by: str):
+        super().__init__(message)
+        self.limit = limit
+        self.set_by = set_by
+
+    def to_dict(self) -> dict:
+        return {**super().to_dict(), "limit": self.limit, "set_by": self.set_by}
+
+
 class ApprovalRequired(GatewayError):
     code = "approval_required"
 

@@ -197,6 +197,21 @@ def top_windows() -> list[WindowInfo]:
     return out
 
 
+def visible_windows() -> list[tuple[int, Rect]]:
+    """Every visible, uncloaked top-level window with its frame, owned and untitled ones too (menus,
+    dialogs, tooltips), in z-order. top_windows() lists what an agent can pick; this is what is on screen."""
+    out: list[tuple[int, Rect]] = []
+
+    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    def _cb(h, _lp):
+        if user32.IsWindowVisible(h) and not is_cloaked(h):
+            out.append((h, frame_bounds(h)))
+        return True
+
+    user32.EnumWindows(_cb, 0)
+    return out
+
+
 GA_ROOT = 2
 user32.WindowFromPoint.restype = wt.HWND
 user32.WindowFromPoint.argtypes = [wt.POINT]

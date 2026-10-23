@@ -20,6 +20,7 @@ from overshoulder.driver.windows import Rect
 from overshoulder.gateway.clients import default_home
 from overshoulder.gateway.core import Gateway, Target
 from overshoulder.gateway.errors import GatewayError
+from overshoulder.gateway.limits import black_out, hidden_rects
 
 ACTIONS = ("click", "double_click", "right_click", "invoke", "toggle", "select", "set_value", "type",
            "hotkey", "focus", "activate")
@@ -47,14 +48,17 @@ class Service:
     # -- discovery and lease -------------------------------------------------------------------
 
     def windows(self, token: str, title_re: str | None = None, process: str | None = None) -> list[dict]:
-        self.gw.registry.authenticate(token)
+        client = self.gw.registry.authenticate(token)
+        hidden = self.gw.hidden_for(client.name)
         return [{"hwnd": x.hwnd, "title": x.title, "process": x.process, "class": x.class_name,
                  "rect": [x.bounds.left, x.bounds.top, x.bounds.right, x.bounds.bottom],
                  "scope": f"window:{x.hwnd}"}
-                for x in sc.find_windows(title_re=title_re, process=process)]
+                for x in sc.find_windows(title_re=title_re, process=process) if not hidden.denies(x.process)]
 
-    def acquire(self, token: str, scope: str, ttl_s: float = 60, log_text: bool = False) -> dict:
-        out = self.gw.acquire(token, scope, ttl_s, log_text=log_text)
+    def acquire(self, token: str, scope: str, ttl_s: float = 60, log_text: bool = False,
+                limits: dict | None = None) -> dict:
+        """limits: {"read_only", "no_typing", "deny_processes"} to narrow this session (gateway.limits)."""
+        out = self.gw.acquire(token, scope, ttl_s, log_text=log_text, limits=limits)
         if out["lease_id"] != self._cache_lease:
             self.cache.clear()
             self._cache_lease = out["lease_id"]
@@ -389,7 +393,8 @@ class Service:
                 problems.append(f"{needle!r} not found in the element's text")
         if (want := expect.get("element")) is not None:
             scope = self._scope(lease_id)
-            roots = uia.roots_for_window(scope.binding.hwnd) if scope.kind == "window" else [w.foreground()]
+            roots = uia.roots_for_window(scope.binding.hwnd) if scope.kind == "window" else \
+                [h for h in [w.foreground()] if h and scope.owns_window(h)]
             els = [e for r in roots for e in uia.walk(self.cache, r, max_nodes=2000)]
             if not uia.find(els, want.get("name"), want.get("name_re"), want.get("control_type"),
                             want.get("auto_id")):
@@ -405,7 +410,8 @@ class Service:
             if img is None:
                 raise GatewayError("could not capture the window's own pixels; try again")
         else:
-            img = capture.grab(scope.bounds())
+            bounds = scope.bounds()
+            img = black_out(capture.grab(bounds), bounds, hidden_rects(scope))
         ms = int(time.time() * 1000) % 1000
         path = self.shots_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{ms:03d}-{kind}.png"
         return capture.save(img, path)

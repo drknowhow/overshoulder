@@ -53,6 +53,16 @@ def _pair(v: str) -> list[float]:
     return [float(x) for x in v.split(",")]
 
 
+def _limit_flags(p: argparse.ArgumentParser) -> None:
+    """A client's standing limits (gateway.limits). Unset flags leave a limit as it is."""
+    p.add_argument("--read-only", dest="read_only", action="store_const", const=True, default=None,
+                   help="every act is refused; observe, find, screenshots and recording still work")
+    p.add_argument("--no-typing", dest="no_typing", action="store_const", const=True, default=None,
+                   help="type, set_value and hotkey are refused")
+    p.add_argument("--deny-process", action="append", default=[], metavar="EXE",
+                   help="hide a program's windows from this client, e.g. chrome.exe (repeatable)")
+
+
 def _item_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--rect", type=_pair, metavar="L,T,R,B")
     p.add_argument("--at", type=_pair, metavar="X,Y")
@@ -120,6 +130,15 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("name")
     add.add_argument("--window", default="allow", choices=["allow", "approve", "deny"])
     add.add_argument("--screen", default="approve", choices=["allow", "approve", "deny"])
+    _limit_flags(add)
+    lim = csub.add_parser("limit", help="set a client's standing limits; its agent cannot lift them")
+    lim.add_argument("name")
+    _limit_flags(lim)
+    lim.add_argument("--writable", dest="read_only", action="store_false", default=None, help="lift --read-only")
+    lim.add_argument("--typing", dest="no_typing", action="store_false", default=None, help="lift --no-typing")
+    lim.add_argument("--allow-process", action="append", default=[], metavar="EXE",
+                     help="take a program off the deny list (repeatable)")
+    lim.add_argument("--clear", action="store_true", help="start from no limits")
     rm = csub.add_parser("remove")
     rm.add_argument("name")
     csub.add_parser("list")
@@ -180,16 +199,29 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "client":
         reg = ClientRegistry()
+        from overshoulder.gateway.limits import Limits
         if a.ccmd == "add":
-            token = reg.add(a.name, window=a.window, screen=a.screen)
+            token = reg.add(a.name, window=a.window, screen=a.screen,
+                            limits={"read_only": bool(a.read_only), "no_typing": bool(a.no_typing),
+                                    "deny_processes": a.deny_process})
             print(token)
-            print(f"# store this token now; only its hash is kept. Grants: window={a.window} screen={a.screen}",
-                  file=sys.stderr)
+            lim = Limits.from_dict(reg.get(a.name).limits)
+            print(f"# store this token now; only its hash is kept. Grants: window={a.window} screen={a.screen}"
+                  f"; limits: {lim.describe()}", file=sys.stderr)
+        elif a.ccmd == "limit":
+            try:
+                out = reg.set_limits(a.name, read_only=a.read_only, no_typing=a.no_typing, deny=a.deny_process,
+                                     allow=a.allow_process, clear=a.clear)
+            except KeyError as e:
+                print(e.args[0], file=sys.stderr)
+                return 2
+            print(f"{a.name}: {Limits.from_dict(out).describe()}")
         elif a.ccmd == "remove":
             print("removed" if reg.remove(a.name) else "no such client")
         else:
             for name in reg.names():
-                print(name)
+                lim = Limits.from_dict(reg.get(name).limits)
+                print(f"{name}  ({lim.describe()})" if lim else name)
         return 0
     if a.cmd == "settings":
         import os

@@ -43,11 +43,13 @@ def _windows():
     return w.top_windows()
 
 
-def _match_windows(cond: dict, allowed: list[str]):
+def _match_windows(cond: dict, allowed: list[str], hidden=frozenset()):
     rx = re.compile(cond["title_re"], re.IGNORECASE) if cond.get("title_re") else None
     out = []
     for info in _windows():
         if allowed and info.process.lower() not in allowed:
+            continue
+        if info.process.lower() in hidden:
             continue
         if cond.get("process") and info.process.lower() != cond["process"].lower():
             continue
@@ -69,7 +71,10 @@ def _elements(win_hwnd: int, cond: dict):
 
 
 class Waiter:
-    def __init__(self, conditions: list[dict], settings: Settings):
+    def __init__(self, conditions: list[dict], settings: Settings, hidden: frozenset[str] = frozenset()):
+        """hidden: programs (lower-case image names) the waiting client may not see; their windows
+        never match."""
+        self.hidden = frozenset(hidden)
         if not settings.waits_enabled:
             raise WaitError("detection is switched off on the settings page")
         if not conditions:
@@ -94,9 +99,9 @@ class Waiter:
         kind = c["kind"]
         allowed = self.settings.wait_processes
         if kind == "window_appears":
-            return {"seen": {i.hwnd for i in _match_windows(c, allowed)}}
+            return {"seen": {i.hwnd for i in _match_windows(c, allowed, self.hidden)}}
         if kind in ("window_closes", "title_changes"):
-            wins = _match_windows(c, allowed)
+            wins = _match_windows(c, allowed, self.hidden)
             if not wins:
                 raise WaitError(f"no window matches {c}; it has to exist when the wait starts")
             return {"hwnds": {i.hwnd for i in wins}, "titles": {i.hwnd: i.title for i in wins}}
@@ -116,7 +121,7 @@ class Waiter:
         kind = c["kind"]
         allowed = self.settings.wait_processes
         if kind == "window_appears":
-            new = [i for i in _match_windows(c, allowed) if i.hwnd not in st["seen"]]
+            new = [i for i in _match_windows(c, allowed, self.hidden) if i.hwnd not in st["seen"]]
             return f"window opened: {new[0].title!r} ({new[0].process})" if new else None
         if kind == "window_closes":
             from overshoulder.driver import windows as w
@@ -143,7 +148,7 @@ class Waiter:
                 return f"file changed: {p}"
             return None
         # element and text kinds look inside matching windows
-        for win in _match_windows(c, allowed):
+        for win in _match_windows(c, allowed, self.hidden):
             try:
                 hits = _elements(win.hwnd, c)
             except Exception:
@@ -166,14 +171,14 @@ class Waiter:
 
 
 def wait(conditions: list[dict], settings: Settings, timeout_s: float | None = None,
-         on_poll=None, lock=None) -> dict:
+         on_poll=None, lock=None, hidden: frozenset[str] = frozenset()) -> dict:
     """Block until a condition holds or the timeout passes. Returns {"fired": bool, ...}.
 
     lock: held around each look at the desktop (UI Automation is not safe from many threads at once)
     and released while sleeping, so a long wait does not hold up other callers."""
     lock = lock or contextlib.nullcontext()
     with lock:
-        waiter = Waiter(conditions, settings)
+        waiter = Waiter(conditions, settings, hidden)
     limit = settings.max_wait_minutes * 60
     timeout_s = limit if timeout_s is None else min(float(timeout_s), limit)
     t0 = time.monotonic()

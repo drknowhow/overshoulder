@@ -118,7 +118,8 @@ PAGE = """<!doctype html>
 </form>
 <section>
   <h2>Agents</h2>
-  <p class="hint">Manage with <code>overshoulder client add|remove NAME</code>.</p>
+  <p class="hint">Manage with <code>overshoulder client add|remove NAME</code>; limit one with
+    <code>overshoulder client limit NAME --read-only --no-typing --deny-process chrome.exe</code>.</p>
   <ul class="plain">{clients}</ul>
 </section>
 <section>
@@ -131,6 +132,15 @@ PAGE = """<!doctype html>
   </ul>
 </section>
 </main></body></html>"""
+
+
+def _client_lines(registry) -> list[str]:
+    from overshoulder.gateway.limits import Limits
+    out = []
+    for name in registry.names():
+        lim = Limits.from_dict(registry.get(name).limits)
+        out.append(f"{name}: {lim.describe()}" if lim else name)
+    return out
 
 
 def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, saved: bool) -> str:
@@ -202,7 +212,7 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str) -> 
         form_token = sessions.form_token(request.cookies.get(COOKIE))
         if not form_token:
             return HTMLResponse("Open this page with <code>overshoulder settings</code>.", 403)
-        return HTMLResponse(render_page(st.load(), form_token, registry.names(), logs_dir,
+        return HTMLResponse(render_page(st.load(), form_token, _client_lines(registry), logs_dir,
                                         saved=request.query_params.get("saved") == "1"))
 
     @mcp.custom_route("/settings", methods=["POST"])
