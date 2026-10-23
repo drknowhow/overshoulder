@@ -78,7 +78,7 @@ Then ask the agent something like "take the Notepad window as your scope and typ
 | `windows` | List windows it could take as a scope |
 | `take_scope` | Lease `window:<hwnd>`, `screen:<n>` or `screen:all` |
 | `observe`, `find`, `read` | See the scope's controls (with refs like `e12`), filter them, read values |
-| `act` | `click`, `double_click`, `right_click`, `invoke`, `toggle`, `select`, `set_value`, `type`, `hotkey`, `focus`, `activate`, each verified afterwards |
+| `act` | `click`, `double_click`, `right_click`, `drag`, `invoke`, `toggle`, `select`, `set_value`, `type`, `hotkey`, `focus`, `activate`, each verified afterwards |
 | `screenshot` | Image of the scope |
 | `record_start`, `record_stop` | Record the scope and render a tutorial |
 | `redact` | While recording, hide an element in every frame of the tutorial |
@@ -90,6 +90,9 @@ apps and other apps whose controls Windows can't see. `act` takes `method`. `aut
 in the background and uses the person's mouse and keyboard only when nothing else reaches the app and
 their settings allow it; `background` never uses them; `input` uses them straight away. Each result
 says which method ran and whether it was a background one.
+
+A drag goes from `ref` or `x`/`y` to `to_ref` or `to_x`/`to_y`. Both ends must be in scope, and a drop
+onto something that discards or sends (a Recycle Bin, a "Delete" target) asks the person first.
 
 ## Safety model
 
@@ -153,7 +156,7 @@ In every mode, touching the mouse or keyboard stops an agent that is using them.
 
 What works in the background depends on the app. Overshoulder tries, in order: a Win32 control's own
 message (`BM_CLICK`, `WM_SETTEXT`, `EM_REPLACESEL`), UI Automation, then messages posted to the window
-(characters, clicks, and hotkeys with their modifiers set in the app's own key state). The measurements
+(characters, clicks, drags, and hotkeys with their modifiers set in the app's own key state). The measurements
 are in [docs/SPIKE-phase2.md](docs/SPIKE-phase2.md). In
 [docs/evidence/phase2-e2e-never](docs/evidence/phase2-e2e-never), a headless Claude agent works in
 Notepad, Calculator and Character Map with the input mode set to "never". Sampled every 50 ms for
@@ -249,6 +252,10 @@ redacts, annotates and narrates a Notepad tutorial on its own, working in the ba
 - UWP and XAML apps such as Calculator ignore posted clicks. UI Automation's Invoke on them brings the
   app forward for a moment, and Overshoulder puts the person's window straight back. Typing into them
   does not. The new Notepad's menus (XAML flyouts) do not open in the background.
+- Drags in the background work in apps that read the pointer from each message (Win32, WinForms).
+  Explorer, list and tree views start drags from the real mouse, and Tk follows the real cursor while
+  a button is held, so dragging in them needs real input: borrowed in "borrow" mode, refused in
+  "never" mode. A drop into another window always needs real input.
 - Apps that hide their controls from UI Automation (canvases, games) can only be driven by
   coordinates. Verification for them is a screenshot difference.
 - Screen-scope recordings use desktop capture, so anything on that screen is recorded, except the

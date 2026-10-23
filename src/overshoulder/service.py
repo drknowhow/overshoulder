@@ -22,7 +22,7 @@ from overshoulder.gateway.core import Gateway, Target
 from overshoulder.gateway.errors import GatewayError
 from overshoulder.gateway.limits import black_out, hidden_rects
 
-ACTIONS = ("click", "double_click", "right_click", "invoke", "toggle", "select", "set_value", "type",
+ACTIONS = ("click", "double_click", "right_click", "drag", "invoke", "toggle", "select", "set_value", "type",
            "hotkey", "focus", "activate")
 METHODS = ("auto", "background", "input")
 # Below this share of changed pixels a screenshot pair counts as "nothing visible happened".
@@ -274,8 +274,10 @@ class Service:
 
     def act(self, token: str, lease_id: str, action: str, ref: str | None = None, x: int | None = None,
             y: int | None = None, text: str | None = None, combo: str | None = None,
-            value: str | None = None, expect: dict | None = None, method: str = "auto") -> dict:
-        """Run one action. Target is an element ref from observe/find, or an x/y point in scope.
+            value: str | None = None, expect: dict | None = None, method: str = "auto",
+            to_ref: str | None = None, to_x: int | None = None, to_y: int | None = None) -> dict:
+        """Run one action. Target is an element ref from observe/find, or an x/y point in scope. A drag
+        goes from the target to to_ref or to_x/to_y.
 
         method: "auto" (background first, the person's input only as a last resort), "background"
         (never the person's mouse or keyboard) or "input" (real input). The result says which ran.
@@ -286,7 +288,15 @@ class Service:
             raise ValueError(f"method must be one of {METHODS}")
         target = self._element_target(ref) if ref else (
             Target("point", x=int(x), y=int(y)) if x is not None and y is not None else None)
+        to_target = None
+        if action == "drag":
+            to_target = self._element_target(to_ref) if to_ref else (
+                Target("point", x=int(to_x), y=int(to_y)) if to_x is not None and to_y is not None else None)
+            if target is None or to_target is None:
+                raise ValueError("drag needs a start (ref or x/y) and a drop point (to_ref or to_x/to_y)")
         params = {"ref": ref, "x": x, "y": y, "combo": combo, "expect": expect, "method": method}
+        if action == "drag":
+            params.update(to_ref=to_ref, to_x=to_x, to_y=to_y)
         if text is not None:
             params["text"] = text
         if value is not None:
@@ -315,6 +325,8 @@ class Service:
                     b.check()
                     uia.activate(scope.binding.hwnd)
                 out = ladder._done("activate", background=False)
+            elif action == "drag":
+                out = ladder.drag(t, p["to_target"])
             elif action in ("click", "double_click", "right_click"):
                 if t is None:
                     raise ValueError(f"{action} needs a ref or x/y")
@@ -339,6 +351,9 @@ class Service:
                         **({"expect_failed": ["the scope's window closed"]} if expect else {})}
             pixels = capture.changed_fraction(before["img"], after) if before["img"] and after else 0.0
             verdict = {"ok": True, "changed": pixels > CHANGE_EPSILON, "pixels_changed": round(pixels, 5), **ran}
+            if action == "drag" and ref and t is not None and t.rect is not None:
+                st = uia.element_state(self.cache.get(ref))
+                verdict["moved"] = st is None or st["rect"] != t.rect  # gone counts: it may have been dropped in
             if ref and uia.element_state(self.cache.get(ref)) is not None:
                 readback = uia.read(self.cache.get(ref))
                 verdict["readback"] = {k: (v[:200] if isinstance(v, str) else v) for k, v in readback.items()}
@@ -346,7 +361,8 @@ class Service:
                 verdict.update(self._check_expect(expect, ref, lease_id, verdict))
             return verdict
 
-        return self.gw.run(token, lease_id, action, perform, target=target, params=params, verify=verify)
+        return self.gw.run(token, lease_id, action, perform, target=target, params=params, verify=verify,
+                           to_target=to_target)
 
     # -- helpers -------------------------------------------------------------------------------
 

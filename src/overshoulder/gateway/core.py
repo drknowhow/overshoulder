@@ -40,7 +40,7 @@ from overshoulder.gateway.limits import PROCESS_NAMES, LeaseLimits, Limits, Narr
 from overshoulder.gateway.log import ActionLog
 
 KEYBOARD_ACTIONS = frozenset({"type", "hotkey"})
-MOUSE_ACTIONS = frozenset({"click", "double_click", "right_click"})
+MOUSE_ACTIONS = frozenset({"click", "double_click", "right_click", "drag"})
 
 
 @dataclass(frozen=True)
@@ -213,8 +213,9 @@ class Borrow:
     """
 
     def __init__(self, gw: Gateway, scope, action: str, target: Target | None, lease_id: str, client: str,
-                 mode: str, saved, waited_s: float):
+                 mode: str, saved, waited_s: float, to_target: Target | None = None):
         self.gw, self.scope, self.action, self.target = gw, scope, action, target
+        self.to_target = to_target
         self.lease_id, self.client, self.saved = lease_id, client, saved
         self.front = 0  # the scope window in front while borrowing
         self.report: dict = {"mode": mode, "waited_s": round(waited_s, 2)}
@@ -254,7 +255,7 @@ class Borrow:
     def check(self) -> int | None:
         """The real-input checks, right before SendInput. Returns the in-scope foreground for keys."""
         self.abort()
-        return self.gw._allow_real_input(self.scope, self.action, self.target)
+        return self.gw._allow_real_input(self.scope, self.action, self.target, self.to_target)
 
 
 class Gateway:
@@ -384,12 +385,13 @@ class Gateway:
     def run(self, token: str, lease_id: str, action: str, perform: Callable[[Target | None, dict], Any],
             target: Target | None = None, params: dict | None = None,
             verify: Callable[[Target | None, dict, Any], dict] | None = None,
-            read_only: bool = False) -> dict:
+            read_only: bool = False, to_target: Target | None = None) -> dict:
         """Run one action through every check. `perform` runs at most once.
 
         perform receives params plus params["abort"], which raises if the lease was revoked or paused
         mid-action (long background actions call it between steps), and params["borrow"], which every
-        use of the person's mouse or keyboard must go through (see Borrow).
+        use of the person's mouse or keyboard must go through (see Borrow). to_target is a drag's drop
+        point: it is bound and checked like the target, and perform finds it in params["to_target"].
         """
         params = dict(params or {})
         t0 = time.time()
@@ -419,6 +421,11 @@ class Gateway:
                 if target.pid:
                     self.checks.not_elevated(target.pid)
                 policy.require_not_password(action, target.is_password)
+            if to_target is not None:
+                self._check_target_processes(lim, to_target)
+                to_target = self._bind(scope, to_target, action)
+                if to_target.pid:
+                    self.checks.not_elevated(to_target.pid)
             pid = getattr(getattr(scope, "binding", None), "pid", None)
             if pid:
                 self.checks.not_elevated(pid)
@@ -435,24 +442,27 @@ class Gateway:
                     if action == "type":
                         policy.require_not_password("type", None if focus_info is None else focus_info["password"])
                 focused_type = target.control_type if target is not None else (focus_info or {}).get("type", "")
-                name = target.name if target else ""
-                if target is not None and target.kind == "point":
-                    under = self.checks.element_in_scope_at(scope, *target.point())
+                named = to_target if to_target is not None else target  # a drag is judged by where it drops
+                name = named.name if named else ""
+                if named is not None and named.kind == "point":
+                    under = self.checks.element_in_scope_at(scope, *named.point())
                     name = (under or {}).get("name", "")
                 reason = policy.approval_reason(action, name, params, focused_type=focused_type)
                 if reason:
                     policy.require_approval(self.approver, {
                         "kind": "action", "client": client.name, "action": action, "reason": reason,
-                        "target": target.describe() if target else None, "scope": scope_desc})
+                        "target": named.describe() if named else None, "scope": scope_desc})
 
-            if target is not None and (target.kind == "point" or (target.rect and not target.rect.empty)):
-                x, y = target.point()
+            shown = to_target if to_target is not None else target  # where the pointer ends up
+            if shown is not None and (shown.kind == "point" or (shown.rect and not shown.rect.empty)):
+                x, y = shown.point()
                 self.pointer = {"x": x, "y": y, "action": action, "client": client.name, "at": time.time()}
             params["abort"] = lambda: self._check_background(lease_id, client.name, scope)
             # perform MUST wrap any use of the person's mouse/keyboard (SendInput) in borrow():
             #   with params["borrow"]() as b: fg = b.check(); <SendInput, calling b.abort() between keys>
             # and call background_target(hwnd) before posting to or messaging any window.
-            params["borrow"] = lambda: self._borrow(scope, action, target, lease_id, client.name)
+            params["borrow"] = lambda: self._borrow(scope, action, target, lease_id, client.name, to_target)
+            params["to_target"] = to_target
             params["background_target"] = lambda hwnd, typing=False: self._allow_background_target(
                 scope, hwnd, typing)
             params["scope_focus"] = focus_info
@@ -470,6 +480,7 @@ class Gateway:
             self.log.write("action", client=client_name, lease=lease_id, action=action, params=logged_params,
                            target=target.describe() if target else None, ok=False, error=error,
                            scope=scope_desc, ms=round((time.time() - t0) * 1000),
+                           **({"to": to_target.describe()} if to_target is not None else {}),
                            **({"result": result} if isinstance(result, dict) else {}))
             raise
         out = {"ok": True, "result": result, "verify": verdict}
@@ -478,7 +489,8 @@ class Gateway:
                                  params=logged_params, target=target.describe() if target else None, ok=True,
                                  verify=_loggable(verdict, lease.meta.get("log_text")), scope=scope_desc,
                                  t_act=round(t_act, 3),
-                                 ms=round((time.time() - t0) * 1000))
+                                 ms=round((time.time() - t0) * 1000),
+                                 **({"to": to_target.describe()} if to_target is not None else {}))
             out["ts"] = row["ts"]
         except OSError as e:
             # The action already happened; report the log failure instead of inviting a retry.
@@ -514,7 +526,8 @@ class Gateway:
         except Exception:
             return False
 
-    def _borrow(self, scope, action: str, target: Target | None, lease_id: str, client: str) -> Borrow:
+    def _borrow(self, scope, action: str, target: Target | None, lease_id: str, client: str,
+                to_target: Target | None = None) -> Borrow:
         """Open a Borrow of the person's mouse and keyboard for one action."""
         s = self.settings_source()
         if s.input_mode == "never":
@@ -534,7 +547,7 @@ class Gateway:
         else:
             waited = self._wait_for_person(s, lease_id, client)
             saved = self.checks.desk_state() if s.input_mode == "borrow" else None
-        b = Borrow(self, scope, action, target, lease_id, client, s.input_mode, saved, waited)
+        b = Borrow(self, scope, action, target, lease_id, client, s.input_mode, saved, waited, to_target)
         try:
             b.report["brought_forward"] = self._bring_scope_forward(scope, target)
             fg = self.checks.foreground()
@@ -595,8 +608,10 @@ class Gateway:
         self.checks.bring_forward(target.hwnd if target is not None and target.hwnd else binding.hwnd)
         return True
 
-    def _allow_real_input(self, scope, action: str, target: Target | None) -> int | None:
-        """Checks before the person's real mouse/keyboard is used. Returns the in-scope foreground for keys."""
+    def _allow_real_input(self, scope, action: str, target: Target | None,
+                          to_target: Target | None = None) -> int | None:
+        """Checks before the person's real mouse/keyboard is used. Returns the in-scope foreground for keys.
+        A drag's drop point is checked like its start: the window really under it must be in scope."""
         fg = None
         if action in KEYBOARD_ACTIONS:
             fg = self.checks.foreground_in_scope(scope)
@@ -604,10 +619,11 @@ class Gateway:
             if action == "type" and target is None:
                 focused = self.checks.focused_element()
                 policy.require_not_password("type", None if focused is None else focused["password"])
-        if action in MOUSE_ACTIONS and target is not None:
-            hit = self.checks.window_at_point(scope, *target.point())
-            self._require_unprotected(hit)
-            self.checks.not_elevated(self.checks.pid_of(hit))
+        for t in (target, to_target):
+            if action in MOUSE_ACTIONS and t is not None:
+                hit = self.checks.window_at_point(scope, *t.point())
+                self._require_unprotected(hit)
+                self.checks.not_elevated(self.checks.pid_of(hit))
         return fg
 
     def _allow_background_target(self, scope, hwnd: int, typing: bool = False) -> None:

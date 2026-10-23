@@ -41,7 +41,8 @@ INSTRUCTIONS = """Overshoulder lets you see and operate desktop apps on this Win
    which a person must approve). Only one agent drives at a time; if busy you get your queue position.
 2. observe() returns the scope's UI elements with refs (e1, e2...). find() filters them.
 3. act(action, ref=... | x=..,y=..) runs one action and verifies it. Prefer refs and invoke/set_value
-   over coordinates. Actions: """ + ", ".join(ACTIONS) + """.
+   over coordinates. Actions: """ + ", ".join(ACTIONS) + """. A drag also takes the drop point:
+   to_ref or to_x/to_y.
 4. Typing goes to the focused control in your scope; pass ref to focus a control first.
 5. Refusals are deliberate (out_of_scope, denied, approval_denied, narrowed, paused, lease_revoked,
    needs_real_input, person_active): observe again or stop; never try to work around them. While the
@@ -217,17 +218,20 @@ class Daemon:
         @mcp.tool()
         async def act(ctx: Context, action: str, ref: str | None = None, x: int | None = None,
                       y: int | None = None, text: str | None = None, combo: str | None = None,
-                      value: str | None = None, expect: dict | None = None, method: str = "auto") -> dict:
-            """Run one action and verify it. action: click, double_click, right_click, invoke, toggle,
-            select, set_value (value=), type (text=), hotkey (combo="ctrl+s"), focus. Target by ref from
-            observe/find, or x/y screen pixels inside the scope. expect: {"changed": true} |
-            {"text_contains": "..."} | {"element": {"name": "...", "control_type": "..."}}.
+                      value: str | None = None, expect: dict | None = None, method: str = "auto",
+                      to_ref: str | None = None, to_x: int | None = None, to_y: int | None = None) -> dict:
+            """Run one action and verify it. action: click, double_click, right_click, drag, invoke,
+            toggle, select, set_value (value=), type (text=), hotkey (combo="ctrl+s"), focus. Target by
+            ref from observe/find, or x/y screen pixels inside the scope. drag goes from the target to
+            to_ref or to_x/to_y, both inside the scope; dropping onto something named like Delete or
+            Recycle Bin needs the person's approval, and verify.moved says whether a ref'd item moved.
+            expect: {"changed": true} | {"text_contains": "..."} | {"element": {"name": "...", "control_type": "..."}}.
             method: "auto" (default; works on the window in the background and uses the person's mouse or
             keyboard only as a last resort), "background" (never), "input" (real input). The result's
             verify.method says what ran."""
             return await authed(ctx, lambda token: d.svc.act(
                 token, d.lease_for(token), action, ref=ref, x=x, y=y, text=text, combo=combo, value=value,
-                expect=expect, method=method))
+                expect=expect, method=method, to_ref=to_ref, to_x=to_x, to_y=to_y))
 
         @mcp.tool()
         async def record_start(ctx: Context, fps: int = 10, name: str = "") -> dict:

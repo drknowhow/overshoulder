@@ -10,6 +10,9 @@ Rungs, per action (docs/SPIKE-phase2.md has the measurements behind them):
   (UI Automation on Win32 controls was seen to bring the app forward for a moment, as on Character Map,
   so a native control gets its own window message first.)
   hotkey            keys posted with modifiers in the target thread's key state -> (real, only if asked)
+  drag              button down, moves and up posted to the window under the start, with the left button
+                    set in the target thread's key state -> real drag (needed for OLE drag and drop,
+                    list and tree views, and drags from one window to another)
 
 The method argument picks how far down the ladder an action may go:
   "background"  never the person's mouse or keyboard; fail instead
@@ -205,6 +208,43 @@ class Ladder:
             inp.click(x, y, button=button, count=count)
         self._borrowed(b, "real_click")
         return self._done("real_click", background=False)
+
+    def drag(self, src, dst) -> Outcome:
+        """Press at src, move to dst, let go there. Both are bound targets the gateway checked."""
+        x0, y0 = src.point()
+        x1, y1 = dst.point()
+        if self.method != "input":
+            top = self.top_at(x0, y0)
+            if self.top_at(x1, y1) != top:
+                why = "the drop point is in another window"
+                self._attempt("posted_drag", False, why)
+                self._no_background_left(why)
+            else:
+                try:
+                    self.p["background_target"](bg.deepest_child_at(top, x0, y0))
+                    self.p["background_target"](bg.deepest_child_at(top, x1, y1))
+                    region = Rect(min(x0, x1) - REGION, min(y0, y1) - REGION, max(x0, x1) + REGION,
+                                  max(y0, y1) + REGION)
+                    self.p["abort"]()
+                    before = capture.window_image(top, region)
+                    self._guarded(lambda: bg.post_drag(top, x0, y0, x1, y1, abort=self.p["abort"]))
+                    time.sleep(0.25)
+                    after = capture.window_image(top, region)
+                    seen = before is not None and after is not None and \
+                        capture.changed_fraction(before, after) > 0.002
+                    self._attempt("posted_drag", True, "visible change" if seen else "no visible change")
+                    if not seen:
+                        self.out.note = ("no visible change; if nothing moved, the app may only take drags from "
+                                         "the real mouse: retry with method='input'")
+                    return self._done("posted_drag")
+                except bg.BackgroundUnsupported as e:
+                    self._attempt("posted_drag", False, str(e))
+                    self._no_background_left(str(e))
+        with self.p["borrow"]() as b:
+            b.check()
+            inp.drag(x0, y0, x1, y1, abort=b.abort)
+        self._borrowed(b, "real_drag")
+        return self._done("real_drag", background=False)
 
     def type_text(self, el, text: str) -> Outcome:
         if self.method == "input":

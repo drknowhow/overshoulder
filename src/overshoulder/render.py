@@ -31,14 +31,15 @@ from overshoulder import zoom as zm
 ACCENT = (37, 99, 235)  # badge / highlight
 RIPPLE = (250, 204, 21)
 CAPTION_BG = (*ImageColor.getrgb(brand.INK), 215)
-STEP_ACTIONS = {"click", "double_click", "right_click", "invoke", "toggle", "select", "set_value", "type",
+STEP_ACTIONS = {"click", "double_click", "right_click", "drag", "invoke", "toggle", "select", "set_value", "type",
                 "hotkey", "activate", "focus"}
 # Actions a viewer would do with a click: they get a ripple where the pointer lands.
-PRESS_ACTIONS = {"click", "double_click", "right_click", "invoke", "toggle", "select"}
+PRESS_ACTIONS = {"click", "double_click", "right_click", "drag", "invoke", "toggle", "select"}
 POINTERS = ("agent", "real", "none")
 ZOOMS = ("auto", "off")
 LEAD_S, HOLD_S, RIPPLE_S = 0.5, 2.2, 0.6
 GLIDE_S = 0.5  # the agent's pointer moves to a step's target over this long, ending at the step
+DRAG_S = 0.6  # a drag carries the pointer from its start to its drop point over this long (about as long as it took)
 STRIP = 72  # caption strip under the video, so captions never cover the app
 # Tight timing keeps frames this close to a step and drops the idle time between agent actions.
 PAD_BEFORE, PAD_AFTER, EDGE_S = 0.6, 0.4, 1.0
@@ -60,6 +61,7 @@ class Step:
     typed: str | None = None  # typed text as a caption may show it
     typing_s: float = 0.0  # how long the typed text takes to appear
     id: int = 0  # stable number from the recording; n is the number shown, after hidden steps go
+    to: tuple[int, int] | None = None  # a drag's drop point (screen pixels); `point` is where it starts
 
 
 def _font(size: int) -> ImageFont.ImageFont:
@@ -75,6 +77,13 @@ def _caption(row: dict) -> str:
     a, p, t = row["action"], row.get("params") or {}, row.get("target") or {}
     name = t.get("name") or t.get("control_type") or ""
     label = f'"{name}"' if name else "here"
+    if a == "drag":
+        to = (row.get("to") or {}).get("name") or ""
+        if name and to:
+            return f'Drag "{name}" to "{to}"'
+        if to:
+            return f'Drag onto "{to}"'
+        return f'Drag "{name}" along the arrow' if name else "Drag along the arrow"
     text = p.get("text")
     shown = text if isinstance(text, str) else (f"{text['len']} characters" if isinstance(text, dict) else "")
     if a in ("click", "invoke", "select"):
@@ -114,13 +123,25 @@ def build_steps(actions: list[dict], start: float) -> list[Step]:
         if point is None and center and row["action"] in PRESS_ACTIONS:
             point = center
         params = row.get("params") or {}
+        to = _drop_point(row.get("to")) if row["action"] == "drag" else None
         steps.append(Step(len(steps) + 1, round(t, 3), row["action"], _caption(row), rect, point,
                           aim=point or center,
                           keys=kc.keycaps(params.get("combo", "")) if row["action"] == "hotkey" else None,
                           typed=kc.typed_text(params.get("text")) if row["action"] == "type" else None,
                           typing_s=kc.typing_seconds(row) if row["action"] == "type" else 0.0,
-                          id=len(steps) + 1))
+                          id=len(steps) + 1, to=to))
     return _pace(steps)
+
+
+def _drop_point(to: dict | None) -> tuple[int, int] | None:
+    if not to:
+        return None
+    if to.get("kind") == "point":
+        return to["x"], to["y"]
+    r = to.get("rect")
+    if r and r[2] > r[0] and r[3] > r[1]:
+        return (r[0] + r[2]) // 2, (r[1] + r[3]) // 2
+    return None
 
 
 def _pace(steps: list[Step]) -> list[Step]:
@@ -147,7 +168,8 @@ def edit_steps(steps: list[Step], edits: dict[int, dict], cuts: list[tuple[float
 def pointer_at(t: float, steps: list[Step], home: tuple[int, int]) -> tuple[int, int] | None:
     """Where the agent's pointer is at time t. It rests at `home` (the middle of the first frame) until
     the first step with a target, glides to each target over GLIDE_S, arriving as the step happens, and
-    rests there until the next one. None when no step has a target."""
+    rests there until the next one. A drag then carries it on to the drop point over DRAG_S. None when no
+    step has a target."""
     aimed = [s for s in steps if s.aim]
     if not aimed:
         return None
@@ -158,16 +180,25 @@ def pointer_at(t: float, steps: list[Step], home: tuple[int, int]) -> tuple[int,
             k = 1.0 if s.t <= start else (t - start) / (s.t - start)
             if k <= 0:
                 return prev
-            k = min(k, 1.0)
-            k = k * k * (3 - 2 * k)  # ease in and out
-            return round(prev[0] + (s.aim[0] - prev[0]) * k), round(prev[1] + (s.aim[1] - prev[1]) * k)
-        prev, prev_t = s.aim, s.t
+            return _ease_between(prev, s.aim, min(k, 1.0))
+        if s.to is not None:
+            if t < s.t + DRAG_S:
+                return _ease_between(s.aim, s.to, (t - s.t) / DRAG_S)
+            prev, prev_t = s.to, s.t + DRAG_S
+        else:
+            prev, prev_t = s.aim, s.t
     return prev
+
+
+def _ease_between(a: tuple[int, int], b: tuple[int, int], k: float) -> tuple[int, int]:
+    k = k * k * (3 - 2 * k)  # ease in and out
+    return round(a[0] + (b[0] - a[0]) * k), round(a[1] + (b[1] - a[1]) * k)
 
 
 def still_time(step: Step) -> float:
     """When to grab a step's still: after the action took effect, before the next step starts."""
-    return max(step.t, min(step.t + 0.8, step.end - 0.1))
+    done = step.t + (DRAG_S if step.to is not None else 0.0)
+    return max(step.t, min(done + 0.8, step.end - 0.1))
 
 
 def _frames_track(rec: Path) -> list[dict]:
@@ -236,11 +267,12 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
         if bx is not None:
             d.ellipse((bx, by, bx + 32, by + 32), fill=ACCENT + (255,), outline=(255, 255, 255, 255), width=2)
             d.text((bx + 16, by + 16), str(s.n), font=fonts["badge"], fill=(255, 255, 255, 255), anchor="mm")
+        if s.point and s.to:
+            _drag_arrow(d, at(*s.point), at(*s.to))
         if s.point and 0 <= t - s.t <= RIPPLE_S:
-            k = (t - s.t) / RIPPLE_S
-            rad = 10 + 30 * k
-            px, py = at(*s.point)
-            d.ellipse((px - rad, py - rad, px + rad, py + rad), outline=RIPPLE + (int(255 * (1 - k)),), width=4)
+            _ripple(d, at(*s.point), (t - s.t) / RIPPLE_S)
+        if s.to and 0 <= t - s.t - DRAG_S <= RIPPLE_S:
+            _ripple(d, at(*s.to), (t - s.t - DRAG_S) / RIPPLE_S)  # where the drag lets go
 
     lay.draw(d, items, at, fonts)
 
@@ -262,6 +294,35 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
         text, font = _fit(sd, f"{s.n}. {s.caption}", base.width - 32, 26)
         sd.text((base.width / 2, base.height + STRIP / 2), text, font=font, fill=(255, 255, 255), anchor="mm")
     return out
+
+
+def _ripple(d: ImageDraw.ImageDraw, p: tuple[float, float], k: float) -> None:
+    rad = 10 + 30 * k
+    d.ellipse((p[0] - rad, p[1] - rad, p[0] + rad, p[1] + rad), outline=RIPPLE + (int(255 * (1 - k)),), width=4)
+
+
+def _drag_arrow(d: ImageDraw.ImageDraw, a: tuple[float, float], b: tuple[float, float]) -> None:
+    """A dashed line from a drag's start to its drop point, with a head at the drop point. Everything
+    sits on a white halo, so it shows over a drop target of the accent colour too."""
+    import math
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    length = math.hypot(dx, dy)
+    if length < 8:
+        return
+    ux, uy = dx / length, dy / length
+    head = min(22.0, length / 2)
+    end = length - head
+    bx, by = b[0] - ux * head, b[1] - uy * head
+    tip = [b, (bx - uy * head * 0.55, by + ux * head * 0.55), (bx + uy * head * 0.55, by - ux * head * 0.55)]
+    for colour, width in (((255, 255, 255, 220), 9), (ACCENT + (235,), 5)):
+        pos, dash, gap = 0.0, 14.0, 9.0
+        while pos < end:
+            seg = min(pos + dash, end)
+            d.line((a[0] + ux * pos, a[1] + uy * pos, a[0] + ux * seg, a[1] + uy * seg), fill=colour, width=width)
+            pos = seg + gap
+    d.ellipse((b[0] - 10, b[1] - 10, b[0] + 10, b[1] + 10), outline=(255, 255, 255, 255), width=5)
+    d.polygon(tip, fill=ACCENT + (255,), outline=(255, 255, 255, 255), width=3)
+    d.ellipse((b[0] - 9, b[1] - 9, b[0] + 9, b[1] + 9), outline=ACCENT + (255,), width=3)
 
 
 def keep_frame(t: float, steps: list[Step], last_t: float) -> bool:
@@ -342,6 +403,10 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
             ox, oy = _frame_at(track, s.t)["bounds"][:2]
             b = lay.bbox(x)
             extra.setdefault(s.id, []).append((b[0] + ox, b[1] + oy, b[2] + ox, b[3] + oy))
+    for s in steps:
+        if s.to is not None:  # a drag's view shows where it drops as well as where it starts
+            half = zm.POINT_BOX / 2
+            extra.setdefault(s.id, []).append((s.to[0] - half, s.to[1] - half, s.to[0] + half, s.to[1] + half))
     camera = zm.plan(steps, (width, height), extra) if zoom == "auto" else []
 
     def pointer_for(fr: dict, t: float):
@@ -496,4 +561,5 @@ def _step_record(s: Step, shown: Step | None, track: list[dict], saved: dict[int
             "caption": shown.caption if shown else s.caption, "hidden": shown is None,
             "rect": [s.rect[0] - ox, s.rect[1] - oy, s.rect[2] - ox, s.rect[3] - oy] if s.rect else None,
             "point": [s.point[0] - ox, s.point[1] - oy] if s.point else None,
+            **({"to": [s.to[0] - ox, s.to[1] - oy]} if s.to else {}),
             "still": saved.get(shown.n) if shown else None}

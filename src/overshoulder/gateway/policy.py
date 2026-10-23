@@ -124,6 +124,9 @@ _CONSEQUENTIAL_KEYS = [
     frozenset({_VK_ALT, _VK_F4}), frozenset({_VK_CTRL, _VK_ENTER}),
 ]
 _CLICK_ACTIONS = frozenset({"click", "invoke", "double_click", "right_click", "toggle", "select"})
+# Drop targets that throw away what is dropped on them, on top of the consequential names above. A bare
+# "bin" is left out: build folders are called that.
+_DISCARD_DROP = re.compile(r"\b(recycle bin|trash|wastebasket|deleted items)\b", re.IGNORECASE)
 _SINGLE_LINE = frozenset({"edit", "combobox", "spinner"})
 
 
@@ -145,11 +148,15 @@ def approval_reason(action: str, target_name: str = "", params: dict | None = No
     """Why this action needs a one-shot approval, or None. Generic signals only.
 
     target_name is the element's name (for point targets, the element under the point when UIA can
-    tell; canvas apps expose none, so their point clicks are not name-checked).
+    tell; canvas apps expose none, so their point clicks are not name-checked). For a drag it is the
+    drop target's.
     """
     params = params or {}
     if action in _CLICK_ACTIONS and target_name and _CONSEQUENTIAL.search(target_name):
         return f"{action} on {target_name!r}"
+    if action == "drag" and target_name and (_CONSEQUENTIAL.search(target_name)
+                                             or _DISCARD_DROP.search(target_name)):
+        return f"drop onto {target_name!r}"
     if action == "hotkey":
         combo = str(params.get("combo", ""))
         keys = combo_keys(combo)

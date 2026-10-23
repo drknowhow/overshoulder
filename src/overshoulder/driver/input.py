@@ -282,3 +282,49 @@ def click_inputs(x: int, y: int, button: str = "left", count: int = 1,
 def click(x: int, y: int, button: str = "left", count: int = 1) -> None:
     """Click at a physical-pixel point. The caller is responsible for scope and target checks."""
     send(click_inputs(x, y, button, count))
+
+
+DRAG_STEPS = 16
+
+
+def drag_path(x0: int, y0: int, x1: int, y1: int, steps: int = DRAG_STEPS) -> list[tuple[int, int]]:
+    """The points a drag moves through after the press, ending exactly on (x1, y1)."""
+    steps = max(1, steps)
+    return [(round(x0 + (x1 - x0) * k / steps), round(y0 + (y1 - y0) * k / steps)) for k in range(1, steps + 1)]
+
+
+def drag(x0: int, y0: int, x1: int, y1: int, abort: Callable[[], object] | None = None,
+         steps: int = DRAG_STEPS, step_s: float = 0.02, hold_s: float = 0.2,
+         virtual: tuple[int, int, int, int] | None = None, sender: Callable[[list[INPUT]], int] | None = None) -> None:
+    """Press the left button at (x0, y0), move to (x1, y1) in steps, and let go there. The caller is
+    responsible for scope and target checks.
+
+    The pause before letting go is for drop targets (OLE drag and drop) that react to hovering. If abort
+    raises on the way, or anything else fails, the button is let go back at the start point, so the
+    dragged thing is put back rather than dropped wherever the drag had got to."""
+    sender = sender or send
+    virtual = virtual or _virtual_screen()
+    base = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE
+
+    def at(x: int, y: int, flags: int = 0) -> INPUT:
+        nx, ny = normalize_point(x, y, virtual)
+        return INPUT(type=INPUT_MOUSE, mi=MOUSEINPUT(nx, ny, 0, base | flags, 0, 0))
+
+    sender([at(x0, y0)])
+    sender([at(x0, y0, MOUSEEVENTF_LEFTDOWN)])
+    released = False
+    try:
+        time.sleep(step_s)
+        for x, y in drag_path(x0, y0, x1, y1, steps):
+            if abort:
+                abort()
+            sender([at(x, y)])
+            time.sleep(step_s)
+        time.sleep(hold_s)
+        if abort:
+            abort()
+        sender([at(x1, y1, MOUSEEVENTF_LEFTUP)])
+        released = True
+    finally:
+        if not released:
+            sender([at(x0, y0), at(x0, y0, MOUSEEVENTF_LEFTUP)])

@@ -54,6 +54,12 @@ user32.GetWindowLongW.argtypes = [wt.HWND, ctypes.c_int]
 # Window classes whose input does not come through posted mouse messages (UWP/XAML core windows).
 NO_POSTED_MOUSE = frozenset({"Windows.UI.Core.CoreWindow", "ApplicationFrameInputSinkWindow"})
 CHROMIUM = frozenset({"Chrome_RenderWidgetHostHWND", "Chrome_WidgetWin_1", "Intermediate D3D Window"})
+# Windows that follow the real mouse during a drag, so posted button messages cannot drag in them: the
+# common list and tree views and Explorer's item view start drags with DragDetect or OLE drag and drop,
+# and Tk polls the real cursor every 250 ms while it thinks a button is held (measured: a posted drag
+# in a Tk canvas dropped its item at the person's cursor).
+NO_POSTED_DRAG = frozenset({"SysListView32", "SysTreeView32", "DirectUIHWND", "TkChild", "TkTopLevel"})
+VK_LBUTTON = 0x01
 EDIT_CLASSES = ("edit", "richedit")
 
 
@@ -191,6 +197,60 @@ def post_click(top: int, x: int, y: int, button: str = "left", count: int = 1) -
     if count == 2 and button == "left":
         _post(target, WM_LBUTTONDBLCLK, MK_LBUTTON, lp)
         _post(target, WM_LBUTTONUP, 0, lp)
+    return target
+
+
+def post_drag(top: int, x0: int, y0: int, x1: int, y1: int, abort: Callable[[], object] | None = None,
+              steps: int = 12, step_s: float = 0.015, hold_s: float = 0.15) -> int:
+    """Drag from (x0, y0) to (x1, y1) inside `top` with posted messages. Returns the window that got them.
+
+    All of it goes to the child under the start point, with points relative to that child, as it would
+    while the child holds the mouse capture during a real drag. Many apps (Tk among them) read the left
+    button from their thread's key state rather than from the message, so it is set down in that
+    thread's state while the press and the moves are taken, and up again before the release is posted;
+    a release taken while the state still says down would never be seen. The person's own thread is
+    never attached. If abort raises on the way, the button is let go at the start point, so nothing is
+    dropped midway."""
+    from overshoulder.driver.input import drag_path
+    target = deepest_child_at(top, x0, y0)
+    cls = w.class_name(target)
+    if cls in NO_POSTED_MOUSE or cls in NO_POSTED_DRAG:
+        raise BackgroundUnsupported(f"{cls} follows the real mouse during a drag; posted messages cannot drag in it")
+    me, them = kernel32.GetCurrentThreadId(), thread_of(target)
+    _ensure_queue()
+    if not user32.AttachThreadInput(me, them, True):
+        raise BackgroundUnsupported("could not share the target thread's mouse button state")
+    try:
+        state = (ctypes.c_ubyte * 256)()
+        user32.GetKeyboardState(state)
+        saved = bytes(state)
+        state[VK_LBUTTON] = 0x80
+        user32.SetKeyboardState(state)
+        reached = False
+        try:
+            _post(target, WM_MOUSEMOVE, 0, _client_lparam(target, x0, y0))
+            _post(target, WM_LBUTTONDOWN, MK_LBUTTON, _client_lparam(target, x0, y0))
+            time.sleep(step_s)
+            for x, y in drag_path(x0, y0, x1, y1, steps):
+                if abort:
+                    abort()
+                _post(target, WM_MOUSEMOVE, MK_LBUTTON, _client_lparam(target, x, y))
+                time.sleep(step_s)
+            time.sleep(hold_s)  # the app takes the last moves, and a drop target sees the hover, before the release
+            if abort:
+                abort()
+            reached = True
+        finally:
+            ex, ey = (x1, y1) if reached else (x0, y0)
+            state[VK_LBUTTON] = 0
+            user32.SetKeyboardState(state)
+            posted = user32.PostMessageW(target, WM_LBUTTONUP, 0, _client_lparam(target, ex, ey))
+            time.sleep(0.2)  # let the app take the release while the state still matches it
+            user32.SetKeyboardState((ctypes.c_ubyte * 256)(*saved))
+        if not posted:
+            raise BackgroundUnsupported(f"the release could not be posted to {target:#x}; the drag may be held")
+    finally:
+        user32.AttachThreadInput(me, them, False)
     return target
 
 
