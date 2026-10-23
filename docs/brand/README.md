@@ -48,5 +48,6 @@ Needs Playwright with Chromium (`pip install playwright`, then `playwright insta
 `ffmpeg` on `PATH`, and a network connection for the Sora font. `tests/test_brand.py` fails if
 `mark.svg` no longer matches `brand.MARK_SVG`, which is the cue to rebuild.
 
-GitHub has no API for the repository's social preview. Upload `social-preview.png` by hand under
-Settings > General > Social preview.
+GitHub has no API for the repository's social preview, and it offers the setting only on public
+repositories: a private repository's Settings > General has no Social preview section. When the
+repository goes public, upload `social-preview.png` by hand under Settings > General > Social preview.
