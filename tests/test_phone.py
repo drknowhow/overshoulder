@@ -1,5 +1,6 @@
 """Phone approvals: the chain, the ntfy and webhook channels against fake servers, and the settings."""
 
+import base64
 import hashlib
 import hmac
 import json
@@ -111,10 +112,11 @@ class FakeNtfy:
         return allow, self.tap(self.wait_question(topic, nth=2), "Confirm")
 
     def tap(self, question, label):
-        """What the ntfy app does for an http action button: POST its body to its URL."""
+        """What the ntfy app does for an http action button: POST its body to its URL. "Confirm" also
+        matches a Confirm button that names the control ("Confirm Send")."""
         for action in question["headers"]["x-actions"].split("; "):
             parts = [p.strip() for p in action.split(",")]
-            if parts[1] == label:
+            if parts[1] == label or parts[1].startswith(label + " "):
                 opts = dict(p.split("=", 1) for p in parts[3:])
                 req = urllib.request.Request(parts[2], data=opts["body"].encode(), method=opts["method"])
                 urllib.request.urlopen(req, timeout=5).read()
@@ -159,13 +161,13 @@ def test_allow_then_confirm_on_the_phone_approves_and_both_notifications_are_rem
     t.join(5)
     assert out["answer"] is True
     h = question["headers"]
-    assert h["x-sequence-id"] == q.id and h["x-title"] == phone.TITLE
+    assert h["x-sequence-id"] == q.id and h["x-title"] == "Allow click on 'Send'?"
     assert question["message"].splitlines()[:2] == ["click on 'Send'", "in mail.exe"]
     assert "expires " in question["message"] and "Allow asks you to confirm" in question["message"]
     second = confirm["headers"]["x-sequence-id"]
-    assert second != q.id and confirm["headers"]["x-title"] == phone.CONFIRM_TITLE
-    assert confirm["message"].splitlines()[:2] == ["Tap Confirm to allow:", "click on 'Send'"]
-    assert [a.split(", ")[1] for a in confirm["headers"]["x-actions"].split("; ")] == ["Cancel", "Confirm"]
+    assert second != q.id and confirm["headers"]["x-title"] == "Confirm click on 'Send'?"
+    assert confirm["message"].splitlines()[:2] == ["Tap Confirm Send to allow:", "click on 'Send'"]
+    assert [a.split(", ")[1] for a in confirm["headers"]["x-actions"].split("; ")] == ["Cancel", "Confirm Send"]
     assert {f"/{s.ntfy_topic}/{q.id}", f"/{s.ntfy_topic}/{second}"} <= set(ntfy.deleted)  # both taken off the phone
     assert s.answer_key not in json.dumps([question, confirm])  # the key never leaves the PC
 
@@ -272,6 +274,32 @@ def test_the_window_title_and_a_screenshot_go_only_when_the_person_shares_them(n
     assert question["attachment"].startswith(b"\x89PNG")
     assert question["headers"]["x-filename"] == "overshoulder.png"
     assert question["headers"]["x-message"].startswith("=?UTF-8?B?")  # several lines, so RFC 2047
+
+
+def test_titles_and_the_confirm_button_name_the_action():
+    s = phone.PhoneSettings()
+
+    def q(reason):
+        return phone.make_question({**REQUEST, "reason": reason}, s, 10)
+
+    send, delete = q("click on 'Send'"), q("click on 'Delete'")
+    assert phone.headline(send) != phone.headline(delete)  # back-to-back questions don't look alike
+    assert phone.headline(delete, confirm=True) == "Confirm click on 'Delete'?"
+    assert phone.confirm_label(delete) == "Confirm Delete"
+    long = q("type '" + "x" * 80 + "' into Search")
+    assert len(phone.headline(long)) == len("Allow ") + phone.TITLE_MAX + 1 and phone.headline(long).endswith("...?")
+    # names ntfy's button format could misread, or a phone could cut off, fall back to plain Confirm
+    for reason in ("press Enter", "click on 'Save, then close'", "click on 'a=b'", "click on 'Envoyé'",
+                   "click on 'A very long button name indeed'"):
+        assert phone.confirm_label(q(reason)) == "Confirm"
+
+
+def test_a_title_that_is_not_ascii_is_sent_as_an_encoded_word(ntfy):
+    s = ntfy_settings(ntfy.base)
+    q = phone.make_question({**REQUEST, "reason": "click on 'Envoyé'"}, s, 1)
+    phone.Ntfy(s).ask(q, threading.Event())
+    title = ntfy.wait_question(s.ntfy_topic)["headers"]["x-title"]
+    assert title.startswith("=?UTF-8?B?") and "Envoyé" in base64.b64decode(title[10:-2]).decode()
 
 
 def test_an_unreachable_ntfy_server_is_an_error_not_an_answer():

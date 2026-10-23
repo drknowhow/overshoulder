@@ -10,7 +10,9 @@ ntfy: the question goes to a topic the person subscribes to in the ntfy app, wit
 buttons. Each button POSTs `<nonce>.<yes|no>.<mac>` to a second, secret reply topic, which this PC
 reads as a stream. Allow does not count yet: a second notification with its own nonce asks the person
 to confirm, with Cancel where Allow was, and only Confirm approves. A tap that lands on the wrong
-button can then refuse an action but not approve one. When a question is answered anywhere or
+button can then refuse an action but not approve one. Both titles name the action ("Allow click on
+'Send'?") and the Confirm button names the control ("Confirm Send"), so two questions that arrive
+close together don't look alike. When a question is answered anywhere or
 expires, its notification is deleted from the phone (ntfy's sequence IDs; servers too old for them
 ignore it).
 
@@ -30,6 +32,7 @@ import io
 import json
 import logging
 import queue
+import re
 import secrets
 import socket
 import threading
@@ -45,8 +48,7 @@ from overshoulder.gateway.clients import default_home
 log = logging.getLogger(__name__)
 
 NTFY_DEFAULT = "https://ntfy.sh"
-TITLE = "Overshoulder: allow this?"
-CONFIRM_TITLE = "Overshoulder: confirm Allow?"
+TITLE_MAX = 60  # characters of the reason a title shows
 ANSWERS = {"yes": True, "no": False}
 
 
@@ -173,6 +175,24 @@ def phone_text(q: Question) -> str:
     return "\n".join(lines)
 
 
+def headline(q: Question, confirm: bool = False) -> str:
+    """The notification's title: "Allow click on 'Send'?", or "Confirm click on 'Send'?" on the confirmation."""
+    reason = " ".join(q.reason.split())
+    if len(reason) > TITLE_MAX:
+        reason = reason[:TITLE_MAX - 3] + "..."
+    return f"{'Confirm' if confirm else 'Allow'} {reason}?"
+
+
+def confirm_label(q: Question) -> str:
+    """"Confirm Send" for a reason that names a control in quotes. Plain "Confirm" when the name is long, not
+    ASCII, or has a character ntfy's button format treats as a separator."""
+    m = re.search(r"'([^']+)'", q.reason)
+    name = m.group(1).strip() if m else ""
+    if name and len(name) <= 20 and name.isascii() and name.isprintable() and not set(name) & set(",;=\"'"):
+        return f"Confirm {name}"
+    return "Confirm"
+
+
 def _mac(key: str, text: str) -> str:
     return hmac.new(key.encode(), text.encode(), hashlib.sha256).hexdigest()
 
@@ -228,17 +248,18 @@ class Ntfy:
             return None
         return ANSWERS[parts[1]]
 
-    def actions(self, nonce: str, confirm: bool = False) -> str:
+    def actions(self, q: Question, confirm: bool = False) -> str:
         reply = self._url(self.s.ntfy_reply_topic)
         auth = f", headers.Authorization=Bearer {self.s.ntfy_token}" if self.s.ntfy_token else ""
-        buttons = (("Cancel", "no"), ("Confirm", "yes")) if confirm else (("Allow", "yes"), ("Deny", "no"))
-        return "; ".join(f"http, {label}, {reply}, method=POST, body={self.answer_body(nonce, a)}, clear=true{auth}"
+        buttons = (("Cancel", "no"), (confirm_label(q), "yes")) if confirm else (("Allow", "yes"), ("Deny", "no"))
+        return "; ".join(f"http, {label}, {reply}, method=POST, body={self.answer_body(q.id, a)}, clear=true{auth}"
                          for label, a in buttons)
 
     def publish(self, q: Question, confirm: bool = False) -> None:
-        headers = {"X-Title": CONFIRM_TITLE if confirm else TITLE, "X-Priority": "high", "X-Tags": "warning",
-                   "X-Actions": self.actions(q.id, confirm), "X-Sequence-ID": q.id, **self._auth()}
-        text = f"Tap Confirm to allow:\n{phone_text(q)}" if confirm else f"{phone_text(q)}\nAllow asks you to confirm"
+        headers = {"X-Title": _header_text(headline(q, confirm)), "X-Priority": "high", "X-Tags": "warning",
+                   "X-Actions": self.actions(q, confirm), "X-Sequence-ID": q.id, **self._auth()}
+        text = (f"Tap {confirm_label(q)} to allow:\n{phone_text(q)}" if confirm
+                else f"{phone_text(q)}\nAllow asks you to confirm")
         if q.screenshot:
             headers.update({"X-Filename": "overshoulder.png", "X-Message": _header_text(text)})
             status, body = _http("PUT", self._url(self.s.ntfy_topic), q.screenshot, headers)

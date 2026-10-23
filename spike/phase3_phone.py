@@ -3,12 +3,14 @@
 1. Turns ntfy on in this PC's phone settings and sends a phone-only readiness question (it waits up to
    an hour), so the run starts only once the person has subscribed and answered it.
 2. Opens a WinForms window with Send and Delete buttons (phonetest.ps1) and, as a temporary MCP client,
-   clicks Send (the person taps Allow, then Confirm) and, 10 s later, Delete (the person taps Deny).
+   clicks Send (the person taps Allow, then Confirm Send) and, 10 s later, Delete (the person taps Deny).
 3. Passes if the window saw only the Send click and the log says both answers came from ntfy.
 
 ntfy stays on afterwards; the question timeout goes back to what it was. Writes spike/out/phase3-phone/.
 
-    python spike/phase3_phone.py [--skip-ready]
+    python spike/phase3_phone.py [--skip-ready] [--gap SECONDS]
+
+--gap is the wait between the Send question closing and the Delete question (default 10).
 """
 
 import asyncio
@@ -26,6 +28,7 @@ OUT_DIR = HERE / "out" / "phase3-phone"
 WINDOW = OUT_DIR / "window.json"
 RESULT = OUT_DIR / "result.json"
 PY = sys.executable
+GAP = float(sys.argv[sys.argv.index("--gap") + 1]) if "--gap" in sys.argv else 10.0
 results: dict = {"started": dt.datetime.now().isoformat(timespec="seconds")}
 
 
@@ -62,7 +65,7 @@ async def mcp_run(token: str) -> None:
                 results["send"] = await call(s, "act", {"action": "click", "ref": send, "method": "background"}, 400)
                 results["send_s"] = round(time.time() - t0, 1)
                 print("send ->", results["send"], flush=True)
-                time.sleep(10)  # one question on the phone at a time
+                time.sleep(GAP)  # 10 s by default: one question on the phone at a time
                 print("tap DENY on the phone for 'Delete'", flush=True)
                 t0 = time.time()
                 click = {"action": "click", "ref": delete, "method": "background"}

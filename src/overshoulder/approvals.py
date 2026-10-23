@@ -191,5 +191,5 @@ def try_phone(s: phone.PhoneSettings, timeout_s: float = 60) -> dict:
                           lambda req, t: phone.make_question(req, phone.PhoneSettings(), t))
     if not phone.channels_for(s):
         return {"answer": None, "by": None, "errors": {"phone": "no phone channel is turned on"}}
-    chain.approve({"kind": "test", "reason": "Test from the Overshoulder settings page: tap Allow or Deny"})
+    chain.approve({"kind": "test", "reason": "a test question from the settings page"})
     return chain.last

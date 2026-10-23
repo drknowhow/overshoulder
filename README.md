@@ -199,9 +199,11 @@ answered, as `approved_by`.
 
 **ntfy.** Install the [ntfy](https://ntfy.sh) app and subscribe to the topic the settings page shows,
 on the same server: ntfy.sh, or your own with an access token if it needs one. A question arrives as
-a notification with Allow and Deny buttons. Allow then asks again: a second notification has Cancel
-where Allow was and Confirm beside it, and only Confirm approves. In testing, phone taps sometimes
-landed on the other button, so one stray tap can refuse an action but cannot approve one. A button
+a notification titled with the action, such as "Allow click on 'Send'?", with Allow and Deny buttons.
+Allow then asks again: a second notification, "Confirm click on 'Send'?", has Cancel where Allow was
+and a button that names the control, "Confirm Send", beside it. Only that button approves. In
+testing, phone taps sometimes landed on the other button, so one stray tap can refuse an action but
+cannot approve one (see [Limits](#limits-phase-3)). A button
 posts the answer to a second, secret topic. The answer names that question's one-time id and carries
 an HMAC under a key that never leaves your PC, so a forged answer, or a copy of an answer to an
 earlier question, is ignored. When a question is answered anywhere or expires, its notification is
