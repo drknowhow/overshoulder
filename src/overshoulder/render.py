@@ -38,6 +38,7 @@ GLIDE_S = 0.5  # the agent's pointer moves to a step's target over this long, en
 STRIP = 72  # caption strip under the video, so captions never cover the app
 # Tight timing keeps frames this close to a step and drops the idle time between agent actions.
 PAD_BEFORE, PAD_AFTER, EDGE_S = 0.6, 0.4, 1.0
+GIF_WIDTH, GIF_FPS = 640, 10  # GIFs are for READMEs and chat: capped so they stay a few MB
 
 
 @dataclass
@@ -267,11 +268,12 @@ def keep_frame(t: float, steps: list[Step], last_t: float) -> bool:
 
 
 def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | None = None,
-           tight: bool = True, pointer: str = "agent", zoom: str = "auto", keys: bool = True) -> dict:
+           tight: bool = True, pointer: str = "agent", zoom: str = "auto", keys: bool = True,
+           gif: bool = True) -> dict:
     """tight=True cuts the idle time between steps; tight=False keeps real-time pacing. pointer: "agent"
     (the agent's own track), "real" (the recorded cursor) or "none". zoom: "auto" closes in on each
     step's target in the video (stills always show the whole frame), "off" never zooms. keys: show
-    hotkeys as keycaps and typed text as it is typed."""
+    hotkeys as keycaps and typed text as it is typed. gif: also write tutorial.gif."""
     if pointer not in POINTERS:
         raise ValueError(f"pointer must be one of {POINTERS}")
     if zoom not in ZOOMS:
@@ -373,9 +375,25 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     shown = {s.id: s for s in steps}
     (out / "steps.json").write_text(json.dumps(
         [_step_record(s, shown.get(s.id), track, saved) for s in all_steps], indent=1), encoding="utf-8")
-    return {"video": str(out / "tutorial.mp4"), "frames": written, "source_frames": i, "steps": len(steps),
-            "images": len(saved), "seconds": round(written / fps, 1), "markdown": str(out / "steps.md"),
-            "steps_json": str(out / "steps.json"), "annotations": len(layer.items())}
+    result = {"video": str(out / "tutorial.mp4"), "frames": written, "source_frames": i, "steps": len(steps),
+              "images": len(saved), "seconds": round(written / fps, 1), "markdown": str(out / "steps.md"),
+              "steps_json": str(out / "steps.json"), "annotations": len(layer.items())}
+    (out / "tutorial.gif").unlink(missing_ok=True)
+    if gif and written:
+        result.update(export_gif(out / "tutorial.mp4", out / "tutorial.gif", fps=min(GIF_FPS, fps)))
+    return result
+
+
+def export_gif(video: Path, gif: Path, width: int = GIF_WIDTH, fps: int = GIF_FPS) -> dict:
+    """Write an animated GIF of a video, no wider than `width`, with a palette made for that video."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg not found on PATH")
+    vf = (f"fps={fps},scale='min({width},iw)':-1:flags=lanczos,split[a][b];"
+          "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle")
+    subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(video), "-vf", vf, "-loop", "0",
+                    str(gif)], check=True)
+    return {"gif": str(gif), "gif_bytes": gif.stat().st_size}
 
 
 def render_image(image: Path, out: Path | None = None) -> dict:
