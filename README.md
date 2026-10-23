@@ -330,8 +330,9 @@ writes `tutorial-2.mlt` with its media in `edit-2/`.
   known ([run 1](docs/evidence/phase3-e2e#earlier-runs)). That drag reported `verify.changed: false`.
 - In four of the six live phone runs, the phone sent a different answer from the one the person meant,
   in both directions. In one of them it approved Delete with Allow and Confirm when the plan was to deny
-  it. The cause is not known ([phone check](docs/evidence/phase3-phone)). The run that passed asked one
-  question at a time, 10 s apart. Use phone approvals for actions you could undo, or answer at the desk.
+  it. The cause is not known ([phone check](docs/evidence/phase3-phone)). Both later runs passed: one
+  asked its questions 10 s apart, and the other, after the titles began naming the action, 1.5 s apart.
+  Use phone approvals for actions you could undo, or answer at the desk.
 - Apps that hide their controls from UI Automation (canvases, games) can only be driven by
   coordinates. Verification for them is a screenshot difference.
 - Screen-scope recordings use desktop capture, so anything on that screen is recorded, except the

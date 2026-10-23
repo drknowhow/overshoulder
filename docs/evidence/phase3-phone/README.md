@@ -26,6 +26,24 @@ Times are local; each answer was read from the reply topic.
 
 The person was asked to answer every question in the pulled-down notification list.
 
+## Run J, after the titles named the action ([result-j.json](result-j.json))
+
+From b6e6a0b, the titles read "Allow click on 'Send'?" and "Confirm click on 'Send'?" and the Confirm
+button reads "Confirm Send". Run J went back to a 1.5 s gap between questions (`--gap 1.5`), as in runs
+G and H, and the person tapped wherever they normally would.
+
+| time | on the phone | answer |
+|---|---|---|
+| 19:26:07 | "Allow click on 'Send'?" arrives | |
+| 19:26:13 | | Allow; "Confirm click on 'Send'?" arrives |
+| 19:26:17 | | Confirm Send |
+| 19:26:19 | "Allow click on 'Delete'?" arrives | |
+| 19:26:21 | | Deny |
+
+Send was clicked with `approved_by: "ntfy"`, Delete was refused with `answered_by: "ntfy"`, and the
+window saw only Send. Two passing runs don't show the earlier wrong answers are gone, since their
+cause is still unknown.
+
 ## Earlier runs
 
 In these runs the second question came 1.5 s after the first one closed.
