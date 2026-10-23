@@ -13,8 +13,10 @@ real cursor track is still recorded and can be drawn instead (pointer="real").
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from overshoulder import keys as kc
 from overshoulder import layer as lay
+from overshoulder import narrate as nr
 from overshoulder import zoom as zm
 
 ACCENT = (37, 99, 235)  # badge / highlight
@@ -269,11 +272,18 @@ def keep_frame(t: float, steps: list[Step], last_t: float) -> bool:
 
 def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | None = None,
            tight: bool = True, pointer: str = "agent", zoom: str = "auto", keys: bool = True,
-           gif: bool = True) -> dict:
+           gif: bool = True, narrate: bool = False, voice: str | None = None, engine: nr.Engine | None = None,
+           outside_audio: bool = False) -> dict:
     """tight=True cuts the idle time between steps; tight=False keeps real-time pacing. pointer: "agent"
     (the agent's own track), "real" (the recorded cursor) or "none". zoom: "auto" closes in on each
     step's target in the video (stills always show the whole frame), "off" never zooms. keys: show
-    hotkeys as keycaps and typed text as it is typed. gif: also write tutorial.gif."""
+    hotkeys as keycaps and typed text as it is typed. gif: also write tutorial.gif.
+
+    narrate: speak each step (narrate.py) from the moment its caption appears, hold the video on the
+    step until the line ends, and add the voice to tutorial.mp4 as an AAC track, with narration.wav
+    and narration.srt beside it. voice: part of a Windows voice's name. engine: another TTS in place
+    of the Windows voice (narrate.command; the CLI's --tts-cmd). outside_audio: let the layer's audio
+    files live outside the recording directory (a person's CLI render, never an agent's)."""
     if pointer not in POINTERS:
         raise ValueError(f"pointer must be one of {POINTERS}")
     if zoom not in ZOOMS:
@@ -301,6 +311,12 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
         raise RuntimeError("ffmpeg not found on PATH")
     for old in out.glob("step-*.png"):
         old.unlink()  # a re-render with hidden or cut steps must not leave their old stills behind
+    for old in ("narration.srt", "narration.wav"):
+        (out / old).unlink(missing_ok=True)
+    lines: dict[int, tuple[str, bytes]] = {}
+    if narrate:
+        with tempfile.TemporaryDirectory(prefix="overshoulder-say-") as work:
+            lines = nr.prepare(steps, layer.step_edits(), Path(work), engine or nr.sapi(voice), rec, outside_audio)
 
     dec = subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(rec / "video.mp4"),
                             "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE)
@@ -331,7 +347,41 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
             return pointer_at(t, steps, home)
         return fr.get("cursor") if pointer == "real" else None
 
-    i = written = 0
+    to_say = [s for s in steps if s.id in lines]
+    # A line holds its step on the last frame before the pointer and the camera set off for the next one.
+    move_s = max(GLIDE_S, zm.ZOOM_IN_S)
+    hold_at = {s.id: max(s.t, min(s.end, nxt.t - move_s)) if nxt else s.end
+               for s, nxt in zip(steps, [*steps[1:], None], strict=True)}
+    cues: list[tuple[float, float, str]] = []  # output seconds
+    placed: list[tuple[float, bytes]] = []
+    hold: tuple[float, float] | None = None  # (source time to hold at, output time its line ends)
+    last = b""  # the last frame written, repeated while a line finishes
+    i = written = held = 0
+
+    def freeze(until: float) -> None:
+        nonlocal written, held
+        while last and written / fps < until:
+            enc.stdin.write(last)
+            written += 1
+            held += 1
+
+    def speak_before(t: float) -> None:
+        """Before writing the frame at source time t: hold the previous step until its line has ended,
+        then start the line of every step whose caption shows from t."""
+        nonlocal hold
+        while True:
+            if hold and t >= hold[0]:
+                freeze(hold[1])
+                hold = None
+            if not to_say or to_say[0].start > t:
+                return
+            s = to_say.pop(0)
+            text, clip = lines[s.id]
+            at = written / fps
+            cues.append((at, at + nr.seconds(clip), text))
+            placed.append((at, clip))
+            hold = (hold_at[s.id], at + nr.seconds(clip) + nr.GAP_S)
+
     try:
         while True:
             raw = dec.stdout.read(frame_bytes)
@@ -346,10 +396,12 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
             frame_origin = (fr["bounds"][0], fr["bounds"][1])  # where the clean frame's (0, 0) is on screen
             origin = (frame_origin[0] + cl, frame_origin[1] + ct)
             if (not tight or keep_frame(t, steps, last_t)) and not lay.in_cut(t, cuts):
+                speak_before(t)
                 framed = annotate(img, t, origin, pointer_for(fr, t), steps, fonts,
                                   view=zm.camera_at(t, camera, (width, height), origin), keys=keys,
                                   items=lay.active(drawn, t, windows, frame_origin))
-                enc.stdin.write(framed.tobytes())
+                last = framed.tobytes()
+                enc.stdin.write(last)
                 written += 1
             for n, due in shots_due.items():
                 if n not in saved and t >= due:
@@ -360,6 +412,8 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
                              items=lay.active(drawn, t, windows, frame_origin, still_of=solo.id)).save(path)
                     saved[n] = path.name
             i += 1
+        if hold:
+            freeze(hold[1])  # the last line may run past the end of the recording
     finally:
         dec.stdout.close()
         dec.wait()
@@ -378,6 +432,13 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     result = {"video": str(out / "tutorial.mp4"), "frames": written, "source_frames": i, "steps": len(steps),
               "images": len(saved), "seconds": round(written / fps, 1), "markdown": str(out / "steps.md"),
               "steps_json": str(out / "steps.json"), "annotations": len(layer.items())}
+    if cues:
+        nr.write_track(out / "narration.wav", placed, written / fps)
+        nr.write_srt(out / "narration.srt", cues)
+        nr.mux(out / "tutorial.mp4", out / "narration.wav", out / "tutorial.narrated.mp4")
+        os.replace(out / "tutorial.narrated.mp4", out / "tutorial.mp4")
+        result.update(narration=str(out / "narration.srt"), narration_audio=str(out / "narration.wav"),
+                      lines=len(cues), held_s=round(held / fps, 1))
     (out / "tutorial.gif").unlink(missing_ok=True)
     if gif and written:
         result.update(export_gif(out / "tutorial.mp4", out / "tutorial.gif", fps=min(GIF_FPS, fps)))

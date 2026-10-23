@@ -160,6 +160,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="zoom in on each step's target (default) or never")
     rr.add_argument("--no-keys", action="store_true", help="do not show keystrokes and typed text")
     rr.add_argument("--no-gif", action="store_true", help="do not write tutorial.gif")
+    rr.add_argument("--narrate", action="store_true",
+                    help="speak each step and add the voice track (Windows voice unless --tts-cmd)")
+    rr.add_argument("--voice", help="part of an installed Windows voice's name, e.g. Zira (see: overshoulder voices)")
+    rr.add_argument("--tts-cmd", metavar="TEMPLATE",
+                    help='any TTS program, run once per line: {text_file} is the line, {out} the audio to write; '
+                         'implies --narrate. Example: piper -m en.onnx -f {out} < {text_file}')
+    sub.add_parser("voices", help="list the Windows voices --narrate can use")
 
     a = ap.parse_args(argv)
     if a.cmd == "serve":
@@ -202,13 +209,24 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "render":
         from pathlib import Path
 
+        from overshoulder import narrate as nr
         from overshoulder.render import render, render_image
         target = Path(a.dir)
         if target.is_file():
             print(json.dumps(render_image(target), indent=2))
-        else:
-            print(json.dumps(render(target, pointer=a.pointer, zoom=a.zoom, keys=not a.no_keys,
-                                    gif=not a.no_gif), indent=2))
+            return 0
+        try:
+            out = render(target, pointer=a.pointer, zoom=a.zoom, keys=not a.no_keys, gif=not a.no_gif,
+                         narrate=a.narrate or bool(a.tts_cmd), voice=a.voice,
+                         engine=nr.command(a.tts_cmd) if a.tts_cmd else None, outside_audio=True)
+        except nr.NarrationError as e:
+            print(json.dumps({"error": str(e)}), file=sys.stderr)
+            return 2
+        print(json.dumps(out, indent=2))
+        return 0
+    if a.cmd == "voices":
+        from overshoulder.narrate import voices
+        print("\n".join(voices()) or "no Windows voices installed")
         return 0
     if a.cmd == "home":
         print(default_home())
