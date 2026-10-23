@@ -95,6 +95,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="draw the agent's pointer (default), the recorded real cursor, or none")
     rr.add_argument("--zoom", default="auto", choices=["auto", "off"],
                     help="zoom in on each step's target (default) or never")
+    rr.add_argument("--no-keys", action="store_true", help="do not show keystrokes and typed text")
 
     a = ap.parse_args(argv)
     if a.cmd == "serve":
@@ -136,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         from pathlib import Path
 
         from overshoulder.render import render
-        print(json.dumps(render(Path(a.dir), pointer=a.pointer, zoom=a.zoom), indent=2))
+        print(json.dumps(render(Path(a.dir), pointer=a.pointer, zoom=a.zoom, keys=not a.no_keys), indent=2))
         return 0
     if a.cmd == "home":
         print(default_home())

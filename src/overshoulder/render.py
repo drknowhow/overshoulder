@@ -15,11 +15,12 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from overshoulder import keys as kc
 from overshoulder import zoom as zm
 
 ACCENT = (37, 99, 235)  # badge / highlight
@@ -49,6 +50,9 @@ class Step:
     start: float = 0.0  # when its annotations appear ...
     end: float = 0.0  # ... and disappear; never overlapping the next step
     aim: tuple[int, int] | None = None  # where the agent's pointer goes for this step
+    keys: list[str] | None = None  # a hotkey's keycaps
+    typed: str | None = None  # typed text as a caption may show it
+    typing_s: float = 0.0  # how long the typed text takes to appear
 
 
 def _font(size: int) -> ImageFont.ImageFont:
@@ -102,8 +106,12 @@ def build_steps(actions: list[dict], start: float) -> list[Step]:
         point = (target["x"], target["y"]) if target.get("kind") == "point" else None
         if point is None and center and row["action"] in PRESS_ACTIONS:
             point = center
+        params = row.get("params") or {}
         steps.append(Step(len(steps) + 1, round(t, 3), row["action"], _caption(row), rect, point,
-                          aim=point or center))
+                          aim=point or center,
+                          keys=kc.keycaps(params.get("combo", "")) if row["action"] == "hotkey" else None,
+                          typed=kc.typed_text(params.get("text")) if row["action"] == "type" else None,
+                          typing_s=kc.typing_seconds(row) if row["action"] == "type" else 0.0))
     for i, st in enumerate(steps):
         nxt = steps[i + 1].t if i + 1 < len(steps) else None
         st.end = min(st.t + HOLD_S, nxt - 0.05) if nxt is not None else st.t + HOLD_S
@@ -159,12 +167,12 @@ def _fit(d: ImageDraw.ImageDraw, text: str, max_w: float, size: int) -> tuple[st
 
 
 def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[int, int] | None,
-             steps: list[Step], fonts: dict, view: zm.Crop | None = None) -> Image.Image:
+             steps: list[Step], fonts: dict, view: zm.Crop | None = None, keys: bool = True) -> Image.Image:
     """Draw every annotation active at time t onto a frame whose top-left is `origin` on screen.
 
     view: a crop of the frame (frame pixels) to scale up to full size before drawing, so the zoom
-    magnifies the app but not the annotations. Returns the frame with a caption strip of STRIP pixels
-    added underneath.
+    magnifies the app but not the annotations. keys: draw keystroke captions. Returns the frame with a
+    caption strip of STRIP pixels added underneath.
     """
     ox, oy = origin
     if view is not None:
@@ -207,6 +215,10 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
             d.ellipse((cx - 22, cy - 22, cx + 22, cy + 22), fill=RIPPLE + (70,))
             d.polygon(_cursor_shape(cx, cy, 1.3), fill=(255, 255, 255, 255), outline=(0, 0, 0, 255))
 
+    if keys and active:
+        fonts.setdefault("make", _font)
+        kc.draw(d, base.size, active[-1], t, fonts)
+
     framed = Image.alpha_composite(base, layer).convert("RGB")
     out = Image.new("RGB", (base.width, base.height + STRIP), CAPTION_BG[:3])
     out.paste(framed, (0, 0))
@@ -226,10 +238,11 @@ def keep_frame(t: float, steps: list[Step], last_t: float) -> bool:
 
 
 def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | None = None,
-           tight: bool = True, pointer: str = "agent", zoom: str = "auto") -> dict:
+           tight: bool = True, pointer: str = "agent", zoom: str = "auto", keys: bool = True) -> dict:
     """tight=True cuts the idle time between steps; tight=False keeps real-time pacing. pointer: "agent"
     (the agent's own track), "real" (the recorded cursor) or "none". zoom: "auto" closes in on each
-    step's target in the video (stills always show the whole frame), "off" never zooms."""
+    step's target in the video (stills always show the whole frame), "off" never zooms. keys: show
+    hotkeys as keycaps and typed text as it is typed."""
     if pointer not in POINTERS:
         raise ValueError(f"pointer must be one of {POINTERS}")
     if zoom not in ZOOMS:
@@ -244,7 +257,7 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     track = _frames_track(rec)
     width, height = meta["size"]
     fps = meta["fps"]
-    fonts = {"badge": _font(18), "caption": _font(26)}
+    fonts = {"badge": _font(18), "caption": _font(26), "make": _font}
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg not found on PATH")
@@ -283,17 +296,16 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
             if not tight or keep_frame(t, steps, last_t):
                 origin = (fr["bounds"][0], fr["bounds"][1])
                 framed = annotate(img, t, origin, pointer_for(fr, t), steps, fonts,
-                                  view=zm.camera_at(t, camera, (width, height), origin))
+                                  view=zm.camera_at(t, camera, (width, height), origin), keys=keys)
                 enc.stdin.write(framed.tobytes())
                 written += 1
             for n, due in shots_due.items():
                 if n not in saved and t >= due:
                     path = out / f"step-{n:02d}.png"
                     # Each still shows its own step only, even if the video already moved on.
-                    one = by_n[n]
-                    solo = Step(one.n, one.t, one.action, one.caption, one.rect, one.point, t - 1, t + 1)
+                    solo = replace(by_n[n], start=t - 1, end=t + 1)
                     annotate(img, t, (fr["bounds"][0], fr["bounds"][1]), pointer_for(fr, t), [solo],
-                             fonts).save(path)
+                             fonts, keys=keys).save(path)
                     saved[n] = path.name
             i += 1
     finally:
