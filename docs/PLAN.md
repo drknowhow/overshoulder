@@ -125,7 +125,7 @@ list.
    numbered callouts.
 2. **Tutorial + annotate.** Zoom, keystroke captions, redaction, annotate API
    with editable layers, GIF/PNG export, narration, step-list document.
-   Built 2026-10-23 (README § Tutorials), except the Shotcut `.mlt` export.
+   Built 2026-10-23 (README § Tutorials). The Shotcut `.mlt` export followed in phase 3.
 3. **Breadth.** Drag, hotkeys, approvals on a phone, per-agent client
    credentials, optional per-session narrowing.
 4. **Locator fallback.** OCR and vision locate + verify.

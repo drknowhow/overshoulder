@@ -29,7 +29,7 @@ METHODS = ("auto", "background", "input")
 CHANGE_EPSILON = 0.0002
 # What an agent may choose when it renders. Not engine or outside_audio: another TTS program and audio
 # from anywhere on disk are for a person at the CLI.
-RENDER_OPTIONS = ("pointer", "zoom", "keys", "gif", "narrate", "voice")
+RENDER_OPTIONS = ("pointer", "zoom", "keys", "gif", "narrate", "voice", "mlt")
 LAYER_OPS = ("list", "add", "edit", "remove")
 
 

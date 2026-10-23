@@ -237,6 +237,8 @@ the recording's folder (`%LOCALAPPDATA%\Overshoulder\recordings\<stamp>-<name>`)
 - With narration: a voice track in the MP4, plus `narration.wav` and `narration.srt`. Each line starts
   with its step's caption. When a line runs longer than its step, the video holds on the frame just
   before the pointer moves on, until the line ends.
+- With `mlt`: `tutorial.mlt`, a Shotcut project of the same edit, with its media in `edit/`. See
+  [Finishing in Shotcut](#finishing-in-shotcut).
 
 The original video is never changed. Everything added on top comes from `annotations.json` beside it,
 which the agent or you can edit before rendering again:
@@ -265,7 +267,7 @@ or throughout. Items from the [example](docs/evidence/tutorial-annotate):
 
 Agents do the same over MCP. `redact(ref)` while recording hides an element's rectangle in every
 frame. `annotate(recording, op)` lists the steps and items, or adds, edits or removes items.
-`render(recording, ...)` renders again (`zoom`, `keys`, `gif`, `narrate`, `voice`, `pointer`). An
+`render(recording, ...)` renders again (`zoom`, `keys`, `gif`, `narrate`, `voice`, `pointer`, `mlt`). An
 agent can annotate and render only its own recordings, and these two still work after it releases
 the scope. From the command line:
 
@@ -273,7 +275,7 @@ the scope. From the command line:
 overshoulder annotate <dir> list
 overshoulder annotate <dir> add arrow --step 4 --tail 507,145 --head 387,55
 overshoulder annotate <dir> add step --step 3 --narration "Press Control S to save."
-overshoulder render <dir> --narrate --voice Zira     # also: --zoom off, --no-keys, --no-gif, --pointer real
+overshoulder render <dir> --narrate --voice Zira     # also: --zoom off, --no-keys, --no-gif, --pointer real, --mlt
 overshoulder render <dir> --tts-cmd "piper -m en.onnx -f {out} < {text_file}"
 overshoulder voices
 ```
@@ -283,6 +285,25 @@ A screenshot takes a layer too: `overshoulder annotate shot.png add box --rect 1
 
 In [docs/evidence/tutorial-annotate](docs/evidence/tutorial-annotate), a headless agent records,
 redacts, annotates and narrates a Notepad tutorial on its own, working in the background.
+
+### Finishing in Shotcut
+
+`tutorial.mlt` opens in [Shotcut](https://shotcut.org) as the same edit `tutorial.mp4` shows, in parts
+you can change:
+
+- **Recording**: clips of `edit/clean.mp4` with the tutorial's cuts. Each zoom is a Size, Position &
+  Rotate filter on its clip, and each narration hold is a still (`edit/hold-NN.png`). `clean.mp4` has
+  every recorded frame, so a clip can be lengthened. Redactions are already applied to it, so hiding
+  the annotation track shows nothing a redaction covers.
+- **Annotations**: `edit/overlay.mov`, everything drawn on top (pointer, highlights, badges, keycaps,
+  layer items and the caption strip), transparent elsewhere.
+- **Narration**: `narration.wav`, when the tutorial is narrated.
+- A marker at each step, named after its caption.
+
+Paths in the project are relative, so the folder can be moved. Rendered with Shotcut's `melt`, the
+project matches `tutorial.mp4` frame for frame (on the Notepad example above, every frame is above
+0.99 SSIM and 33 dB PSNR). If you save the project in Shotcut, the next render leaves it alone and
+writes `tutorial-2.mlt` with its media in `edit-2/`.
 
 ## Limits (phase 2)
 
@@ -305,7 +326,8 @@ redacts, annotates and narrates a Notepad tutorial on its own, working in the ba
   inside the window, the redaction stays where the control was.
 - Narration uses the voices System.Speech can see (`overshoulder voices` lists them; an English
   Windows 11 has David and Zira). For any other engine, render from the CLI with `--tts-cmd`.
-- The plan's Shotcut `.mlt` export is not built.
+- The Shotcut project's annotation track is one video: an annotation can be hidden or trimmed with
+  it, but changing what it draws means editing `annotations.json` and rendering again.
 
 ## Development
 

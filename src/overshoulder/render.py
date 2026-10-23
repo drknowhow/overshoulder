@@ -3,7 +3,8 @@
 Everything is drawn here, after the fact, from the recording's tracks: a pointer, click ripples,
 numbered step badges, a highlight around each target, and a caption bar. The video also zooms in on
 each step's target and back out (zoom.py). The recording itself never contains overlays, so a
-tutorial can be re-rendered with different styling or edits.
+tutorial can be re-rendered with different styling or edits. With mlt=True the same pass also writes
+a Shotcut project of the edit (shotcut.py).
 
 The pointer is the agent's by default: it glides to each step's target just before the step. Agents
 mostly act in the background, where the real cursor belongs to the person and is somewhere else; the
@@ -26,6 +27,7 @@ from overshoulder import brand
 from overshoulder import keys as kc
 from overshoulder import layer as lay
 from overshoulder import narrate as nr
+from overshoulder import shotcut as sc
 from overshoulder import zoom as zm
 
 ACCENT = (37, 99, 235)  # badge / highlight
@@ -224,19 +226,21 @@ def _fit(d: ImageDraw.ImageDraw, text: str, max_w: float, size: int) -> tuple[st
 
 def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[int, int] | None,
              steps: list[Step], fonts: dict, view: zm.Crop | None = None, keys: bool = True,
-             items: list[dict] | None = None) -> Image.Image:
+             items: list[dict] | None = None, parts: dict | None = None) -> Image.Image:
     """Draw every annotation active at time t onto a frame whose top-left is `origin` on screen.
 
     view: a crop of the frame (frame pixels) to scale up to full size before drawing, so the zoom
     magnifies the app but not the annotations. keys: draw keystroke captions. items: layer items
     showing now, in screen pixels (layer.active); redactions are applied to the pixels before the
     zoom, so no output can show what they cover. Returns the frame with a caption strip of STRIP
-    pixels added underneath.
+    pixels added underneath. parts: filled with the frame's two layers for the Shotcut export,
+    "clean" (redacted, not zoomed) and "overlay" (RGBA: the annotations, then the opaque strip).
     """
     ox, oy = origin
     items = items or []
     if any(x["kind"] == "redact" for x in items):
         img = lay.redact(img.copy(), items, lambda x, y: (x - ox, y - oy))
+    clean = img
     if view is not None:
         img = img.resize(img.size, Image.Resampling.BICUBIC, box=view)
         sx, sy = img.width / (view[2] - view[0]), img.height / (view[3] - view[1])
@@ -293,6 +297,11 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
         sd = ImageDraw.Draw(out)
         text, font = _fit(sd, f"{s.n}. {s.caption}", base.width - 32, 26)
         sd.text((base.width / 2, base.height + STRIP / 2), text, font=font, fill=(255, 255, 255), anchor="mm")
+    if parts is not None:
+        over = Image.new("RGBA", out.size, (0, 0, 0, 0))
+        over.paste(layer, (0, 0))
+        over.paste(out.crop((0, base.height, out.width, out.height)), (0, base.height))
+        parts.update(clean=clean, overlay=over)
     return out
 
 
@@ -335,7 +344,7 @@ def keep_frame(t: float, steps: list[Step], last_t: float) -> bool:
 def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | None = None,
            tight: bool = True, pointer: str = "agent", zoom: str = "auto", keys: bool = True,
            gif: bool = True, narrate: bool = False, voice: str | None = None, engine: nr.Engine | None = None,
-           outside_audio: bool = False) -> dict:
+           outside_audio: bool = False, mlt: bool = False) -> dict:
     """tight=True cuts the idle time between steps; tight=False keeps real-time pacing. pointer: "agent"
     (the agent's own track), "real" (the recorded cursor) or "none". zoom: "auto" closes in on each
     step's target in the video (stills always show the whole frame), "off" never zooms. keys: show
@@ -345,7 +354,10 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     step until the line ends, and add the voice to tutorial.mp4 as an AAC track, with narration.wav
     and narration.srt beside it. voice: part of a Windows voice's name. engine: another TTS in place
     of the Windows voice (narrate.command; the CLI's --tts-cmd). outside_audio: let the layer's audio
-    files live outside the recording directory (a person's CLI render, never an agent's)."""
+    files live outside the recording directory (a person's CLI render, never an agent's).
+
+    mlt: also write tutorial.mlt, a Shotcut project of the same edit with its media in edit/
+    (shotcut.py); a melt render of it matches tutorial.mp4."""
     if pointer not in POINTERS:
         raise ValueError(f"pointer must be one of {POINTERS}")
     if zoom not in ZOOMS:
@@ -383,11 +395,20 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     dec = subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-i", str(rec / "video.mp4"),
                             "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE,
                            creationflags=nr.NO_WINDOW)
-    enc = subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt",
-                            "rgb24", "-s", f"{width}x{height + STRIP}", "-r", str(fps), "-i", "-", "-c:v",
-                            "libx264",
-                            "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart",
-                            str(out / "tutorial.mp4")], stdin=subprocess.PIPE, creationflags=nr.NO_WINDOW)
+    full_h = height + STRIP
+    enc = _encoder(ffmpeg, (width, full_h), fps, out / "tutorial.mp4")
+    timeline = enc_clean = enc_over = project = None
+    if mlt:
+        project, edit_name = sc.names(out)
+        edit = out / edit_name
+        edit.mkdir(exist_ok=True)
+        for old in edit.glob("hold-*.png"):
+            old.unlink()
+        timeline = sc.Timeline(edit_name)
+        enc_clean = _encoder(ffmpeg, (width, full_h), fps, edit / "clean.mp4")
+        enc_over = _encoder(ffmpeg, (width, full_h), fps, edit / "overlay.mov", alpha=True)
+    last_src, last_rect, last_canvas, last_over = 0, (0.0, 0.0, float(width), float(full_h)), None, b""
+    marked: set[int] = set()
     shots_due = {s.n: still_time(s) for s in steps}
     by_n = {s.n: s for s in steps}
     windows = {s.id: (s.start, s.end) for s in steps}
@@ -429,6 +450,11 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
         nonlocal written, held
         while last and written / fps < until:
             enc.stdin.write(last)
+            if timeline is not None:
+                enc_over.stdin.write(last_over)
+                hold_seg = timeline.held(last_src, last_rect)
+                if hold_seg is not None:
+                    last_canvas.save(out / hold_seg.image)
             written += 1
             held += 1
 
@@ -462,14 +488,36 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
                 img = img.crop(crop)
             frame_origin = (fr["bounds"][0], fr["bounds"][1])  # where the clean frame's (0, 0) is on screen
             origin = (frame_origin[0] + cl, frame_origin[1] + ct)
+            items = lay.active(drawn, t, windows, frame_origin)
+            parts = {} if timeline is not None else None
             if (not tight or keep_frame(t, steps, last_t)) and not lay.in_cut(t, cuts):
                 speak_before(t)
-                framed = annotate(img, t, origin, pointer_for(fr, t), steps, fonts,
-                                  view=zm.camera_at(t, camera, (width, height), origin), keys=keys,
-                                  items=lay.active(drawn, t, windows, frame_origin))
+                view = zm.camera_at(t, camera, (width, height), origin)
+                framed = annotate(img, t, origin, pointer_for(fr, t), steps, fonts, view=view, keys=keys,
+                                  items=items, parts=parts)
                 last = framed.tobytes()
                 enc.stdin.write(last)
+                if timeline is not None:
+                    last_src, last_rect = i, sc.zoom_rect(view, (width, height), full_h)
+                    last_over = parts["overlay"].tobytes()
+                    enc_over.stdin.write(last_over)
+                    timeline.frame(i, last_rect)
+                    for s in steps:
+                        if s.id not in marked and t >= s.t:
+                            timeline.marker(written, f"{s.n}. {s.caption}")
+                            marked.add(s.id)
                 written += 1
+            if timeline is not None:  # the clean track keeps every frame, so a clip can be lengthened
+                if "clean" not in parts:
+                    ox, oy = origin
+                    redacts = any(x["kind"] == "redact" for x in items)
+                    parts["clean"] = lay.redact(img.copy(), items, lambda x, y, ox=ox, oy=oy: (x - ox, y - oy)) \
+                        if redacts else img
+                canvas = Image.new("RGB", (width, full_h))
+                canvas.paste(parts["clean"], (0, 0))
+                enc_clean.stdin.write(canvas.tobytes())
+                if "overlay" in parts:
+                    last_canvas = canvas
             for n, due in shots_due.items():
                 if n not in saved and t >= due:
                     path = out / f"step-{n:02d}.png"
@@ -484,8 +532,10 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     finally:
         dec.stdout.close()
         dec.wait()
-        enc.stdin.close()
-        enc.wait()
+        for e in (enc, enc_clean, enc_over):
+            if e is not None:
+                e.stdin.close()
+                e.wait()
 
     lines = ["# Steps", ""]
     for s in steps:
@@ -506,10 +556,23 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
         os.replace(out / "tutorial.narrated.mp4", out / "tutorial.mp4")
         result.update(narration=str(out / "narration.srt"), narration_audio=str(out / "narration.wav"),
                       lines=len(cues), held_s=round(held / fps, 1))
+    if timeline is not None and written:
+        sc.write(project, size=(width, full_h), fps=fps, timeline=timeline, clean_frames=i, narration=bool(cues))
+        result.update(project=str(project), project_media=str(out / timeline.edit))
     (out / "tutorial.gif").unlink(missing_ok=True)
     if gif and written:
         result.update(export_gif(out / "tutorial.mp4", out / "tutorial.gif", fps=min(GIF_FPS, fps)))
     return result
+
+
+def _encoder(ffmpeg: str, size: tuple[int, int], fps: int, path: Path, alpha: bool = False) -> subprocess.Popen:
+    """An ffmpeg process that encodes raw frames from its stdin: H.264, or with alpha=True RGBA frames
+    as QuickTime Animation, which keeps the transparency."""
+    codec = ["-c:v", "qtrle", "-pix_fmt", "argb"] if alpha else \
+        ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+    return subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt",
+                             "rgba" if alpha else "rgb24", "-s", f"{size[0]}x{size[1]}", "-r", str(fps), "-i", "-",
+                             *codec, str(path)], stdin=subprocess.PIPE, creationflags=nr.NO_WINDOW)
 
 
 def export_gif(video: Path, gif: Path, width: int = GIF_WIDTH, fps: int = GIF_FPS) -> dict:

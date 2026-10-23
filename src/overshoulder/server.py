@@ -242,17 +242,20 @@ class Daemon:
 
         @mcp.tool()
         async def record_stop(ctx: Context, render: bool = True, zoom: str = "auto", keys: bool = True,
-                              gif: bool = True, narrate: bool = False, voice: str | None = None) -> dict:
+                              gif: bool = True, narrate: bool = False, voice: str | None = None,
+                              mlt: bool = False) -> dict:
             """Stop recording. With render=true, also returns a tutorial: an MP4 with a pointer, click
             ripples, numbered step callouts, captions, a zoom onto each step's target (zoom="off" to
             stop it) and keystroke captions (keys), one PNG per step, steps.md, steps.json and
             tutorial.gif (gif). narrate=true speaks each step with the Windows voice (voice: part of a
-            voice's name, e.g. "Zira"); the video waits for each line. Rendering runs after the desktop
-            is free, so other agents are not held up."""
+            voice's name, e.g. "Zira"); the video waits for each line. mlt=true also writes
+            tutorial.mlt, a Shotcut project of the same edit a person can open and finish. Rendering runs
+            after the desktop is free, so other agents are not held up."""
             out = await authed(ctx, lambda token: d.svc.record_stop(token, d.lease_for(token)))
             if render and not failed(out) and out.get("frames"):
                 out["tutorial"] = await offline(ctx, lambda token: d.svc.render_recording(
-                    token, out["recording"], zoom=zoom, keys=keys, gif=gif, narrate=narrate, voice=voice))
+                    token, out["recording"], zoom=zoom, keys=keys, gif=gif, narrate=narrate, voice=voice,
+                    mlt=mlt))
             return out
 
         @mcp.tool()
@@ -281,12 +284,15 @@ class Daemon:
 
         @mcp.tool()
         async def render(ctx: Context, recording: str, zoom: str = "auto", keys: bool = True, gif: bool = True,
-                         narrate: bool = False, voice: str | None = None, pointer: str = "agent") -> dict:
+                         narrate: bool = False, voice: str | None = None, pointer: str = "agent",
+                         mlt: bool = False) -> dict:
             """Render one of your stopped recordings again, with its annotation layer: after annotate(), or
-            to change zoom, keys, gif or narration (see record_stop). pointer: "agent" (your pointer,
-            gliding to each step), "real" (the recorded cursor) or "none". Needs no scope."""
+            to change zoom, keys, gif, narration or the Shotcut project (mlt; see record_stop). pointer:
+            "agent" (your pointer, gliding to each step), "real" (the recorded cursor) or "none". Needs no
+            scope."""
             return await offline(ctx, lambda token: d.svc.render_recording(
-                token, recording, zoom=zoom, keys=keys, gif=gif, narrate=narrate, voice=voice, pointer=pointer))
+                token, recording, zoom=zoom, keys=keys, gif=gif, narrate=narrate, voice=voice, pointer=pointer,
+                mlt=mlt))
 
         @mcp.tool()
         async def screenshot(ctx: Context) -> list:
