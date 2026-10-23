@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import logging
 import secrets
 import threading
 from pathlib import Path
@@ -349,7 +350,24 @@ class Daemon:
         return mcp
 
 
+class _QuietStatusPolls(logging.Filter):
+    """Drops uvicorn's access line for each answered /operator/status poll. The watchdog polls every
+    250 ms, which put ~22 MB a day into serve.log; refusals and every other request still log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args  # uvicorn: (client, method, path with query, http version, status code)
+        return not (isinstance(args, tuple) and len(args) == 5 and args[2] == "/operator/status"
+                    and args[4] == 200)
+
+
+def quiet_status_polls() -> None:
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, _QuietStatusPolls) for f in access.filters):
+        access.addFilter(_QuietStatusPolls())
+
+
 def serve(port: int = DEFAULT_PORT) -> None:
+    quiet_status_polls()  # on the logger, which uvicorn's own logging setup leaves in place
     daemon = Daemon(port=port)
     mcp = daemon.build()
     security = TransportSecuritySettings(enable_dns_rebinding_protection=True,

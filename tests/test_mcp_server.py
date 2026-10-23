@@ -135,6 +135,61 @@ def test_operator_endpoints_need_the_operator_key(daemon):
     assert body["status"]["paused"]
 
 
+def test_answered_status_polls_stay_out_of_the_access_log(tmp_path, monkeypatch):
+    """The watchdog polls /operator/status every 250 ms; logging each one grew serve.log by ~22 MB a day."""
+    import logging
+
+    import uvicorn
+
+    from overshoulder.gateway.core import gateway_for_tests
+    from overshoulder.server import Daemon, _QuietStatusPolls, quiet_status_polls
+    from overshoulder.service import Service
+
+    monkeypatch.setenv("OVERSHOULDER_HOME", str(tmp_path / "home"))
+    d = Daemon(Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots"))
+    port = _free_port()
+    server = uvicorn.Server(uvicorn.Config(d.build().streamable_http_app(host="127.0.0.1"), host="127.0.0.1",
+                                           port=port, log_level="info"))
+    t = threading.Thread(target=server.run, daemon=True)
+    t.start()
+    for _ in range(100):
+        if server.started:
+            break
+        time.sleep(0.05)
+    access = logging.getLogger("uvicorn.access")
+    lines = []
+    handler = logging.Handler()
+    handler.emit = lambda r: lines.append(r.getMessage())
+    access.addHandler(handler)
+    key = {"x-overshoulder-operator": d.operator_key}
+
+    def get(path, headers=None, data=None):
+        req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", headers=headers or {}, data=data,
+                                     method="POST" if data is not None else "GET")
+        try:
+            urllib.request.urlopen(req, timeout=5).read()
+        except urllib.error.HTTPError:
+            pass
+
+    try:
+        get("/operator/status", key)
+        assert any("/operator/status" in x and x.endswith("200") for x in lines), lines  # the capture works
+        quiet_status_polls()
+        lines.clear()
+        get("/operator/status", key)
+        get("/operator/status")  # refused: still logged
+        get("/operator/resume", {**key, "content-type": "application/json"}, b"{}")
+        assert not any("/operator/status" in x and x.endswith("200") for x in lines), lines
+        assert any("/operator/status" in x and x.endswith("403") for x in lines), lines
+        assert any("/operator/resume" in x for x in lines), lines
+    finally:
+        access.removeHandler(handler)
+        for f in [f for f in access.filters if isinstance(f, _QuietStatusPolls)]:
+            access.removeFilter(f)
+        server.should_exit = True
+        t.join(timeout=10)
+
+
 def test_foreign_host_header_is_rejected(daemon):
     _, port, token = daemon
     req = urllib.request.Request(f"http://127.0.0.1:{port}/mcp", data=b"{}", method="POST",

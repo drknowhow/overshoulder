@@ -325,10 +325,16 @@ class Service:
         def verify(t: Target | None, p: dict, result):
             time.sleep(0.35)
             scope = self._scope(lease_id)
-            after = self._snap(scope)
+            ran = {"method": (result or {}).get("method"), "background": (result or {}).get("background")}
+            after = None if _gone(scope) else self._snap(scope)
+            if after is None and _gone(scope):
+                # The action closed the scope's own window (Ctrl+W on the last tab, a dialog's OK). That
+                # is its effect, not a failure; an expectation about what the window shows can't be met.
+                return {"ok": not expect, "changed": True, "window_closed": True, **ran,
+                        "note": "the action closed the scope's window; release_scope, or take a new scope",
+                        **({"expect_failed": ["the scope's window closed"]} if expect else {})}
             pixels = capture.changed_fraction(before["img"], after) if before["img"] and after else 0.0
-            verdict = {"ok": True, "changed": pixels > CHANGE_EPSILON, "pixels_changed": round(pixels, 5),
-                       "method": (result or {}).get("method"), "background": (result or {}).get("background")}
+            verdict = {"ok": True, "changed": pixels > CHANGE_EPSILON, "pixels_changed": round(pixels, 5), **ran}
             if ref and uia.element_state(self.cache.get(ref)) is not None:
                 readback = uia.read(self.cache.get(ref))
                 verdict["readback"] = {k: (v[:200] if isinstance(v, str) else v) for k, v in readback.items()}
@@ -360,13 +366,17 @@ class Service:
 
     @staticmethod
     def _snap(scope):
-        """Pixels of the scope: the window's own (works when covered) or the screen rect."""
+        """Pixels of the scope: the window's own (works when covered) or the screen rect. None when
+        there is nothing to capture, such as a window closing as it is read."""
+        bounds = scope.bounds()
+        if bounds.empty:
+            return None
         binding = getattr(scope, "binding", None)
         if binding is not None:
-            img = capture.window_image(binding.hwnd, scope.bounds())
+            img = capture.window_image(binding.hwnd, bounds)
             if img is not None:
                 return img
-        return capture.grab(scope.bounds())
+        return capture.grab(bounds)
 
     def _check_expect(self, expect: dict, ref: str | None, lease_id: str, verdict: dict) -> dict:
         problems = []
@@ -409,6 +419,17 @@ def _need(el, action: str):
     if el is None:
         raise ValueError(f"{action} needs an element ref")
     return el
+
+
+def _gone(scope) -> bool:
+    """A window scope whose window has closed, or whose process has gone, since it was taken."""
+    if getattr(scope, "kind", None) != "window":
+        return False
+    try:
+        scope.check_alive()
+    except sc.ScopeStale:
+        return True
+    return False
 
 
 def _rect_list(r: Rect) -> list[int]:
