@@ -99,7 +99,7 @@ class Service:
             out["elements"] = elements[:max_nodes]
             out["truncated"] = len(elements) > max_nodes
             if screenshot:
-                out["screenshot"] = str(self._shot(scope.bounds(), "observe"))
+                out["screenshot"] = str(self._shot(scope, "observe"))
             return out
 
         return self.gw.run(token, lease_id, "observe", perform, read_only=True,
@@ -131,7 +131,7 @@ class Service:
     def screenshot(self, token: str, lease_id: str) -> dict:
         def perform(_t, p):
             scope = self._scope(lease_id)
-            return {"path": str(self._shot(scope.bounds(), "shot"))}
+            return {"path": str(self._shot(scope, "shot"))}
         return self.gw.run(token, lease_id, "screenshot", perform, read_only=True)["result"]
 
     # -- recording -----------------------------------------------------------------------------
@@ -386,10 +386,19 @@ class Service:
                 problems.append(f"no element matching {want}")
         return {"ok": not problems, "expect_failed": problems} if problems else {"expect": "met"}
 
-    def _shot(self, rect: Rect, kind: str) -> Path:
+    def _shot(self, scope, kind: str) -> Path:
+        """A screenshot for the agent. A window scope gives the window's own pixels only, never the
+        screen area it occupies, so whatever covers it (the person's other windows) is not captured."""
+        binding = getattr(scope, "binding", None)
+        if binding is not None:
+            img = capture.window_image(binding.hwnd, scope.bounds())
+            if img is None:
+                raise GatewayError("could not capture the window's own pixels; try again")
+        else:
+            img = capture.grab(scope.bounds())
         ms = int(time.time() * 1000) % 1000
         path = self.shots_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{ms:03d}-{kind}.png"
-        return capture.save(capture.grab(rect), path)
+        return capture.save(img, path)
 
 
 class _NoLease:

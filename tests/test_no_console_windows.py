@@ -1,6 +1,6 @@
 """The daemon runs under pythonw, where every console program it starts (ffmpeg, PowerShell) gets a
 console window of its own unless asked not to. One once sat on top of the window an agent was
-recording and took its real-input clicks. So every subprocess call in the package must pass
+recording, in the way of its real-input clicks. So every subprocess call in the package must pass
 creationflags; this scans the source rather than a list of known calls, so a new call is covered."""
 
 import ast

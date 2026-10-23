@@ -67,6 +67,8 @@ Then ask the agent something like "take the Notepad window as your scope and typ
 | `act` | `click`, `double_click`, `right_click`, `invoke`, `toggle`, `select`, `set_value`, `type`, `hotkey`, `focus`, `activate`, each verified afterwards |
 | `screenshot` | Image of the scope |
 | `record_start`, `record_stop` | Record the scope and render a tutorial |
+| `redact` | While recording, hide an element in every frame of the tutorial |
+| `annotate`, `render` | Edit one of its recordings' annotation layer and render it again |
 | `release_scope`, `status` | Give the desktop back; see who is driving |
 
 Agents should prefer element refs and `invoke`/`set_value`. Coordinates work as well, for canvas
@@ -105,8 +107,8 @@ refusal is logged.
 - **Logs.** Every action goes to a JSONL file in `%LOCALAPPDATA%\Overshoulder\logs`. Typed text is
   recorded only as its length, unless the agent took the scope with `log_text=true` (needed for
   tutorial captions).
-- **Recordings stay in scope.** A window recording captures that window's own pixels, even when
-  something covers it.
+- **Recordings and screenshots stay in scope.** For a window scope, both capture that window's own
+  pixels, even when something covers it, so your other windows never reach the agent.
 
 ## Working beside you
 
@@ -171,6 +173,11 @@ tutorial made in the background looks like someone doing the steps
 - Apps that hide their controls from UI Automation (canvases, games) can only be driven by
   coordinates. Verification for them is a screenshot difference.
 - Screen-scope recordings use desktop capture, so anything on that screen is recorded.
+- A redaction is a fixed rectangle of the recorded frame. If the control it covers scrolls or moves
+  inside the window, the redaction stays where the control was.
+- Narration uses the voices System.Speech can see (`overshoulder voices` lists them; an English
+  Windows 11 has David and Zira). For any other engine, render from the CLI with `--tts-cmd`.
+- The plan's Shotcut `.mlt` export is not built.
 
 ## Development
 
