@@ -41,7 +41,7 @@ def test_type_text_sends_nothing_once_focus_moves(monkeypatch):
     monkeypatch.setattr(inp, "send", lambda events: sent.append(list(events)))
     focus = iter([0x100, 0x100, 0x999])
     with pytest.raises(inp.FocusLost):
-        inp.type_text(0x100, "abc", per_char_delay=0, get_foreground=lambda: next(focus))
+        inp.type_text(0x100, "abc", per_char_delay=0, get_foreground=lambda: next(focus), key_state=lambda vk: 0)
     assert len(sent) == 2
 
 
