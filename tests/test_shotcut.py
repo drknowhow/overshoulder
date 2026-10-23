@@ -17,9 +17,22 @@ from tests.rechelpers import HAVE_FFMPEG, make_recording, red_pixels, video_fram
 from tests.test_narrate import FakeVoice  # noqa: E402
 
 needs_ffmpeg = pytest.mark.skipif(not HAVE_FFMPEG or not shutil.which("ffprobe"), reason="needs ffmpeg and ffprobe")
-MELT = os.environ.get("OVERSHOULDER_MELT") or shutil.which("melt") or \
-    str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Shotcut" / "melt.exe")
-needs_melt = pytest.mark.skipif(not HAVE_FFMPEG or not Path(MELT).is_file(), reason="needs Shotcut's melt")
+def _mlt_melt() -> str | None:
+    """MLT's melt, not another program of the same name (GitHub's Windows runners put WiX's melt on PATH)."""
+    for path in (os.environ.get("OVERSHOULDER_MELT"), shutil.which("melt"),
+                 str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Shotcut" / "melt.exe")):
+        if path and Path(path).is_file():
+            try:
+                out = subprocess.run([path, "-version"], capture_output=True, text=True, timeout=20)
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if "mltframework" in out.stdout + out.stderr:
+                return path
+    return None
+
+
+MELT = _mlt_melt()
+needs_melt = pytest.mark.skipif(not HAVE_FFMPEG or MELT is None, reason="needs MLT's melt (Shotcut)")
 FULL = (0.0, 0.0, 320.0, 312.0)
 
 
