@@ -1,8 +1,9 @@
 """Turn a clean recording + action timeline into a tutorial: MP4, per-step PNGs and steps.md.
 
 Everything is drawn here, after the fact, from the recording's tracks: a pointer, click ripples,
-numbered step badges, a highlight around each target, and a caption bar. The recording itself never
-contains overlays, so a tutorial can be re-rendered with different styling or edits.
+numbered step badges, a highlight around each target, and a caption bar. The video also zooms in on
+each step's target and back out (zoom.py). The recording itself never contains overlays, so a
+tutorial can be re-rendered with different styling or edits.
 
 The pointer is the agent's by default: it glides to each step's target just before the step. Agents
 mostly act in the background, where the real cursor belongs to the person and is somewhere else; the
@@ -19,6 +20,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
+from overshoulder import zoom as zm
+
 ACCENT = (37, 99, 235)  # badge / highlight
 RIPPLE = (250, 204, 21)
 CAPTION_BG = (17, 24, 39, 215)
@@ -27,6 +30,7 @@ STEP_ACTIONS = {"click", "double_click", "right_click", "invoke", "toggle", "sel
 # Actions a viewer would do with a click: they get a ripple where the pointer lands.
 PRESS_ACTIONS = {"click", "double_click", "right_click", "invoke", "toggle", "select"}
 POINTERS = ("agent", "real", "none")
+ZOOMS = ("auto", "off")
 LEAD_S, HOLD_S, RIPPLE_S = 0.5, 2.2, 0.6
 GLIDE_S = 0.5  # the agent's pointer moves to a step's target over this long, ending at the step
 STRIP = 72  # caption strip under the video, so captions never cover the app
@@ -155,12 +159,24 @@ def _fit(d: ImageDraw.ImageDraw, text: str, max_w: float, size: int) -> tuple[st
 
 
 def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[int, int] | None,
-             steps: list[Step], fonts: dict) -> Image.Image:
+             steps: list[Step], fonts: dict, view: zm.Crop | None = None) -> Image.Image:
     """Draw every annotation active at time t onto a frame whose top-left is `origin` on screen.
 
-    Returns the frame with a caption strip of STRIP pixels added underneath.
+    view: a crop of the frame (frame pixels) to scale up to full size before drawing, so the zoom
+    magnifies the app but not the annotations. Returns the frame with a caption strip of STRIP pixels
+    added underneath.
     """
     ox, oy = origin
+    if view is not None:
+        img = img.resize(img.size, Image.Resampling.BICUBIC, box=view)
+        sx, sy = img.width / (view[2] - view[0]), img.height / (view[3] - view[1])
+
+    def at(x: float, y: float) -> tuple[float, float]:
+        """Screen pixels to output pixels."""
+        if view is None:
+            return x - ox, y - oy
+        return (x - ox - view[0]) * sx, (y - oy - view[1]) * sy
+
     base = img.convert("RGBA")
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
@@ -168,11 +184,12 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
 
     for s in active:
         if s.rect:
-            lf, tp, r, b = s.rect[0] - ox, s.rect[1] - oy, s.rect[2] - ox, s.rect[3] - oy
+            (lf, tp), (r, b) = at(s.rect[0], s.rect[1]), at(s.rect[2], s.rect[3])
             d.rounded_rectangle((lf - 4, tp - 4, r + 4, b + 4), radius=8, outline=ACCENT + (255,), width=4)
             bx, by = max(lf - 16, 4), max(tp - 16, 4)
         elif s.point:
-            bx, by = s.point[0] - ox + 14, s.point[1] - oy - 34
+            px, py = at(*s.point)
+            bx, by = px + 14, py - 34
         else:
             bx = by = None  # keyboard step with no target: the caption carries it
         if bx is not None:
@@ -181,11 +198,11 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
         if s.point and 0 <= t - s.t <= RIPPLE_S:
             k = (t - s.t) / RIPPLE_S
             rad = 10 + 30 * k
-            px, py = s.point[0] - ox, s.point[1] - oy
+            px, py = at(*s.point)
             d.ellipse((px - rad, py - rad, px + rad, py + rad), outline=RIPPLE + (int(255 * (1 - k)),), width=4)
 
     if cursor:
-        cx, cy = cursor[0] - ox, cursor[1] - oy
+        cx, cy = at(*cursor)
         if -40 < cx < base.width + 40 and -40 < cy < base.height + 40:
             d.ellipse((cx - 22, cy - 22, cx + 22, cy + 22), fill=RIPPLE + (70,))
             d.polygon(_cursor_shape(cx, cy, 1.3), fill=(255, 255, 255, 255), outline=(0, 0, 0, 255))
@@ -209,11 +226,14 @@ def keep_frame(t: float, steps: list[Step], last_t: float) -> bool:
 
 
 def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | None = None,
-           tight: bool = True, pointer: str = "agent") -> dict:
+           tight: bool = True, pointer: str = "agent", zoom: str = "auto") -> dict:
     """tight=True cuts the idle time between steps; tight=False keeps real-time pacing. pointer: "agent"
-    (the agent's own track), "real" (the recorded cursor) or "none"."""
+    (the agent's own track), "real" (the recorded cursor) or "none". zoom: "auto" closes in on each
+    step's target in the video (stills always show the whole frame), "off" never zooms."""
     if pointer not in POINTERS:
         raise ValueError(f"pointer must be one of {POINTERS}")
+    if zoom not in ZOOMS:
+        raise ValueError(f"zoom must be one of {ZOOMS}")
     rec = Path(rec_dir)
     out = Path(out_dir or rec / "tutorial")
     out.mkdir(parents=True, exist_ok=True)
@@ -243,6 +263,7 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     last_t = track[-1]["t"] if track else 0.0
     b0 = track[0]["bounds"] if track else [0, 0, width, height]
     home = ((b0[0] + b0[2]) // 2, (b0[1] + b0[3]) // 2)
+    camera = zm.plan(steps, (width, height)) if zoom == "auto" else []
 
     def pointer_for(fr: dict, t: float):
         if pointer == "agent":
@@ -260,7 +281,9 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
             t = fr["t"]
             img = Image.frombytes("RGB", (width, height), raw)
             if not tight or keep_frame(t, steps, last_t):
-                framed = annotate(img, t, (fr["bounds"][0], fr["bounds"][1]), pointer_for(fr, t), steps, fonts)
+                origin = (fr["bounds"][0], fr["bounds"][1])
+                framed = annotate(img, t, origin, pointer_for(fr, t), steps, fonts,
+                                  view=zm.camera_at(t, camera, (width, height), origin))
                 enc.stdin.write(framed.tobytes())
                 written += 1
             for n, due in shots_due.items():
