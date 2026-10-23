@@ -323,10 +323,13 @@ class Daemon:
 
         @mcp.custom_route("/operator/{verb}", methods=["POST"])
         async def op_verb(request: Request):
+            # Read the body even to refuse: answering with it unread sometimes resets the connection on
+            # Windows, and the caller gets ConnectionAbortedError instead of the 403.
+            raw = await request.body()
             if not operator_ok(request):
                 return JSONResponse({"error": "forbidden"}, status_code=403)
             verb = request.path_params["verb"]
-            body = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
+            body = json.loads(raw) if raw else {}
             if verb == "panic":
                 d.gw.panic(body.get("reason", "operator panic"))
             elif verb == "pause":
