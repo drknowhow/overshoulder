@@ -128,6 +128,9 @@ list.
    Built 2026-10-23 (README § Tutorials). The Shotcut `.mlt` export followed in phase 3.
 3. **Breadth.** Drag, hotkeys, approvals on a phone, per-agent client
    credentials, optional per-session narrowing.
+   Built 2026-10-23: drag, approvals on a phone (ntfy and a signed webhook),
+   per-session narrowing and the Shotcut `.mlt` export. Hotkeys and per-agent
+   client credentials came with the phase 1 gateway.
 4. **Locator fallback.** OCR and vision locate + verify.
 
 Deferred until asked: live overlays, OBS scenes, remote (phone) driving.

@@ -1,0 +1,38 @@
+{
+  "samples": 856,
+  "seconds": 43.0,
+  "period_ms": 50,
+  "foreground_was_the_persons_window": false,
+  "samples_with_another_foreground": 856,
+  "foreground_excursions": [
+    {
+      "from_s": 0.0,
+      "seconds": 43.05,
+      "window": "Claude"
+    }
+  ],
+  "cursor_unchanged": false,
+  "injected_input_events": 2,
+  "physical_input_events": 1770,
+  "agent_seconds": 43.1,
+  "agent_exit_code": 0,
+  "box": {
+    "released": true,
+    "top_left": [
+      30,
+      30
+    ],
+    "expected_top_left": [
+      270,
+      170
+    ],
+    "landed_on_the_drop_point": false
+  },
+  "project_written": true,
+  "melt": {
+    "frames_compared": 58,
+    "psnr_min_db": 45.8,
+    "psnr_mean_db": 47.9
+  },
+  "cursor_positions_seen_count": 333
+}

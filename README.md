@@ -10,7 +10,7 @@
 <p align="center">
   <img alt="Platform: Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%2F11-2563eb">
   <img alt="Protocol: MCP" src="https://img.shields.io/badge/protocol-MCP-111827">
-  <img alt="Status: phase 2" src="https://img.shields.io/badge/status-phase%202-f5a623">
+  <img alt="Status: phase 3" src="https://img.shields.io/badge/status-phase%203-f5a623">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-22c55e">
 </p>
 
@@ -26,7 +26,7 @@ Windows Calculator". Video, step images and `steps.md` are in [docs/demo/calcula
 Agents work on their window in the background, so the person at the desk keeps their own cursor and
 keyboard. See [Working beside you](#working-beside-you).
 
-Status: phase 2. Windows 10/11 only.
+Status: phase 3. Windows 10/11 only.
 
 ## Install
 
@@ -163,7 +163,10 @@ are in [docs/SPIKE-phase2.md](docs/SPIKE-phase2.md). In
 Notepad, Calculator and Character Map with the input mode set to "never". Sampled every 50 ms for
 56 seconds, the person's window stayed in front, the cursor did not move, and no input was injected.
 [docs/evidence/phase2-borrow](docs/evidence/phase2-borrow) shows a borrowed click that waited for
-the person to stop using the PC, then put their cursor and window back.
+the person to stop using the PC, then put their cursor and window back. In
+[docs/evidence/phase3-e2e](docs/evidence/phase3-e2e), a headless agent narrows its own session, drags
+a box in the background while a program it was denied covers the start point, and records the drag as
+a tutorial whose Shotcut project renders to match the video.
 
 ## Waiting for the person
 
@@ -305,7 +308,7 @@ project matches `tutorial.mp4` frame for frame (on the Notepad example above, ev
 0.99 SSIM and 33 dB PSNR). If you save the project in Shotcut, the next render leaves it alone and
 writes `tutorial-2.mlt` with its media in `edit-2/`.
 
-## Limits (phase 2)
+## Limits (phase 3)
 
 - Windows only. Multi-monitor and mixed-DPI setups are untested; development used one 125% monitor.
 - Chromium and Electron apps take typing only while they are in front (measured on VS Code; Chrome
@@ -317,7 +320,9 @@ writes `tutorial-2.mlt` with its media in `edit-2/`.
 - Drags in the background work in apps that read the pointer from each message (Win32, WinForms).
   Explorer, list and tree views start drags from the real mouse, and Tk follows the real cursor while
   a button is held, so dragging in them needs real input: borrowed in "borrow" mode, refused in
-  "never" mode. A drop into another window always needs real input.
+  "never" mode. A drop into another window always needs real input. One background drag in the phase 3
+  end-to-end run moved nothing while someone was using the mouse at the same time; the cause is not
+  known ([run 1](docs/evidence/phase3-e2e#earlier-runs)). That drag reported `verify.changed: false`.
 - Apps that hide their controls from UI Automation (canvases, games) can only be driven by
   coordinates. Verification for them is a screenshot difference.
 - Screen-scope recordings use desktop capture, so anything on that screen is recorded, except the

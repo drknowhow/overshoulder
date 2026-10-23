@@ -1,0 +1,39 @@
+{
+  "samples": 1035,
+  "seconds": 52.0,
+  "period_ms": 50,
+  "foreground_was_the_persons_window": true,
+  "samples_with_another_foreground": 0,
+  "foreground_excursions": [],
+  "cursor_positions_seen": [
+    [
+      641,
+      582
+    ]
+  ],
+  "cursor_unchanged": true,
+  "injected_input_events": 0,
+  "physical_input_events": 0,
+  "agent_seconds": 52.1,
+  "agent_exit_code": 0,
+  "drag_start_covered_by": "Character Map",
+  "box": {
+    "released": true,
+    "moves": 13,
+    "top_left": [
+      270,
+      170
+    ],
+    "expected_top_left": [
+      270,
+      170
+    ],
+    "landed_on_the_drop_point": true
+  },
+  "project_written": true,
+  "melt": {
+    "frames_compared": 49,
+    "psnr_min_db": 45.7,
+    "psnr_mean_db": 47.8
+  }
+}

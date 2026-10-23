@@ -1,0 +1,119 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mlt LC_NUMERIC="C" version="7.0.0" title="Overshoulder tutorial" producer="tractor0">
+  <profile description="402x390 10 fps" width="402" height="390" progressive="1" sample_aspect_num="1" sample_aspect_den="1" display_aspect_num="402" display_aspect_den="390" frame_rate_num="10" frame_rate_den="1" colorspace="709" />
+  <producer in="0" out="48" id="black">
+    <property name="length">49</property>
+    <property name="eof">pause</property>
+    <property name="resource">0</property>
+    <property name="mlt_service">color</property>
+    <property name="mlt_image_format">rgba</property>
+    <property name="set.test_audio">0</property>
+  </producer>
+  <producer in="0" out="54" id="clip0">
+    <property name="length">55</property>
+    <property name="eof">pause</property>
+    <property name="resource">edit/clean.mp4</property>
+    <property name="mlt_service">avformat-novalidate</property>
+    <property name="shotcut:caption">clean.mp4</property>
+    <property name="seekable">1</property>
+    <property name="shotcut:skipConvert">1</property>
+  </producer>
+  <producer in="0" out="54" id="clip1">
+    <property name="length">55</property>
+    <property name="eof">pause</property>
+    <property name="resource">edit/clean.mp4</property>
+    <property name="mlt_service">avformat-novalidate</property>
+    <property name="shotcut:caption">clean.mp4</property>
+    <property name="seekable">1</property>
+    <property name="shotcut:skipConvert">1</property>
+  </producer>
+  <producer in="0" out="48" id="overlay">
+    <property name="length">49</property>
+    <property name="eof">pause</property>
+    <property name="resource">edit/overlay.mov</property>
+    <property name="mlt_service">avformat-novalidate</property>
+    <property name="shotcut:caption">overlay.mov</property>
+    <property name="seekable">1</property>
+    <property name="shotcut:skipConvert">1</property>
+  </producer>
+  <producer in="0" out="48" id="narration">
+    <property name="length">49</property>
+    <property name="eof">pause</property>
+    <property name="resource">narration.wav</property>
+    <property name="mlt_service">avformat-novalidate</property>
+    <property name="shotcut:caption">narration.wav</property>
+    <property name="seekable">1</property>
+    <property name="shotcut:skipConvert">1</property>
+  </producer>
+  <playlist id="background">
+    <entry in="0" out="48" producer="black" />
+  </playlist>
+  <playlist id="recording">
+    <property name="shotcut:video">1</property>
+    <property name="shotcut:name">Recording</property>
+    <entry in="0" out="9" producer="clip0" />
+    <entry in="16" out="54" producer="clip1" />
+  </playlist>
+  <playlist id="annotations">
+    <property name="shotcut:video">1</property>
+    <property name="shotcut:name">Annotations</property>
+    <entry in="0" out="48" producer="overlay" />
+  </playlist>
+  <playlist id="narration_track">
+    <property name="shotcut:audio">1</property>
+    <property name="shotcut:name">Narration</property>
+    <property name="hide">1</property>
+    <entry in="0" out="48" producer="narration" />
+  </playlist>
+  <tractor in="0" out="48" id="tractor0">
+    <property name="shotcut">1</property>
+    <property name="shotcut:projectAudioChannels">2</property>
+    <properties name="shotcut:markers">
+      <properties name="0">
+        <property name="text">1. Drag along the arrow</property>
+        <property name="start">00:00:02.100</property>
+        <property name="end">00:00:02.100</property>
+        <property name="color">#2563EB</property>
+      </properties>
+    </properties>
+    <track producer="background" />
+    <track producer="recording" />
+    <track producer="annotations" />
+    <track producer="narration_track" />
+    <transition id="mix1">
+      <property name="a_track">0</property>
+      <property name="b_track">1</property>
+      <property name="always_active">1</property>
+      <property name="sum">1</property>
+      <property name="mlt_service">mix</property>
+    </transition>
+    <transition id="mix2">
+      <property name="a_track">0</property>
+      <property name="b_track">2</property>
+      <property name="always_active">1</property>
+      <property name="sum">1</property>
+      <property name="mlt_service">mix</property>
+    </transition>
+    <transition id="mix3">
+      <property name="a_track">0</property>
+      <property name="b_track">3</property>
+      <property name="always_active">1</property>
+      <property name="sum">1</property>
+      <property name="mlt_service">mix</property>
+    </transition>
+    <transition id="blend1">
+      <property name="a_track">0</property>
+      <property name="b_track">1</property>
+      <property name="threads">0</property>
+      <property name="mlt_service">qtblend</property>
+      <property name="disable">1</property>
+    </transition>
+    <transition id="blend2">
+      <property name="a_track">1</property>
+      <property name="b_track">2</property>
+      <property name="threads">0</property>
+      <property name="mlt_service">qtblend</property>
+      <property name="disable">0</property>
+    </transition>
+  </tractor>
+</mlt>
