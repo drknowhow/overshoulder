@@ -1,0 +1,95 @@
+{
+  "started": "2026-10-23T19:08:26",
+  "before": {
+    "ntfy_enabled": true,
+    "timeout_s": 60
+  },
+  "ready": {
+    "id": "eD4WGZLtUKUUsGtf4dQlWA",
+    "answer": true,
+    "by": "ntfy",
+    "seconds": 19.1,
+    "errors": {}
+  },
+  "take_scope": {
+    "ok": true,
+    "scope": {
+      "kind": "window",
+      "hwnd": 11863386,
+      "pid": 39836,
+      "process": "powershell.exe",
+      "class": "WindowsForms10.Window.8.app.0.2c7f580_r8_ad1",
+      "title": "Overshoulder phone test"
+    },
+    "ttl_s": 600.0,
+    "limits": {
+      "read_only": false,
+      "no_typing": false,
+      "deny_processes": [],
+      "set_by_person": {
+        "read_only": false,
+        "no_typing": false,
+        "deny_processes": []
+      }
+    }
+  },
+  "send": {
+    "ok": true,
+    "result": {
+      "method": "uia_invoke",
+      "background": true,
+      "attempts": [
+        {
+          "method": "uia_invoke",
+          "ok": true
+        }
+      ]
+    },
+    "verify": {
+      "ok": true,
+      "changed": true,
+      "pixels_changed": 0.00384,
+      "method": "uia_invoke",
+      "background": true,
+      "readback": {
+        "name": "Send"
+      }
+    },
+    "ts": 1792796958.46
+  },
+  "send_s": 20.4,
+  "delete": {
+    "ok": false,
+    "error": {
+      "code": "approval_denied",
+      "message": "not approved: denied on ntfy: click on 'Delete'",
+      "answered_by": "ntfy"
+    }
+  },
+  "delete_s": 9.1,
+  "release": {
+    "ok": true,
+    "released": true
+  },
+  "window_saw": [
+    "Send"
+  ],
+  "log": [
+    {
+      "name": "Send",
+      "ok": true,
+      "approved_by": "ntfy",
+      "code": null,
+      "denied_by": null,
+      "message": null
+    },
+    {
+      "name": "Delete",
+      "ok": false,
+      "approved_by": null,
+      "code": "approval_denied",
+      "denied_by": "ntfy",
+      "message": "not approved: denied on ntfy: click on 'Delete'"
+    }
+  ]
+}

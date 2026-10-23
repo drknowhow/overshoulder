@@ -39,4 +39,5 @@ The agent:
   injected over the window. Nobody was using the mouse during any of them. The agent saw
   `changed: false` and reported that the box did not move.
 
-Phone approvals are checked against the live gateway instead, because they need the person's phone.
+Phone approvals are checked against the live gateway instead, because they need the person's phone
+([phone check](../phase3-phone)).
