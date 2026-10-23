@@ -30,7 +30,7 @@ The person was asked to answer every question in the pulled-down notification li
 
 From b6e6a0b, the titles read "Allow click on 'Send'?" and "Confirm click on 'Send'?" and the Confirm
 button reads "Confirm Send". Run J went back to a 1.5 s gap between questions (`--gap 1.5`), as in runs
-G and H, and the person tapped wherever they normally would.
+G and H, and the person was asked to tap wherever they normally would.
 
 | time | on the phone | answer |
 |---|---|---|
