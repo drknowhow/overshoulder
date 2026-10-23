@@ -26,6 +26,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
+from overshoulder import brand  # noqa: E402
 from overshoulder.gateway.lease import HUMAN_PAUSE as HUMAN_REASON  # noqa: E402
 
 # -- decisions (pure, unit-tested) ---------------------------------------------------------------
@@ -179,7 +180,7 @@ WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE = 0x80, 0x8000000
 WDA_EXCLUDEFROMCAPTURE = 0x11
 KEY = "#ff00fe"  # transparent colour key
 BORDER = 4
-POINTER_COLOUR = "#2563eb"  # the agent's pointer: blue, so it never reads as the person's own cursor
+POINTER_COLOUR = brand.AGENT_BLUE  # the agent's pointer: blue, so it never reads as the person's own cursor
 POINTER_SIZE = 40
 POINTER_SHAPE = [(0, 0), (0, 17), (4.5, 13), (7.5, 20), (10, 19), (7, 12), (13, 12)]
 
@@ -303,9 +304,9 @@ def run(port: int | None = None, hotkey: str = "ctrl+alt+p", idle_resume_s: floa
         x, y = left - BORDER - 1, top - BORDER - 1
         w, h = right - left + 2 * BORDER + 2, bottom - top + 2 * BORDER + 2
         geom = f"{w}x{h}+{x}+{y}"
-        colour = "#f5a623" if status.get("paused") else "#22c55e"
+        colour = brand.PAUSED_AMBER if status.get("paused") else brand.SCOPE_GREEN
         if status.get("paused") and status["paused"] != HUMAN_REASON:
-            colour = "#ef4444"
+            colour = brand.STOP_RED
         if geom != shown["geom"]:
             frame.geometry(geom)
             frame.deiconify()

@@ -20,8 +20,9 @@ import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFont
 
+from overshoulder import brand
 from overshoulder import keys as kc
 from overshoulder import layer as lay
 from overshoulder import narrate as nr
@@ -29,7 +30,7 @@ from overshoulder import zoom as zm
 
 ACCENT = (37, 99, 235)  # badge / highlight
 RIPPLE = (250, 204, 21)
-CAPTION_BG = (17, 24, 39, 215)
+CAPTION_BG = (*ImageColor.getrgb(brand.INK), 215)
 STEP_ACTIONS = {"click", "double_click", "right_click", "invoke", "toggle", "select", "set_value", "type",
                 "hotkey", "activate", "focus"}
 # Actions a viewer would do with a click: they get a ripple where the pointer lands.

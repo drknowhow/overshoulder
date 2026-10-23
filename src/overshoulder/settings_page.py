@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
+from overshoulder import brand
 from overshoulder import settings as st
 
 LINK_TTL_S = 15 * 60
@@ -54,12 +55,14 @@ def host_ok(request: Request, port: int) -> bool:
 PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Overshoulder settings</title>
+<link rel="icon" href="{favicon}">
 <style>
-  :root {{ --ink:#111827; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; --bg:#f8fafc; }}
+  :root {{ --ink:{ink}; --muted:#6b7280; --line:#e5e7eb; --accent:{accent}; --bg:{paper}; }}
   * {{ box-sizing:border-box; }}
   body {{ margin:0; font:15px/1.5 "Segoe UI",system-ui,sans-serif; color:var(--ink); background:var(--bg); }}
   main {{ max-width:720px; margin:40px auto; padding:0 20px; }}
-  h1 {{ font-size:22px; margin:0 0 4px; }}
+  h1 {{ font-size:22px; margin:0 0 4px; display:flex; align-items:center; gap:12px; }}
+  h1 .mark svg {{ display:block; width:34px; height:34px; }}
   .sub {{ color:var(--muted); margin:0 0 28px; }}
   section {{ background:#fff; border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin-bottom:18px; }}
   h2 {{ font-size:15px; margin:0 0 4px; }}
@@ -74,7 +77,7 @@ PAGE = """<!doctype html>
   ul.plain {{ margin:0; padding-left:18px; }}
 </style></head>
 <body><main>
-<h1>Overshoulder</h1>
+<h1><span class="mark" aria-hidden="true">{mark}</span>Overshoulder</h1>
 <p class="sub">Settings for this PC. Changes apply to the next action or wait an agent starts.</p>
 {saved}
 <form method="post" action="/settings">
@@ -141,6 +144,8 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
         f'<span class="hint">{html.escape(desc)}</span></span></label>'
         for m, (label, desc) in st.INPUT_MODES.items())
     return PAGE.format(
+        favicon=html.escape(brand.mark_data_uri()), mark=brand.MARK_SVG,
+        ink=brand.INK, accent=brand.AGENT_BLUE, paper=brand.PAPER,
         saved='<div class="saved">Saved.</div>' if saved else "",
         form_token=html.escape(form_token),
         input_modes=modes,

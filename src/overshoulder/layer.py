@@ -27,11 +27,13 @@ from pathlib import Path
 
 from PIL import Image, ImageColor, ImageDraw, ImageFilter
 
+from overshoulder import brand
+
 VERSION = 1
 DRAWN = ("box", "arrow", "text", "badge", "spotlight")
 KINDS = DRAWN + ("redact", "step", "cut", "crop")
 STYLES = ("blur", "pixelate", "solid")
-DEFAULT_COLOR = "#2563eb"
+DEFAULT_COLOR = brand.AGENT_BLUE
 REQUIRED = {"box": ("rect",), "arrow": ("tail", "head"), "text": ("at", "text"), "badge": ("at",),
             "spotlight": ("rect",), "redact": ("rect",), "step": ("step",), "cut": ("t0", "t1"),
             "crop": ("rect",)}

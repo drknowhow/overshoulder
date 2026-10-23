@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "overshoulder"
 version = "0.1.0.dev0"
-description = "A desktop hand for AI agents: see, operate, record and annotate any window or screen."
+description = "Your agent works in its window. Your desk stays yours. An MCP server that lets AI agents see, operate and record Windows apps."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary (private until release)" }

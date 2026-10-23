@@ -1,4 +1,17 @@
-# Overshoulder
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/header-dark.png">
+    <img src="docs/brand/header-light.png" alt="Overshoulder" width="420">
+  </picture>
+</h1>
+
+<p align="center"><b>Your agent works in its window. Your desk stays yours.</b></p>
+
+<p align="center">
+  <img alt="Platform: Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%2F11-2563eb">
+  <img alt="Protocol: MCP" src="https://img.shields.io/badge/protocol-MCP-111827">
+  <img alt="Status: private, phase 2" src="https://img.shields.io/badge/status-private%20%C2%B7%20phase%202-f5a623">
+</p>
 
 A desktop hand for AI agents on Windows. An agent leases one window (or a whole screen), sees its
 controls, clicks and types inside it, and can record what it did as a tutorial with numbered steps.
