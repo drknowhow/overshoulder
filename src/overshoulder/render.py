@@ -439,7 +439,7 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     # A line holds its step on the last frame before the pointer and the camera set off for the next one.
     move_s = max(GLIDE_S, zm.ZOOM_IN_S)
     hold_at = {s.id: max(s.t, min(s.end, nxt.t - move_s)) if nxt else s.end
-               for s, nxt in zip(steps, [*steps[1:], None], strict=True)}
+               for s, nxt in zip(steps, [*steps[1:], None][:len(steps)], strict=True)}
     cues: list[tuple[float, float, str]] = []  # output seconds
     placed: list[tuple[float, bytes]] = []
     hold: tuple[float, float] | None = None  # (source time to hold at, output time its line ends)

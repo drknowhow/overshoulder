@@ -1,6 +1,7 @@
 """Narrowing: the caller's own limits from take_scope and the person's standing limits per client."""
 
 import sys
+import types
 
 import pytest
 
@@ -170,6 +171,17 @@ def test_acts_on_a_denied_program_are_refused_by_name(tmp_path):
     assert refused(g, token, lid, "invoke", target=Target("element", rect=Rect(0, 0, 10, 10), pid=2,
                                                           hwnd=0x20)).limit == "deny_processes"
     assert g.run(token, lid, "click", noop, target=Target("point", x=5, y=5))["ok"]  # notepad is fine
+
+
+def test_a_point_in_a_window_scope_goes_to_that_window_even_where_a_denied_one_covers_it(tmp_path):
+    """Background actions are sent to the scope's own window, so the denied program on top of the point is
+    not the target, and an approval asks about the scope's program."""
+    scope = FakeScope(owned=(0x10,))
+    scope.binding = types.SimpleNamespace(hwnd=0x10, pid=1)
+    g, token, lease = make(tmp_path, scope=scope, limits={"deny_processes": ["chrome"]})
+    target = Target("point", x=60, y=5)  # chrome's window is on top here
+    assert g.run(token, lease["lease_id"], "click", noop, target=target)["ok"]
+    assert g._asked_about(g.leases.active().scope, target)["process"] == "notepad.exe"
 
 
 def test_keys_are_refused_when_a_denied_program_has_the_focus(tmp_path):

@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -36,3 +37,13 @@ def test_a_small_video_keeps_its_own_size_in_the_gif(tmp_path):
     rec = make_recording(tmp_path, size=(320, 240))
     with Image.open(R.render(rec)["gif"]) as gif:
         assert gif.size == (320, 240 + R.STRIP)
+
+
+@needs_ffmpeg
+def test_a_recording_whose_actions_were_all_refused_still_renders(tmp_path):
+    """Nothing to number (a narrowed session refused the only action), but the video and project come out."""
+    refused = {"event": "action", "action": "drag", "ok": False, "t_act": 1001.0, "ts": 1001.1, "ms": 5,
+               "error": {"code": "narrowed"}}
+    rec = make_recording(tmp_path, actions=[refused])
+    out = R.render(rec, gif=False, mlt=True)
+    assert out["steps"] == 0 and out["frames"] > 0 and Path(out["project"]).is_file()

@@ -421,13 +421,13 @@ class Gateway:
                 lim.check_action(action)
 
             if target is not None:
-                self._check_target_processes(lim, target)
+                self._check_target_processes(lim, scope, target)
                 target = self._bind(scope, target, action)
                 if target.pid:
                     self.checks.not_elevated(target.pid)
                 policy.require_not_password(action, target.is_password)
             if to_target is not None:
-                self._check_target_processes(lim, to_target)
+                self._check_target_processes(lim, scope, to_target)
                 to_target = self._bind(scope, to_target, action)
                 if to_target.pid:
                     self.checks.not_elevated(to_target.pid)
@@ -505,7 +505,16 @@ class Gateway:
             out["log_error"] = str(e)
         return out
 
-    def _check_target_processes(self, lim: LeaseLimits, target: Target) -> None:
+    def _point_window(self, scope, target: Target) -> int:
+        """The window an action at a point goes to. In a window scope that is the scope's own window,
+        whatever covers it on screen: background actions are sent to it, and real input brings it
+        forward and then checks the point (_allow_real_input). In a screen scope it is the window on top."""
+        binding = getattr(scope, "binding", None)
+        if binding is not None:
+            return binding.hwnd
+        return self.checks.window_under(*target.point()) or 0
+
+    def _check_target_processes(self, lim: LeaseLimits, scope, target: Target) -> None:
         """deny_processes, before binding, so the refusal names the limit rather than the scope."""
         if not lim.effective.deny_processes:
             return
@@ -514,7 +523,7 @@ class Gateway:
             procs.append(self.checks.pid_process(target.pid))
         hwnd = target.hwnd
         if hwnd is None and target.kind == "point":
-            hwnd = self.checks.window_under(*target.point())
+            hwnd = self._point_window(scope, target)
         if hwnd:
             procs += self.checks.window_processes(self.checks.root_of(hwnd) or hwnd)
         for proc in procs:
@@ -527,7 +536,7 @@ class Gateway:
         binding = getattr(scope, "binding", None)
         hwnd = (target.hwnd if target is not None else 0) or 0
         if not hwnd and target is not None and target.kind == "point":
-            hwnd = self.checks.window_under(*target.point()) or 0
+            hwnd = self._point_window(scope, target)
         hwnd = (self.checks.root_of(hwnd) or hwnd) if hwnd else (binding.hwnd if binding is not None else 0)
         try:
             procs = [p for p in (self.checks.window_processes(hwnd) if hwnd else []) if p]
