@@ -166,6 +166,12 @@ print them; the settings page lists them and has a switch that turns learning an
   Overshoulder ships, and apps you already have a profile for come first. Preview downloads one profile,
   checks it against the catalog's hash and its own signature, and opens the import page above;
   `overshoulder profile get <app> [--by <login>]` does the same in the terminal.
+- **Publish** from the settings page, or with `overshoulder profile publish <app> --as <github name>`. You
+  see every line first; it is the same copy Export saves. Then GitHub's new-file page opens on the
+  registry with the file filled in at `apps/<app id>/<github name>.osp`, and GitHub makes the pull
+  request, where the registry's checks run. A profile too long for a link opens the page with only the
+  file's name, and you paste the text. Overshoulder never signs in to GitHub and doesn't keep your
+  user name.
 - Agents can't install a profile. When an app has none on this PC, the take_scope brief says the
   registry has one, read from the catalog you loaded last. A weekly check for newer revisions of the
   profiles you installed is on the settings page, off until you turn it on.

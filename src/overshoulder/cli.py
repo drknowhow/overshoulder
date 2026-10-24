@@ -249,6 +249,46 @@ def _profile_catalog(a, store) -> int:
     return code
 
 
+def _publish(prof, a) -> int:
+    """profile publish: print every line that will be public, then open GitHub with the file filled in."""
+    import webbrowser
+
+    from overshoulder import publish
+    from overshoulder.osp import OspError
+    try:
+        d = publish.draft(prof, a.login)
+    except OspError as e:
+        print(e, file=sys.stderr)
+        return 2
+    sys.stdout.write(d.text)
+    why = ", ".join(f"{n} {k}" for k, n in d.dropped.items()) or "nothing"
+    print(f"\nThat is all of it: {d.kept} items, public under CC0 at {publish.REPO_URL}/blob/main/{d.path} once "
+          f"merged. Left out {why}.")
+    for f in d.flags:
+        print(f"  the reviewer will look at: {f}")
+    if d.errors:
+        for e in d.errors:
+            print(f"  the registry would refuse it: {e}", file=sys.stderr)
+        return 2
+    if not d.fits:
+        out = default_home() / "publish" / d.app_id / f"{d.login.lower()}.osp"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(d.text, encoding="utf-8", newline="\n")
+        print(f"It is too long for a GitHub link ({d.link_chars:,} characters; GitHub takes about "
+              f"{publish.MAX_LINK:,}), so the page opens with only the file's name. Saved the text to {out}: open "
+              "it, copy all of it, and paste it there.")
+    if not a.yes and input("Open GitHub with this file? [y/N] ").strip().lower() not in ("y", "yes"):
+        print("nothing published")
+        return 1
+    if a.no_open:
+        print(d.link)
+    else:
+        webbrowser.open(d.link)
+        print("opened GitHub in your browser")
+    print(publish.next_steps(d))
+    return 0
+
+
 def _profile(a) -> int:
     from overshoulder import share
     from overshoulder.osp import OspError
@@ -291,6 +331,8 @@ def _profile(a) -> int:
     except (LookupError, OspError) as e:
         print(e.args[0], file=sys.stderr)
         return 2
+    if a.pcmd == "publish":
+        return _publish(prof, a)
     if a.pcmd == "export":
         shared, st = share.export(prof)
         out = a.out or f"{prof.app_id}.osp"
@@ -390,6 +432,13 @@ def main(argv: list[str] | None = None) -> int:
     pi = psub.add_parser("import", help="add the items of someone else's profile that yours lacks")
     pi.add_argument("file")
     pi.add_argument("--yes", action="store_true", help="don't ask first")
+    pp = psub.add_parser("publish", help="publish a profile on the registry: you see every line, then GitHub "
+                                         "opens with the file filled in")
+    pp.add_argument("app", help="the app id, or part of its id or name that matches only one profile")
+    pp.add_argument("--as", dest="login", required=True, metavar="GITHUB_NAME",
+                    help="your GitHub user name; it names the file. Overshoulder never signs in to GitHub")
+    pp.add_argument("--yes", action="store_true", help="don't ask first")
+    pp.add_argument("--no-open", action="store_true", help="print GitHub's link instead of opening it")
     pq = psub.add_parser("search", help="list the profiles people published on overshoulder.yepgent.com")
     pq.add_argument("text", nargs="?", help="part of an app's name or id")
     pq.add_argument("--cached", action="store_true", help="use the catalog loaded last; don't go online")

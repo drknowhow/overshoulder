@@ -17,7 +17,7 @@ from urllib.parse import quote
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
-from overshoulder import brand, catalog, phone, share
+from overshoulder import brand, catalog, phone, publish, share
 from overshoulder import settings as st
 from overshoulder.osp import MAX_BYTES, OspError
 from overshoulder.vision import VISION_MODES
@@ -272,6 +272,8 @@ def _profiles_section(rows: list[dict], form_token: str) -> str:
             f"revision {r['rev']}, {r['items']} items</span></td><td style=\"white-space:nowrap\">"
             f'<a class="button" href="/settings/profiles/export?id={quote(r["id"])}&amp;ft={quote(form_token)}">'
             "Export</a> "
+            f'<a class="button" href="/settings/profiles/publish?id={quote(r["id"])}&amp;ft={quote(form_token)}">'
+            "Publish</a> "
             f'<form method="post" action="/settings/profiles/remove" '
             f"onsubmit=\"return confirm('Remove this profile? Its last revision is kept in its history folder.')\">"
             f'<input type="hidden" name="form_token" value="{ft}"><input type="hidden" name="id" value="{pid}">'
@@ -455,7 +457,7 @@ def phone_from_form(form, current: phone.PhoneSettings) -> phone.PhoneSettings:
 
 IMPORT_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Import a profile - Overshoulder</title><link rel="icon" href="{favicon}">
+<title>{title} - Overshoulder</title><link rel="icon" href="{favicon}">
 <style>
   body {{ margin:0; font:15px/1.5 "Segoe UI",system-ui,sans-serif; color:{ink}; background:{paper}; }}
   main {{ max-width:720px; margin:40px auto; padding:0 20px; }}
@@ -466,10 +468,15 @@ IMPORT_PAGE = """<!doctype html>
   .warn {{ background:#fffbeb; border:1px solid #fde68a; color:#92400e; padding:10px 14px; border-radius:8px; }}
   button {{ background:{accent}; color:#fff; border:0; border-radius:8px; padding:9px 18px; font:inherit; font-weight:600; cursor:pointer; }}
   button.quiet {{ background:#fff; color:{ink}; border:1px solid #e5e7eb; }}
-  form {{ display:inline; }} code {{ background:#f1f5f9; padding:1px 5px; border-radius:4px; }}
+  form {{ display:inline; }} code {{ background:#f1f5f9; padding:1px 5px; border-radius:4px; overflow-wrap:anywhere; }}
   li {{ margin-bottom:6px; }}
+  a.button {{ display:inline-block; background:{accent}; color:#fff; text-decoration:none; border-radius:8px;
+    padding:9px 18px; font-weight:600; }}
+  textarea {{ width:100%; box-sizing:border-box; font:12px/1.5 ui-monospace,Consolas,monospace; background:#f8fafc;
+    border:1px solid #e5e7eb; border-radius:8px; padding:10px; }}
+  input[type=text] {{ font:inherit; padding:6px 8px; border:1px solid #d1d5db; border-radius:6px; }}
 </style></head><body><main>
-<h1 style="font-size:22px">Import a profile</h1>
+<h1 style="font-size:22px">{title}</h1>
 {body}
 </main></body></html>"""
 
@@ -511,7 +518,53 @@ def render_import(preview: dict | None, error: str, key: str, form_token: str, l
 <form method="post" action="/settings/profiles/import/confirm"><input type="hidden" name="form_token" value="{ft}">
 <input type="hidden" name="p" value="{k}"><button type="submit">Import</button></form> {cancel}"""
     return IMPORT_PAGE.format(favicon=html.escape(brand.mark_data_uri()), ink=brand.INK, paper=brand.PAPER,
-                              accent=brand.AGENT_BLUE, body=body)
+                              accent=brand.AGENT_BLUE, body=body, title="Import a profile")
+
+
+def render_publish(d: publish.Draft, error: str, form_token: str) -> str:
+    """Every line of the export, a GitHub user name to name the file, then the link that opens GitHub."""
+    ft, pid = html.escape(form_token), html.escape(d.app_id)
+    why = ", ".join(f"{n} {html.escape(k)}" for k, n in d.dropped.items()) or "nothing"
+    rows = min(max(d.text.count("\n"), 4), 24)
+    ask = (f'<form method="post" action="/settings/profiles/publish"><input type="hidden" name="form_token" '
+           f'value="{ft}"><input type="hidden" name="id" value="{pid}"><label>Your GitHub user name '
+           f'<input type="text" name="login" value="{html.escape(d.login)}" required spellcheck="false"></label> '
+           f'<button type="submit">Continue</button></form>')
+    out = [f"""<section>
+  <p><b>{html.escape(d.name)}</b> <code>{pid}</code></p>
+  <p class="hint">This is everything that will be public, under CC0: {d.kept} items. It is the copy Export saves,
+  so it leaves out what only this PC needs and anything seen in just one session. Left out of this one:
+  {why}.</p>
+  <textarea readonly wrap="off" rows="{rows}" aria-label="The profile, every line">{html.escape(d.text)}</textarea>
+</section>"""]
+    step = [f'<div class="bad">{html.escape(error)}</div>'] if error else []
+    if d.login and d.errors:
+        step.append('<div class="bad">The registry would refuse this file: '
+                    + "; ".join(html.escape(e) for e in d.errors) + "</div>")
+    elif d.login:
+        step.append(f'<p>It goes at <code>{html.escape(d.path)}</code> on <code>{html.escape(publish.REPO_URL)}'
+                    "</code>, the one place the registry lets you write.</p>")
+        if d.flags:
+            step.append('<div class="warn">Yep reads these lines closely before merging, because they read like '
+                        "instructions to agents:<ul>" + "".join(f"<li>{html.escape(f)}</li>" for f in d.flags)
+                        + "</ul></div>")
+        if d.fits:
+            step.append(f'<p class="hint">{d.link_chars:,} of about {publish.MAX_LINK:,} characters fit in a GitHub '
+                        "link.</p>")
+        else:
+            step.append(f'<div class="warn">This profile is too long for a GitHub link ({d.link_chars:,} characters; '
+                        f"GitHub takes about {publish.MAX_LINK:,}). Copy the text above: click in it, press Ctrl+A, "
+                        "then Ctrl+C. GitHub opens with the file's name filled in, and you paste the text.</div>")
+        label = "Open GitHub with this file" if d.fits else "Open GitHub"
+        step.append(f'<p><a class="button" href="{html.escape(d.link)}" target="_blank" rel="noopener noreferrer">'
+                    f'{label}</a></p><p class="hint">{html.escape(publish.next_steps(d))}</p>')
+    if not d.login or error or d.errors:
+        step.append(ask)
+    step.append('<p><a href="/settings">Back to settings</a></p>')
+    out.append(f'<section>{"".join(step)}<p class="hint">Overshoulder never signs in to GitHub. Your user name '
+               "only names the file, and it isn't kept.</p></section>")
+    return IMPORT_PAGE.format(favicon=html.escape(brand.mark_data_uri()), ink=brand.INK, paper=brand.PAPER,
+                              accent=brand.AGENT_BLUE, body="\n".join(out), title="Publish a profile")
 
 
 def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
@@ -614,6 +667,34 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
         shared, _ = share.export(prof)
         return Response(shared.dumps().encode("utf-8"), media_type="application/octet-stream",
                         headers={"content-disposition": f'attachment; filename="{prof.app_id}.osp"'})
+
+    def publish_page(app_id: str, login: str, form_token: str) -> Response:
+        try:
+            prof = profiles.load(app_id)
+        except OspError as e:
+            return HTMLResponse(f"That profile can't be read: {html.escape(str(e))}", 400)
+        if prof is None:
+            return HTMLResponse("No such profile.", 404)
+        try:
+            return HTMLResponse(render_publish(publish.draft(prof, login), "", form_token))
+        except OspError as e:
+            return HTMLResponse(render_publish(publish.draft(prof), str(e), form_token))
+
+    @mcp.custom_route("/settings/profiles/publish", methods=["GET"])
+    async def profile_publish(request: Request):
+        if (bad := guard(request)) is not None:
+            return bad
+        expected = sessions.form_token(request.cookies.get(COOKIE))
+        if not expected or not secrets.compare_digest(request.query_params.get("ft", ""), expected):
+            return HTMLResponse("Session expired. Run <code>overshoulder settings</code> again.", 403)
+        return publish_page(request.query_params.get("id", ""), "", expected)
+
+    @mcp.custom_route("/settings/profiles/publish", methods=["POST"])
+    async def profile_publish_as(request: Request):
+        form, bad = await checked_form(request)  # the user name goes in the form, not the address
+        if bad is not None:
+            return bad
+        return publish_page(str(form.get("id", "")), str(form.get("login", "")), str(form.get("form_token", "")))
 
     @mcp.custom_route("/settings/profiles/remove", methods=["POST"])
     async def profile_remove(request: Request):
