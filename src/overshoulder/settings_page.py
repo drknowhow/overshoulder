@@ -17,7 +17,7 @@ from urllib.parse import quote
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
-from overshoulder import brand, phone, share
+from overshoulder import brand, catalog, phone, share
 from overshoulder import settings as st
 from overshoulder.osp import MAX_BYTES, OspError
 from overshoulder.vision import VISION_MODES
@@ -29,7 +29,7 @@ COOKIE = "overshoulder_settings"
 # (`overshoulder profile open FILE`, which an .osp file opens with).
 NEXT_RE = re.compile(r"/settings/profiles/import\?p=[A-Za-z0-9_-]{16,64}")
 MESSAGES = {"imported": "Imported {n} items into the profile of {app}.", "removed": "Removed the profile of {app}.",
-            "cancelled": "Nothing was imported."}
+            "cancelled": "Nothing was imported.", "loaded": "Loaded the catalog."}
 
 
 @dataclass
@@ -93,6 +93,10 @@ PAGE = """<!doctype html>
   button.quiet {{ background:#fff; color:var(--ink); border:1px solid var(--line); }}
   a.button {{ display:inline-block; padding:4px 10px; border:1px solid var(--line); border-radius:8px; color:var(--ink);
     text-decoration:none; font-size:13px; }}
+  .bad {{ background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:10px 14px; border-radius:8px; margin-bottom:12px; }}
+  .tag {{ font-size:12px; color:#065f46; background:#ecfdf5; border-radius:999px; padding:1px 8px; white-space:nowrap; }}
+  form.find {{ display:flex; gap:8px; margin-bottom:12px; }}
+  form.find input {{ flex:1; }}
 </style></head>
 <body><main>
 <h1><span class="mark" aria-hidden="true">{mark}</span>Overshoulder</h1>
@@ -140,6 +144,10 @@ PAGE = """<!doctype html>
   lets an agent do more than you allow.</p>
   <label class="row"><input type="checkbox" name="learn_profiles" {learn_profiles}>
     <span>Learn app profiles and use them</span></label>
+  <label class="row"><input type="checkbox" name="catalog_weekly_check" {catalog_weekly_check}>
+    <span>Once a week, check the registry for newer revisions of profiles installed from it<br><span
+    class="hint">Off means Overshoulder only goes to the registry when you press Load under Find profiles.</span>
+    </span></label>
 </section>
 <section>
   <h2>Automatic detection</h2>
@@ -214,6 +222,7 @@ PAGE = """<!doctype html>
   <ul class="plain">{clients}</ul>
 </section>
 {profiles}
+{find}
 <section>
   <h2>Safety</h2>
   <ul class="plain">
@@ -281,9 +290,60 @@ def _profiles_section(rows: list[dict], form_token: str) -> str:
 </section>"""
 
 
+FIND_ROWS = 50  # catalog rows shown at once; the search box narrows the rest
+
+
+def _find_section(find: dict | None, form_token: str) -> str:
+    """Find profiles: the catalog loaded last, read from disk. Only Load and Preview go online."""
+    find = find or {}
+    ft = html.escape(form_token)
+    index, q = find.get("index"), str(find.get("q", ""))
+    load = (f'<form method="post" action="/settings/catalog/load"><input type="hidden" name="form_token" value="{ft}">'
+            f'<button class="small" type="submit">{"Load again" if index else "Load the catalog"}</button></form>')
+    error = f'<div class="bad">{html.escape(find["error"])}</div>' if find.get("error") else ""
+    intro = (f"Profiles people published on {html.escape(catalog.SITE.removeprefix('https://'))}. Nothing is "
+             "loaded until you ask. Preview downloads one profile and shows everything in it before anything is "
+             "added.")
+    if index is None:
+        return f"""<section id="find">
+  <h2>Find profiles</h2>
+  <p class="hint">{intro}</p>
+  {error}{load}
+</section>"""
+    local, installed = find.get("local", set()), find.get("installed", {})
+    newer = {e["path"] for e in find.get("newer", [])}
+    rows = catalog.search(index, q, local)
+    lines = []
+    for e in rows[:FIND_ROWS]:
+        tag_html = "".join(f' <span class="tag">{html.escape(t)}</span>'
+                           for t in catalog.tags(e, local, installed, newer))
+        lines.append(
+            f"<tr><td><b>{html.escape(str(e['name']))}</b>{tag_html}<br><span class=\"hint\">"
+            f"{int(e.get('items', 0))} items, by @{html.escape(str(e['by']))}, revision {int(e.get('rev', 0))}"
+            f"</span></td><td style=\"white-space:nowrap\"><form method=\"post\" action=\"/settings/catalog/get\">"
+            f'<input type="hidden" name="form_token" value="{ft}"><input type="hidden" name="path" '
+            f'value="{html.escape(e["path"])}"><button class="small" type="submit">Preview</button></form></td></tr>')
+    more = (f'<p class="hint">{len(rows) - FIND_ROWS} more; search to narrow them.</p>'
+            if len(rows) > FIND_ROWS else "")
+    table = (f'<table class="profiles">{"".join(lines)}</table>{more}' if lines else
+             f'<p class="hint">{"Nothing matches." if q else "The registry has no profiles yet."}</p>')
+    built = html.escape(str(index.get("built", ""))[:10])
+    loaded = html.escape(str(find.get("loaded_at", ""))[:16].replace("T", " "))
+    return f"""<section id="find">
+  <h2>Find profiles</h2>
+  <p class="hint">{intro}</p>
+  {error}<p class="hint">Catalog built {built}, loaded {loaded} UTC; its signature checks out. Apps with a profile
+  on this PC come first.</p>
+  <form class="find" method="get" action="/settings#find"><input type="text" name="q" value="{html.escape(q)}"
+    placeholder="An app's name" aria-label="Search the catalog"><button class="small quiet" type="submit">Search</button></form>
+  {table}
+  {load}
+</section>"""
+
+
 def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, saved: bool,
                 ph: phone.PhoneSettings | None = None, phone_test: dict | None = None,
-                profiles: list[dict] | None = None, message: str = "") -> str:
+                profiles: list[dict] | None = None, message: str = "", find: dict | None = None) -> str:
     ph = ph or phone.PhoneSettings().ensure_secrets()
     kinds = "\n".join(
         f'<label class="row"><input type="checkbox" name="kind_{k}" {"checked" if k in s.wait_kinds else ""}>'
@@ -305,7 +365,9 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
         saved=('<div class="saved">Saved.</div>' if saved else "")
         + (f'<div class="saved">{html.escape(message)}</div>' if message else ""),
         learn_profiles="checked" if s.learn_profiles else "",
+        catalog_weekly_check="checked" if s.catalog_weekly_check else "",
         profiles=_profiles_section(profiles or [], form_token),
+        find=_find_section(find, form_token),
         form_token=html.escape(form_token),
         input_modes=modes,
         borrow_idle_s=s.borrow_idle_s,
@@ -366,6 +428,7 @@ def settings_from_form(form, current: st.Settings | None = None) -> st.Settings:
         vision_cloud_model=str(form.get("vision_cloud_model", current.vision_cloud_model)),
         vision_cloud_key=str(form.get("vision_cloud_key") or current.vision_cloud_key),
         learn_profiles=form.get("learn_profiles") == "on",
+        catalog_weekly_check=form.get("catalog_weekly_check") == "on",
     ).clamp()
 
 
@@ -452,10 +515,21 @@ def render_import(preview: dict | None, error: str, key: str, form_token: str, l
 
 
 def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
-           phone_tester=None, profiles=None) -> None:
-    """Attach /settings handlers to an MCPServer. port_ref["port"] is filled in at serve time."""
+           phone_tester=None, profiles=None, cat: catalog.Catalog | None = None) -> None:
+    """Attach /settings handlers to an MCPServer. port_ref["port"] is filled in at serve time. cat is the
+    registry's catalog for Find profiles; only its Load and Preview buttons go online."""
 
     last_test: dict = {}
+    last_find: dict = {}  # the error from the last Load or Preview, shown once
+    from_catalog: dict[str, dict] = {}  # inbox key -> catalog entry, for a Preview that may be installed
+
+    def find_state(q: str) -> dict | None:
+        if cat is None:
+            return None
+        index = cat.cached()
+        local = {r["id"] for r in (profiles.list() if profiles is not None else [])}
+        return {"index": index, "q": q[:100], "local": local, "installed": cat.installed(),
+                "newer": cat.newer(index), "loaded_at": cat.loaded_at(), "error": last_find.pop("error", "")}
 
     def guard(request: Request) -> Response | None:
         if not host_ok(request, port_ref["port"]):
@@ -483,7 +557,8 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
         return HTMLResponse(render_page(st.load(), form_token, _client_lines(registry), logs_dir,
                                         saved=q.get("saved") == "1", ph=phone.load(),
                                         phone_test=last_test.get("result"),
-                                        profiles=profiles.list() if profiles is not None else [], message=msg))
+                                        profiles=profiles.list() if profiles is not None else [], message=msg,
+                                        find=find_state(q.get("q", ""))))
 
     @mcp.custom_route("/settings", methods=["POST"])
     async def settings_post(request: Request):
@@ -602,6 +677,8 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
         if "error" in res:
             return HTMLResponse(render_import(None, res["error"], key, str(form.get("form_token", "")), 0))
         profiles.inbox_drop(key)
+        if (entry := from_catalog.pop(key, None)) is not None and cat is not None:
+            cat.mark_installed(entry)
         return RedirectResponse(f"/settings?msg=imported&n={res.get('imported', 0)}&app={quote(other.app_id)}",
                                 status_code=303)
 
@@ -610,5 +687,41 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
         form, bad = await checked_form(request)
         if bad is not None:
             return bad
-        profiles.inbox_drop(str(form.get("p", "")))
+        key = str(form.get("p", ""))
+        profiles.inbox_drop(key)
+        from_catalog.pop(key, None)
         return RedirectResponse("/settings?msg=cancelled", status_code=303)
+
+    @mcp.custom_route("/settings/catalog/load", methods=["POST"])
+    async def catalog_load(request: Request):
+        import anyio
+        form, bad = await checked_form(request)
+        if bad is not None:
+            return bad
+        if cat is None:
+            return HTMLResponse("Find profiles is not available here.", 404)
+        try:
+            await anyio.to_thread.run_sync(cat.load)
+        except OspError as e:
+            last_find["error"] = f"The catalog couldn't be loaded: {e}"
+            return RedirectResponse("/settings#find", status_code=303)
+        return RedirectResponse("/settings?msg=loaded#find", status_code=303)
+
+    @mcp.custom_route("/settings/catalog/get", methods=["POST"])
+    async def catalog_get(request: Request):
+        import anyio
+        form, bad = await checked_form(request)
+        if bad is not None:
+            return bad
+        entry = cat.entry(str(form.get("path", ""))) if cat is not None else None
+        if entry is None:  # only a path the signed catalog lists is ever fetched
+            last_find["error"] = "That profile is not in the catalog loaded last. Load the catalog again."
+            return RedirectResponse("/settings#find", status_code=303)
+        try:
+            data, _ = await anyio.to_thread.run_sync(lambda: cat.get(entry))
+        except OspError as e:
+            last_find["error"] = f"That profile couldn't be fetched: {e}"
+            return RedirectResponse("/settings#find", status_code=303)
+        key = profiles.inbox_put(data)
+        from_catalog[key] = entry
+        return RedirectResponse(f"/settings/profiles/import?p={key}", status_code=303)

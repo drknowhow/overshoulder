@@ -11,7 +11,7 @@ import threading
 import time
 from pathlib import Path
 
-from overshoulder import hints, learn, locate, notes, share, vision
+from overshoulder import catalog, hints, learn, locate, notes, share, vision
 from overshoulder import scope as sc
 from overshoulder.actions import Ladder
 from overshoulder.driver import capture, ocr, uia
@@ -63,6 +63,14 @@ class Service:
         self._recordings: dict = {}  # lease id -> Recording
         self._rendering: set[str] = set()  # recording names being rendered now
         self._rendering_lock = threading.Lock()
+        self._catalog: catalog.Catalog | None = None
+
+    @property
+    def catalog(self) -> catalog.Catalog:
+        """The registry's catalog as last loaded on this PC; reading it never goes online."""
+        if self._catalog is None:
+            self._catalog = catalog.Catalog(self.gw.profiles.dir.parent)
+        return self._catalog
 
     # -- discovery and lease -------------------------------------------------------------------
 
@@ -110,7 +118,10 @@ class Service:
         try:
             prof = self._profile_of(lease_id, scope)
             if prof is None:
-                return {"rev": 0, "note": NO_PROFILE_NOTE}
+                out = {"rev": 0, "note": NO_PROFILE_NOTE}
+                if shared := self.catalog.entries_for(app.id):  # the catalog loaded last, from disk
+                    out["shared"] = catalog.brief_line(shared)
+                return out
             return {"rev": prof.revision, "brief": hints.brief(prof, app.version), "note": UNTRUSTED_NOTE}
         except Exception:  # a profile never stops a scope being taken
             return None

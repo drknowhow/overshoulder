@@ -427,7 +427,7 @@ class Daemon:
             return JSONResponse({"ok": True, "status": d.gw.status()})
 
         settings_routes(mcp, d.port_ref, d.settings_sessions, d.gw.registry, str(default_home() / "logs"),
-                        profiles=d.gw.profiles)
+                        profiles=d.gw.profiles, cat=d.svc.catalog)
         return mcp
 
 
@@ -451,6 +451,8 @@ def serve(port: int = DEFAULT_PORT) -> None:
     quiet_status_polls()  # on the logger, which uvicorn's own logging setup leaves in place
     daemon = Daemon(port=port)
     mcp = daemon.build()
+    from overshoulder.catalog import start_weekly_check
+    start_weekly_check(daemon.svc.catalog, daemon.gw.settings_source)  # does nothing while the setting is off
     security = TransportSecuritySettings(enable_dns_rebinding_protection=True,
                                          allowed_hosts=[f"127.0.0.1:{port}", f"localhost:{port}"],
                                          allowed_origins=[])

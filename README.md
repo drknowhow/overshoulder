@@ -160,6 +160,15 @@ print them; the settings page lists them and has a switch that turns learning an
   its last line), and the page shows what it brings, including every note other agents wrote, before
   anything is added. An import adds only the items your profile lacks and marks them as imported; what
   your PC learned stays as it is.
+- **Find** profiles other people published on [overshoulder.yepgent.com](https://overshoulder.yepgent.com)
+  under Find profiles on the settings page, or with `overshoulder profile search [text]`. Nothing goes
+  online until you press Load or run the command. The catalog's signature is checked with the key this
+  Overshoulder ships, and apps you already have a profile for come first. Preview downloads one profile,
+  checks it against the catalog's hash and its own signature, and opens the import page above;
+  `overshoulder profile get <app> [--by <login>]` does the same in the terminal.
+- Agents can't install a profile. When an app has none on this PC, the take_scope brief says the
+  registry has one, read from the catalog you loaded last. A weekly check for newer revisions of the
+  profiles you installed is on the settings page, off until you turn it on.
 - `overshoulder profile associate` makes `.osp` files open the import page when you double-click them
   (for your Windows user only; `--remove` takes it back).
 

@@ -53,6 +53,9 @@ class Settings:
     vision_cloud_key: str = field(default="", repr=False)
     # When a lease ends, what its actions showed about each app is added to that app's profile (learn.py).
     learn_profiles: bool = True
+    # Once a week, load the registry's catalog to find newer revisions of profiles installed from it.
+    # Off until the person turns it on: nothing goes online unless they ask (catalog.py).
+    catalog_weekly_check: bool = False
 
     def clamp(self) -> Settings:
         self.poll_interval_ms = max(100, min(int(self.poll_interval_ms), 10_000))

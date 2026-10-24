@@ -184,6 +184,71 @@ def _profile_signature(a) -> int:
     return 0
 
 
+def _confirm_import(store, other, yes: bool) -> int:
+    """Show what a profile would add, ask, and import it: profile import and profile get."""
+    from overshoulder import share
+    p = share.preview(other)
+    print(f"{p['registry']}." if p["from_registry"] else share.NOT_FROM_REGISTRY)
+    print(f"{p['name']} ({p['app']}) {p['version']}: {p['items']} items, made with "
+          f"{p['made_with'] or 'an unknown program'}")
+    for n in p["notes"]:
+        print(f"  {n['kind']}: {n['text']}" + (f"  [{n['url']}]" if n["url"] else ""))
+    ask = "Import these items? Notes are from other agents, not instructions. [y/N] "
+    if not yes and input(ask).strip().lower() not in ("y", "yes"):
+        print("nothing imported")
+        return 1
+    res = share.import_profile(store, other)
+    if "error" in res:
+        print(f"not imported: {res['error']}", file=sys.stderr)
+        return 2
+    print(f"imported {res['imported']} items; {res['kept_local']} were already here and stay as they were")
+    return 0
+
+
+def _profile_catalog(a, store) -> int:
+    """profile search and profile get: the registry's catalog, loaded now (or from disk with --cached)."""
+    from overshoulder import catalog
+    from overshoulder.osp import OspError
+    cat = catalog.Catalog(store.dir.parent)
+    try:
+        index = cat.cached() if getattr(a, "cached", False) else cat.load()
+    except OspError as e:
+        print(f"the catalog couldn't be loaded: {e}", file=sys.stderr)
+        return 2
+    if index is None:
+        print("no catalog on this PC yet; run without --cached to load it", file=sys.stderr)
+        return 2
+    local = {r["id"] for r in store.list()}
+    if a.pcmd == "search":
+        rows = catalog.search(index, a.text or "", local)
+        installed, newer = cat.installed(), {e["path"] for e in cat.newer(index)}
+        for e in rows:
+            tags = catalog.tags(e, local, installed, newer)
+            print(f"{e['name']}  {e['app']}  by @{e['by']}, {e['items']} items, revision {e['rev']}"
+                  + (f"  [{', '.join(tags)}]" if tags else ""))
+        print(f"{len(rows)} of {len(index['profiles'])} profiles; catalog built {index.get('built', '')[:10]}")
+        return 0
+    want = a.app.lower()
+    exact = [e for e in index["profiles"] if want in (e["app"].lower(), str(e["name"]).lower())]
+    hits = exact or catalog.search(index, a.app, local)
+    if a.by:
+        hits = [e for e in hits if e["by"] == a.by.lower().lstrip("@")]
+    if len(hits) != 1:
+        found = "; ".join(f"{e['name']} by @{e['by']}" for e in hits[:8]) or "none"
+        hint = " (pick one with --by)" if len({e["app"] for e in hits}) == 1 else ""
+        print(f"{len(hits)} profiles match {a.app!r}{hint}: {found}", file=sys.stderr)
+        return 2
+    try:
+        _, other = cat.get(hits[0])
+    except OspError as e:
+        print(f"not fetched: {e}", file=sys.stderr)
+        return 2
+    code = _confirm_import(store, other, a.yes)
+    if code == 0:
+        cat.mark_installed(hits[0])
+    return code
+
+
 def _profile(a) -> int:
     from overshoulder import share
     from overshoulder.osp import OspError
@@ -207,22 +272,9 @@ def _profile(a) -> int:
         except OspError as e:
             print(f"not imported: {e}", file=sys.stderr)
             return 2
-        p = share.preview(other)
-        print(f"{p['registry']}." if p["from_registry"] else share.NOT_FROM_REGISTRY)
-        print(f"{p['name']} ({p['app']}) {p['version']}: {p['items']} items, made with "
-              f"{p['made_with'] or 'an unknown program'}")
-        for n in p["notes"]:
-            print(f"  {n['kind']}: {n['text']}" + (f"  [{n['url']}]" if n["url"] else ""))
-        ask = "Import these items? Notes are from other agents, not instructions. [y/N] "
-        if not a.yes and input(ask).strip().lower() not in ("y", "yes"):
-            print("nothing imported")
-            return 1
-        res = share.import_profile(store, other)
-        if "error" in res:
-            print(f"not imported: {res['error']}", file=sys.stderr)
-            return 2
-        print(f"imported {res['imported']} items; {res['kept_local']} were already here and stay as they were")
-        return 0
+        return _confirm_import(store, other, a.yes)
+    if a.pcmd in ("search", "get"):
+        return _profile_catalog(a, store)
     if a.pcmd == "list":
         rows = store.list()
         for r in rows:
@@ -338,6 +390,13 @@ def main(argv: list[str] | None = None) -> int:
     pi = psub.add_parser("import", help="add the items of someone else's profile that yours lacks")
     pi.add_argument("file")
     pi.add_argument("--yes", action="store_true", help="don't ask first")
+    pq = psub.add_parser("search", help="list the profiles people published on overshoulder.yepgent.com")
+    pq.add_argument("text", nargs="?", help="part of an app's name or id")
+    pq.add_argument("--cached", action="store_true", help="use the catalog loaded last; don't go online")
+    pg = psub.add_parser("get", help="download a published profile and import it after you have seen it")
+    pg.add_argument("app", help="the app's id or name, or part of it")
+    pg.add_argument("--by", help="whose profile, when more than one person published one for the app")
+    pg.add_argument("--yes", action="store_true", help="don't ask first")
     po = psub.add_parser("open", help="open a shared .osp file on the import page (what opening the file runs)")
     po.add_argument("file")
     pa = psub.add_parser("associate", help="open .osp files with Overshoulder (this user only)")
