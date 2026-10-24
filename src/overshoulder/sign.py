@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from overshoulder.osp import Item, OspError, Profile
 
 DOMAIN = b"overshoulder registry signature 1\n"
+INDEX_DOMAIN = b"overshoulder registry index 1\n"  # the catalog, index.json, signed apart from any profile
 SIGNER = "registry"
 FIELDS = ("key", "by", "pr", "at", "ed25519")
 
@@ -97,21 +98,46 @@ def sign(prof: Profile, key, key_id: str, by: str, pr: int, at: str) -> Profile:
     return prof
 
 
-def verify(prof: Profile, keys: dict[str, str] | None = None) -> Signed | None:
-    """None for an unsigned profile, Signed for a good signature; SignatureError for anything else."""
+def _check(key_id: str, signature: str, message: bytes, keys: dict[str, str] | None, what: str) -> None:
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    known = REGISTRY_KEYS if keys is None else keys
+    if key_id not in known:
+        raise SignatureError(f"it is signed with registry key {key_id}, which this Overshoulder doesn't know; "
+                             f"update Overshoulder, or get the {what} from the registry again")
+    try:
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(known[key_id])).verify(bytes.fromhex(signature), message)
+    except InvalidSignature:
+        raise SignatureError(f"the registry's signature does not match: the {what} was changed after the "
+                             "registry signed it") from None
+
+
+def verify(prof: Profile, keys: dict[str, str] | None = None) -> Signed | None:
+    """None for an unsigned profile, Signed for a good signature; SignatureError for anything else."""
     if prof.sig is None:
         return None
     f = _fields(prof.sig)
-    known = REGISTRY_KEYS if keys is None else keys
-    if f["key"] not in known:
-        raise SignatureError(f"it is signed with registry key {f['key']}, which this Overshoulder doesn't know; "
-                             "update Overshoulder, or get the file from the registry again")
-    try:
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(known[f["key"]])).verify(
-            bytes.fromhex(f["ed25519"]), _message(prof, prof.sig))
-    except InvalidSignature:
-        raise SignatureError("the registry's signature does not match: the file was changed after the "
-                             "registry signed it") from None
+    _check(f["key"], f["ed25519"], _message(prof, prof.sig), keys, "file")
     return Signed(f["key"], f["by"], int(f["pr"]), f["at"])
+
+
+def sign_index(data: bytes, key, key_id: str) -> str:
+    """The detached signature of the catalog's bytes: the one line of index.json.sig."""
+    if not KEY_ID_RE.match(key_id):
+        raise ValueError("bad key id")
+    sig = key.sign(INDEX_DOMAIN + data).hex()
+    return Item("sig", SIGNER, fields={"key": key_id, "ed25519": sig}).line() + "\n"
+
+
+def verify_index(data: bytes, sig_text: str, keys: dict[str, str] | None = None) -> str:
+    """Check index.json's bytes against index.json.sig before reading them; returns the key id."""
+    from overshoulder.osp import parse_line
+    try:
+        sig = parse_line(sig_text.strip())
+    except OspError:
+        raise SignatureError("index.json.sig is not a signature line") from None
+    if sig.kind != "sig" or sig.id != SIGNER or set(sig.fields) != {"key", "ed25519"} \
+            or not KEY_ID_RE.match(sig.fields["key"]) or not SIG_RE.match(sig.fields["ed25519"]):
+        raise SignatureError("index.json.sig is not a registry signature")
+    _check(sig.fields["key"], sig.fields["ed25519"], INDEX_DOMAIN + data, keys, "catalog")
+    return sig.fields["key"]
