@@ -48,7 +48,9 @@ INSTRUCTIONS = """Overshoulder lets you see and operate desktop apps on this Win
    v-refs take click, double_click, right_click and drag, and go stale when the pixels under them change.
 3. act(action, ref=... | x=..,y=..) runs one action and verifies it. Prefer refs and invoke/set_value
    over coordinates. Actions: """ + ", ".join(ACTIONS) + """. A drag also takes the drop point:
-   to_ref or to_x/to_y.
+   to_ref or to_x/to_y. For a t-ref, v-ref or x/y target the result also says how much changed in
+   the target's own area ("area"); expect={"text_appears": "Saved"} checks with OCR that the words
+   showed up, and expect={"area_changed": true} that the target's area changed.
 4. Typing goes to the focused control in your scope; pass ref to focus a control first.
 5. Refusals are deliberate (out_of_scope, denied, approval_denied, narrowed, paused, lease_revoked,
    needs_real_input, person_active): observe again or stop; never try to work around them. While the
@@ -241,7 +243,10 @@ class Daemon:
             to_ref or to_x/to_y, both inside the scope; dropping onto something named like Delete or
             Recycle Bin needs the person's approval, and verify.moved says whether a ref'd item moved. A
             click at x/y is checked against the text on screen there too, so x/y on a drawn Delete asks.
-            expect: {"changed": true} | {"text_contains": "..."} | {"element": {"name": "...", "control_type": "..."}}.
+            expect: {"changed": true} | {"text_contains": "..."} | {"element": {"name": "...", "control_type": "..."}}
+            | {"text_appears": "Saved"} (read with OCR: on screen after, where it was not before) |
+            {"area_changed": true}. For a t-ref, v-ref or x/y target, verify.area says how much changed
+            around the target.
             method: "auto" (default; works on the window in the background and uses the person's mouse or
             keyboard only as a last resort), "background" (never), "input" (real input). The result's
             verify.method says what ran."""

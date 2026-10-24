@@ -4,8 +4,9 @@
 # monitor Windows stretches the window, as it does for many older apps. Writes
 # {"ready", "clicked": [], "points": []} once shown, then after every click
 # {"clicked": [names], "points": [[x, y] in the window's own pixels]}. A click on a button also writes
-# "Clicked <name>" in the status line. A green square sits in the bottom-right corner. One real WinForms
-# button, Apply, is there too, so UI Automation's box for it can be compared with what OCR reads.
+# "Clicked <name>" in the status line and marks that button as the selected one, in blue. A green
+# square sits in the bottom-right corner. One real WinForms button, Apply, is there too, so UI
+# Automation's box for it can be compared with what OCR reads.
 param([string]$Out, [switch]$Aware)
 
 if ($Aware) {
@@ -28,10 +29,12 @@ $buttons = [ordered]@{
 $font = New-Object System.Drawing.Font('Segoe UI', 12)
 $ink = [System.Drawing.Color]::FromArgb(17, 24, 39)
 $face = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(229, 231, 235))
+$picked = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(147, 197, 253))
 $edge = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(55, 65, 81), 2)
 $green = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(22, 163, 74))
 $center = [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter
 $script:status = 'Nothing clicked yet'
+$script:selected = ''
 $script:clicked = @()
 $script:points = @()
 
@@ -44,7 +47,7 @@ $form.Add_Paint({
     param($s, $e)
     foreach ($name in $buttons.Keys) {
         $r = $buttons[$name]
-        $e.Graphics.FillRectangle($face, $r)
+        $e.Graphics.FillRectangle($(if ($name -eq $script:selected) { $picked } else { $face }), $r)
         $e.Graphics.DrawRectangle($edge, $r)
         [System.Windows.Forms.TextRenderer]::DrawText($e.Graphics, $name, $font, $r, $ink, $center)
     }
@@ -59,6 +62,7 @@ $form.Add_MouseClick({
         if ($buttons[$name].Contains($e.Location)) {
             $script:clicked += $name
             $script:status = "Clicked $name"
+            $script:selected = $name
         }
     }
     $form.Invalidate()

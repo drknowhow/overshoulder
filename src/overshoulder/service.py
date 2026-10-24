@@ -28,6 +28,12 @@ ACTIONS = ("click", "double_click", "right_click", "drag", "invoke", "toggle", "
 METHODS = ("auto", "background", "input")
 # Below this share of changed pixels a screenshot pair counts as "nothing visible happened".
 CHANGE_EPSILON = 0.0002
+# Targets found by their pixels (t-refs, v-refs, x/y points) are also judged by the pixels around them:
+# the change in the target's own area, which a whole-window share hides when the window is big. The
+# area is the target's box grown by half its height on each side, or AREA_POINT around a point.
+AREA_KINDS = frozenset({"text", "vision", "point"})
+AREA_POINT = (120, 60)
+AREA_EPSILON = 0.002
 # What an agent may choose when it renders. Not engine or outside_audio: another TTS program and audio
 # from anywhere on disk are for a person at the CLI.
 RENDER_OPTIONS = ("pointer", "zoom", "keys", "gif", "narrate", "voice", "mlt")
@@ -329,10 +335,15 @@ class Service:
         if value is not None:
             params["value"] = value
         before: dict = {}
+        # Painted apps can be caught mid-repaint, which a pixel comparison would report as a change; these
+        # comparisons wait for the scope's pixels to settle (locate.scope_pixels).
+        settled = bool((expect or {}).get("text_appears")) or any(
+            x is not None and x.kind in AREA_KINDS for x in (target, to_target))
 
         def perform(t: Target | None, p: dict):
             scope = self._scope(lease_id)
-            before["img"] = self._snap(scope)
+            before["img"] = self._pixels(scope, settled)
+            before["origin"] = scope.bounds()
             el = self.cache.get(ref) if ref else None
             ladder = Ladder(scope, p, method)
             if action == "invoke":
@@ -369,7 +380,7 @@ class Service:
             time.sleep(0.35)
             scope = self._scope(lease_id)
             ran = {"method": (result or {}).get("method"), "background": (result or {}).get("background")}
-            after = None if _gone(scope) else self._snap(scope)
+            after = None if _gone(scope) else self._pixels(scope, settled)
             if after is None and _gone(scope):
                 # The action closed the scope's own window (Ctrl+W on the last tab, a dialog's OK). That
                 # is its effect, not a failure; an expectation about what the window shows can't be met.
@@ -378,6 +389,10 @@ class Service:
                         **({"expect_failed": ["the scope's window closed"]} if expect else {})}
             pixels = capture.changed_fraction(before["img"], after) if before["img"] and after else 0.0
             verdict = {"ok": True, "changed": pixels > CHANGE_EPSILON, "pixels_changed": round(pixels, 5), **ran}
+            if before["img"] and after:
+                for key, tt in (("area", t), ("drop_area", p.get("to_target"))):
+                    if tt is not None and tt.kind in AREA_KINDS:
+                        verdict[key] = _area_change(before["img"], after, before["origin"], tt)
             el_ref = None if locate.is_found_ref(ref) else ref  # a t- or v-ref has no element to read back
             if action == "drag" and el_ref and t is not None and t.rect is not None:
                 state = uia.element_state(self.cache.get(el_ref))
@@ -386,7 +401,8 @@ class Service:
                 readback = uia.read(self.cache.get(el_ref))
                 verdict["readback"] = {k: (v[:200] if isinstance(v, str) else v) for k, v in readback.items()}
             if expect:
-                verdict.update(self._check_expect(expect, ref, lease_id, verdict))
+                verdict.update(self._check_expect(expect, ref, lease_id, verdict, before["img"], after,
+                                                  before["origin"]))
             return verdict
 
         return self.gw.run(token, lease_id, action, perform, target=target, params=params, verify=verify,
@@ -506,10 +522,18 @@ class Service:
                 return img
         return capture.grab(bounds)
 
-    def _check_expect(self, expect: dict, ref: str | None, lease_id: str, verdict: dict) -> dict:
+    def _check_expect(self, expect: dict, ref: str | None, lease_id: str, verdict: dict, before_img=None,
+                      after_img=None, origin: Rect | None = None) -> dict:
         problems = []
         if expect.get("changed") and not verdict["changed"]:
             problems.append("nothing visibly changed")
+        if expect.get("area_changed"):
+            if "area" not in verdict:
+                problems.append("area_changed needs a text, vision or x/y target")
+            elif not verdict["area"]["changed"]:
+                problems.append("nothing changed around the target")
+        if (needle := expect.get("text_appears")) is not None:
+            problems += self._text_appears(str(needle), before_img, after_img, origin, verdict)
         if (needle := expect.get("text_contains")) is not None:
             rb = verdict.get("readback") or {}
             hay = " ".join(str(rb.get(k, "")) for k in ("name", "value", "text"))
@@ -524,6 +548,35 @@ class Service:
                             want.get("auto_id")):
                 problems.append(f"no element matching {want}")
         return {"ok": not problems, "expect_failed": problems} if problems else {"expect": "met"}
+
+    def _text_appears(self, needle: str, before, after, origin: Rect | None, verdict: dict) -> list[str]:
+        """expect text_appears: OCR finds `needle` after the action somewhere it was not before."""
+        if (why := self._ocr_unavailable()) is not None:
+            return [f"text_appears can't be checked: {why}"]
+        if after is None or origin is None:
+            return ["text_appears can't be checked: the scope could not be captured after the action"]
+        now = ocr.find(ocr.scan(after), needle)
+        if not now:
+            return [f"{needle!r} is not on screen after the action"]
+        was = ocr.find(ocr.scan(before), needle) if before is not None else []
+        new = [h for h in now if not any(ocr.overlaps(h.box, b.box) for b in was)]
+        if not new:
+            return [f"{needle!r} was on screen already, in the same place, before the action"]
+        verdict["text_appeared"] = [_rect_list(Rect(origin.left + h.box.left, origin.top + h.box.top,
+                                                    origin.left + h.box.right, origin.top + h.box.bottom))
+                                    for h in new]
+        return []
+
+    def _pixels(self, scope, settled: bool):
+        """The scope's pixels for a before/after comparison: _snap, or settled ones (locate.scope_pixels)."""
+        if not settled:
+            return self._snap(scope)
+        if scope.bounds().empty:
+            return None
+        try:
+            return locate.scope_pixels(scope)[0]
+        except GatewayError:  # the window would not give its pixels; the comparison is skipped
+            return None
 
     def _shot(self, scope, kind: str) -> Path:
         """A screenshot for the agent. A window scope gives the window's own pixels only, never the
@@ -564,3 +617,23 @@ def _gone(scope) -> bool:
 
 def _rect_list(r: Rect) -> list[int]:
     return [r.left, r.top, r.right, r.bottom]
+
+
+def _area_change(before, after, origin: Rect, t: Target) -> dict:
+    """How much changed around a text, vision or point target, from two pixel captures of the scope."""
+    if t.kind == "point":
+        x, y = t.point()
+        r = Rect(x - AREA_POINT[0] // 2, y - AREA_POINT[1] // 2, x + AREA_POINT[0] // 2, y + AREA_POINT[1] // 2)
+    else:
+        m = max(4, t.rect.height // 2)
+        r = Rect(t.rect.left - m, t.rect.top - m, t.rect.right + m, t.rect.bottom + m)
+    rel = Rect(r.left - origin.left, r.top - origin.top, r.right - origin.left, r.bottom - origin.top)
+    rel = rel.intersect(Rect(0, 0, *before.size))
+    if rel.empty or before.size != after.size:
+        share = 1.0 if before.size != after.size else 0.0
+    else:
+        box = (rel.left, rel.top, rel.right, rel.bottom)
+        share = capture.changed_fraction(before.crop(box), after.crop(box))
+    return {"rect": _rect_list(Rect(rel.left + origin.left, rel.top + origin.top, rel.right + origin.left,
+                                    rel.bottom + origin.top)),
+            "pixels_changed": round(share, 5), "changed": share > AREA_EPSILON}
