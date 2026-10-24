@@ -4,11 +4,16 @@
     app Microsoft.WindowsNotepad_8wekyb3d8bbwe exe=Notepad.exe ver=11.2607.14.0 rev=7 "Notepad"
     ctl add-tab main Button aid=AddButton seen=5 ok=5 "Add New Tab"
     how close-unsaved ok=2 "Close a tab without saving" : click close-tab ; click dont-save
+    sig registry key=reg-1 by=yepgent pr=12 at=2026-11-02 ed25519=<hex>
     end sha256=<hex digest of every line above, each ending in a newline>
 
 An item line is `kind id [positional ...] [field=value ...] ["text"] [: step ; step ...]`. The quoted
 text is the only free text in a file, and whoever reads it treats it as untrusted. A line that does not
 parse is an error, never skipped, because profiles come from other people's PCs.
+
+The sig line is optional and comes only from the registry, just before the end line (sign.py). It is
+Profile.sig, never one of Profile.items, so an export or an import never carries it on. Overshoulder
+builds from before signing refuse a signed file as having an unknown kind.
 """
 
 from __future__ import annotations
@@ -68,6 +73,7 @@ KINDS: dict[str, Spec] = {
     "paint": Spec(("view",), required=1),
     "note": Spec(),
     "rev": Spec(),
+    "sig": Spec(text=False),  # Profile.sig only; id: who signed, "registry"
 }
 KIND_ORDER = {k: i for i, k in enumerate(KINDS)}
 
@@ -182,10 +188,13 @@ class Profile:
     items: list[Item] = field(default_factory=list)
     made_with: str = ""
     version: int = FORMAT_VERSION
+    sig: Item | None = None
 
     def __post_init__(self):
         if self.app.kind != "app":
             raise OspError("a profile starts with its app item")
+        if self.sig is not None and self.sig.kind != "sig":
+            raise OspError("Profile.sig holds the sig line")
 
     @property
     def app_id(self) -> str:
@@ -207,8 +216,8 @@ class Profile:
 
     def put(self, item: Item) -> Item:
         """Add the item, or replace the one with the same kind and id in place."""
-        if item.kind == "app":
-            raise OspError("the app item is Profile.app")
+        if item.kind in ("app", "sig"):
+            raise OspError(f"the {item.kind} item is Profile.{item.kind}")
         item.check()
         for i, x in enumerate(self.items):
             if x.key == item.key:
@@ -224,10 +233,14 @@ class Profile:
         self.items = [x for x in self.items if x.key != (kind, item_id)]
         return len(self.items) != before
 
-    def body(self) -> str:
+    def unsigned_body(self) -> str:
+        """Every line above the sig line: what a registry signature covers."""
         header = f"#osp {self.version}" + (f" made_with={self.made_with}" if self.made_with else "")
         ordered = sorted(self.items, key=lambda x: KIND_ORDER[x.kind])  # stable: keeps order within a kind
         return "".join(line + "\n" for line in [header, self.app.line(), *(x.line() for x in ordered)])
+
+    def body(self) -> str:
+        return self.unsigned_body() + (self.sig.line() + "\n" if self.sig is not None else "")
 
     def dumps(self) -> str:
         body = self.body()
@@ -259,16 +272,21 @@ def loads(text: str) -> Profile:
         raise OspError("the hash on the end line does not match: the file was changed after it was written")
     if len(lines) - 3 >= MAX_ITEMS:
         raise OspError(f"more than {MAX_ITEMS} items")
-    items, seen = [], set()
+    items, seen, sig = [], set(), None
     for n, line in enumerate(lines[1:-1], 2):
         try:
             item = parse_line(line)
         except OspError as e:
             raise OspError(f"line {n}: {e}") from None
+        if item.kind == "sig":
+            if n != len(lines) - 1 or n == 2:
+                raise OspError(f"line {n}: the sig line must come just before the end line")
+            sig = item
+            continue
         if item.key in seen:
             raise OspError(f"line {n}: {item.kind} {item.id} appears twice")
         if (n == 2) != (item.kind == "app"):
             raise OspError(f"line {n}: the app item must be line 2, and only line 2")
         seen.add(item.key)
         items.append(item)
-    return Profile(items[0], items[1:], made_with=head.group(2) or "", version=FORMAT_VERSION)
+    return Profile(items[0], items[1:], made_with=head.group(2) or "", version=FORMAT_VERSION, sig=sig)

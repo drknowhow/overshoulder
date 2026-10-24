@@ -399,6 +399,8 @@ IMPORT_PAGE = """<!doctype html>
   section {{ background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:20px 22px; margin-bottom:18px; }}
   .hint {{ color:#6b7280; font-size:13px; }}
   .bad {{ background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:10px 14px; border-radius:8px; }}
+  .ok {{ background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; padding:10px 14px; border-radius:8px; }}
+  .warn {{ background:#fffbeb; border:1px solid #fde68a; color:#92400e; padding:10px 14px; border-radius:8px; }}
   button {{ background:{accent}; color:#fff; border:0; border-radius:8px; padding:9px 18px; font:inherit; font-weight:600; cursor:pointer; }}
   button.quiet {{ background:#fff; color:{ink}; border:1px solid #e5e7eb; }}
   form {{ display:inline; }} code {{ background:#f1f5f9; padding:1px 5px; border-radius:4px; }}
@@ -432,7 +434,10 @@ def render_import(preview: dict | None, error: str, key: str, form_token: str, l
         here = (f"This PC has a profile of this app (revision {local_rev}); what it has stays as it is."
                 if local_rev else "This PC has no profile of this app yet.")
         made = html.escape(preview["made_with"] or "an unknown program")
+        origin = (f'<p class="ok">{html.escape(preview["registry"])}.</p>' if preview["from_registry"]
+                  else f'<p class="warn">{html.escape(share.NOT_FROM_REGISTRY)}</p>')
         body = f"""<section>
+  {origin}
   <p><b>{html.escape(preview['name'])}</b> <code>{html.escape(preview['app'])}</code>
   {html.escape(preview['version'])}</p>
   <p>{preview['items']} items: {kinds or 'none'}. Made with {made}.</p>

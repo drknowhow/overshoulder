@@ -12,14 +12,16 @@ PC:
 An agent asking to export is asked about at the desk first (service.py); the person exporting from the
 settings page or the command line has asked already.
 
-Import reads a file as untrusted: the .osp grammar, its size limits and its end hash must all hold, or
-nothing is taken. Then each item this PC's profile lacks is added with src=imported, and an item it
-already has stays as it is: what this PC learned wins.
+Import reads a file as untrusted: the .osp grammar, its size limits and its end hash must all hold, and
+a registry signature, if the file has one, must check out (sign.py), or nothing is taken. Then each
+item this PC's profile lacks is added with src=imported, and an item it already has stays as it is: what
+this PC learned wins. A file without a signature can be imported; the preview says it is not from the
+registry. An export never carries a signature on, because its lines are this PC's.
 """
 
 from __future__ import annotations
 
-from overshoulder import __version__, notes
+from overshoulder import __version__, notes, sign
 from overshoulder.appid import AppIdentity
 from overshoulder.osp import MAX_BYTES, Item, OspError, Profile, dec, loads
 
@@ -72,14 +74,20 @@ def export(prof: Profile) -> tuple[Profile, dict]:
 
 
 def read(data: bytes) -> Profile:
-    """A file to import, checked: UTF-8, the .osp grammar, its limits and its end hash."""
+    """A file to import, checked: UTF-8, the .osp grammar, its limits, its end hash and any signature."""
     if len(data) > MAX_BYTES:
         raise OspError(f"file is larger than {MAX_BYTES} bytes")
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
         raise OspError("not a profile: the file is not UTF-8 text") from None
-    return loads(text)
+    prof = loads(text)
+    sign.verify(prof)
+    return prof
+
+
+NOT_FROM_REGISTRY = ("Not from the registry: no one has reviewed this file. Import it only if you trust "
+                     "where it came from.")
 
 
 def preview(other: Profile) -> dict:
@@ -90,8 +98,10 @@ def preview(other: Profile) -> dict:
     shown = [{"kind": x.kind, "text": x.text or "", "url": dec(x.fields.get("url", "")),
               "steps": [" ".join(dec(t) for t in s) for s in x.steps]}
              for x in other.items if x.kind in NOTE_KINDS]
+    signed = sign.verify(other)
     return {"app": other.app_id, "name": other.name, "version": dec(other.app.fields.get("ver", "")),
-            "made_with": other.made_with, "items": len(other.items), "kinds": kinds, "notes": shown}
+            "made_with": other.made_with, "items": len(other.items), "kinds": kinds, "notes": shown,
+            "registry": signed.words() if signed else "", "from_registry": signed is not None}
 
 
 def merge(local: Profile, other: Profile) -> dict:

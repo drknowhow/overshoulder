@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 import urllib.request
 
 from overshoulder.gateway.clients import ClientRegistry, default_home
@@ -146,6 +147,43 @@ def _profile_open(store, path: str, port: int) -> int:
     return 0
 
 
+def _profile_signature(a) -> int:
+    """profile verify: 0 reviewed on the registry, 1 unsigned, 2 refused. profile sign: the registry's CI."""
+    import os
+
+    from overshoulder import share, sign
+    from overshoulder.osp import OspError
+    try:
+        with open(a.file, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        print(f"can't read {a.file}: {e.strerror or e}", file=sys.stderr)
+        return 2
+    try:
+        prof = share.read(data)
+    except OspError as e:
+        print(f"not valid: {e}", file=sys.stderr)
+        return 2
+    if a.pcmd == "verify":
+        signed = sign.verify(prof)
+        print(f"{signed.words()} (key {signed.key})" if signed else share.NOT_FROM_REGISTRY)
+        return 0 if signed else 1
+    seed = os.environ.get(a.key_env, "")
+    if not seed:
+        print(f"set {a.key_env} to the signing key (64 hex characters)", file=sys.stderr)
+        return 2
+    at = a.at or time.strftime("%Y-%m-%d", time.gmtime())
+    try:
+        sign.sign(prof, sign.private_key(seed), a.key_id, a.by, a.pr, at)
+    except (ValueError, OspError) as e:
+        print(f"not signed: {e}", file=sys.stderr)
+        return 2
+    with open(a.out or a.file, "w", encoding="utf-8", newline="\n") as f:
+        f.write(prof.dumps())
+    print(f"signed {a.out or a.file}: key {a.key_id}, @{a.by}, pull request #{a.pr}, {at}")
+    return 0
+
+
 def _profile(a) -> int:
     from overshoulder import share
     from overshoulder.osp import OspError
@@ -157,6 +195,8 @@ def _profile(a) -> int:
         from overshoulder import fileassoc
         print(json.dumps(fileassoc.uninstall() if a.remove else fileassoc.install(), indent=2))
         return 0
+    if a.pcmd in ("verify", "sign"):
+        return _profile_signature(a)
     if a.pcmd == "import":
         try:
             with open(a.file, "rb") as f:
@@ -168,6 +208,7 @@ def _profile(a) -> int:
             print(f"not imported: {e}", file=sys.stderr)
             return 2
         p = share.preview(other)
+        print(f"{p['registry']}." if p["from_registry"] else share.NOT_FROM_REGISTRY)
         print(f"{p['name']} ({p['app']}) {p['version']}: {p['items']} items, made with "
               f"{p['made_with'] or 'an unknown program'}")
         for n in p["notes"]:
@@ -301,6 +342,17 @@ def main(argv: list[str] | None = None) -> int:
     po.add_argument("file")
     pa = psub.add_parser("associate", help="open .osp files with Overshoulder (this user only)")
     pa.add_argument("--remove", action="store_true")
+    psub.add_parser("verify", help="say whether a .osp file was reviewed on the registry, and by whom").add_argument(
+        "file")
+    ps = psub.add_parser("sign", help="sign a .osp file with a registry key (what the registry's CI runs)")
+    ps.add_argument("file")
+    ps.add_argument("--by", required=True, help="the publisher's GitHub login")
+    ps.add_argument("--pr", required=True, type=int, help="the pull request that added the file")
+    ps.add_argument("--at", help="the date it merged, YYYY-MM-DD (default: today, UTC)")
+    ps.add_argument("--key-id", default="reg-1")
+    ps.add_argument("--key-env", default="OVERSHOULDER_SIGNING_KEY",
+                    help="the environment variable that holds the key's 32-byte seed in hex")
+    ps.add_argument("--out", help="file to write (default: sign the file in place)")
 
     a = ap.parse_args(argv)
     if a.cmd == "serve":
