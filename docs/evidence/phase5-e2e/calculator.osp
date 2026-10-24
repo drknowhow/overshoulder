@@ -1,0 +1,16 @@
+#osp 1 made_with=Overshoulder/0.1.0.dev0
+app Microsoft.WindowsCalculator_8wekyb3d8bbwe rev=0 ver=11.2607.0.0 "Calculator"
+view main window src=use n=33
+ctl togglepanebutton main Button aid=TogglePaneButton src=use ses=2 ver=11.2607.0.0 seen=4 ok=4 "Open Navigation"
+ctl listitem main ListItem name=content src=use ses=2 ver=11.2607.0.0 seen=4 ok=4
+ctl num1button main Button aid=num1Button src=use ses=2 ver=11.2607.0.0 seen=3 ok=3 "One"
+ctl multiplybutton main Button aid=multiplyButton src=use ses=2 ver=11.2607.0.0 seen=2 ok=2 "Multiply by"
+ctl num3button main Button aid=num3Button src=use ses=2 ver=11.2607.0.0 seen=2 ok=2 "Three"
+ctl num5button main Button aid=num5Button src=use ses=2 ver=11.2607.0.0 seen=2 ok=2 "Five"
+ctl equalbutton main Button aid=equalButton src=use ses=2 ver=11.2607.0.0 seen=2 ok=2 "Equals"
+ctl clearbutton main Button aid=clearButton src=use ses=2 ver=11.2607.0.0 seen=2 ok=2 "Clear"
+way invoke@button.uia_invoke ok=29 fail=0 src=use ms=397
+way select@listitem.uia_select ok=4 fail=0 src=use ms=452
+quirk q-fc7c6ab4a5 n=1 src=agent "Navigation pane closes itself after a mode is selected. Refs (e-numbers) are renumbered per mode, so find() controls again after switching. Result is read from the 'Display is N' text (auto_id CalculatorResults); invoke on buttons works in background."
+how h-switch-to-scientific-mode n=1 src=agent used=2 "switch to Scientific mode" : invoke Open%20Navigation ; select Scientific%20Calculator
+end sha256=77f56e1bd7fe90a64e060b0ab87306995ffb2f11390dfbbf3aa2081b12482dc7

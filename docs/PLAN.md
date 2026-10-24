@@ -145,6 +145,14 @@ OCR instead of a model.
    cloud model, the text check under x/y clicks, approval with a picture for
    unconfirmed vision refs, the area check and `text_appears`. Capture of
    windows that are not DPI aware was fixed on the way.
+5. **Knowledge.** App profiles built from use and from guides, revised every
+   session, packaged and shared; a "Made with Overshoulder" mark on rendered
+   output. Built 2026-10-24: the `.osp` format, learning at the end of each
+   lease, the brief and method order, anchors by automation id, reuse of
+   confirmed vision boxes, agent notes, export and import with the settings
+   page and the `.osp` file association, and the mark with its metadata.
+6. **Site.** A place to publish and find shared profiles, and how Overshoulder
+   is paid for. Not started; the mark is always on until then.
 
 Deferred until asked: live overlays, OBS scenes, remote (phone) driving.
 
