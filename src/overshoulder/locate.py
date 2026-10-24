@@ -7,7 +7,10 @@ content moved, the ref is stale and has to be found again, the way an element re
 element is gone. A text ref takes mouse actions only: click, double_click, right_click and drag.
 
 Vision refs (v1, v2...) are boxes a vision model drew around a described control (vision.py). They are
-kept and checked the same way; their name is the description the agent gave.
+kept and checked the same way; their name is the description the agent gave. A vision ref is confirmed
+when something on screen agrees with the description: the text read inside its box, or the name of the
+control UI Automation reports at its centre. An action on an unconfirmed one asks the person, showing
+them the box (picture()).
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from overshoulder.driver import capture
 from overshoulder.driver import windows as w
@@ -50,12 +53,17 @@ class Found:
     hwnd: int | None  # the window the box is in
     pixels: Image.Image  # the padded box's pixels when it was read
     source: str = "ocr"
+    confirmed_by: str = ""  # a vision ref: what on screen agreed with the description, or ""
 
     def describe(self, origin: Rect) -> dict:
         r = self.rel
-        return {"ref": self.ref, "name": self.text, "source": self.source,
-                "text" if self.source == "ocr" else "description": self.text,
-                "rect": [origin.left + r.left, origin.top + r.top, origin.left + r.right, origin.top + r.bottom]}
+        out = {"ref": self.ref, "name": self.text, "source": self.source,
+               "text" if self.source == "ocr" else "description": self.text,
+               "rect": [origin.left + r.left, origin.top + r.top, origin.left + r.right, origin.top + r.bottom]}
+        if self.source == "vision":
+            out["confirmed"] = bool(self.confirmed_by)
+            out["confirmed_by"] = self.confirmed_by or "nothing on screen; an action on it asks the person"
+        return out
 
 
 class FoundCache:
@@ -71,12 +79,13 @@ class FoundCache:
         with self._lock:
             self._by_ref.clear()
 
-    def add(self, text: str, rel: Rect, hwnd: int | None, img: Image.Image, source: str = "ocr") -> Found:
+    def add(self, text: str, rel: Rect, hwnd: int | None, img: Image.Image, source: str = "ocr",
+            confirmed_by: str = "") -> Found:
         with self._lock:
             if len(self._by_ref) >= self.limit:
                 self._by_ref.pop(next(iter(self._by_ref)))
             prefix = "v" if source == "vision" else "t"
-            f = Found(f"{prefix}{next(self._ids)}", text, rel, hwnd, padded(img, rel), source)
+            f = Found(f"{prefix}{next(self._ids)}", text, rel, hwnd, padded(img, rel), source, confirmed_by)
             self._by_ref[f.ref] = f
             return f
 
@@ -163,6 +172,37 @@ def nearest_label(phrases, x: int, y: int) -> str:
         if max(dx, dy) <= best_d:
             best, best_d = ph.text, max(dx, dy)
     return best
+
+
+# picture(): at most this much of the scope around the box, at the scope's own scale, so a button on a
+# big screen stays legible in the approval box and on a phone.
+PICTURE_SIZE = (900, 600)
+PICTURE_COLOR = (37, 99, 235)  # brand.AGENT_BLUE: the agent's highlights
+
+
+def picture(scope, rect: Rect) -> bytes:
+    """A PNG of the scope around `rect` (screen pixels) with the rect outlined and a cross where a click
+    lands: what an approval for an action on a vision ref shows the person."""
+    import io
+
+    img, origin = scope_pixels(scope)
+    rel = Rect(rect.left - origin.left, rect.top - origin.top, rect.right - origin.left, rect.bottom - origin.top)
+    cx, cy = rel.center()
+    w_, h_ = min(PICTURE_SIZE[0], img.width), min(PICTURE_SIZE[1], img.height)
+    left = max(0, min(cx - w_ // 2, img.width - w_))
+    top = max(0, min(cy - h_ // 2, img.height - h_))
+    img = img.convert("RGB").crop((left, top, left + w_, top + h_))
+    d = ImageDraw.Draw(img)
+    box = (rel.left - left, rel.top - top, rel.right - left - 1, rel.bottom - top - 1)
+    d.rectangle(box, outline=(255, 255, 255), width=5)
+    d.rectangle(box, outline=PICTURE_COLOR, width=3)
+    x, y = cx - left, cy - top
+    for a, b in (((x - 8, y), (x + 8, y)), ((x, y - 8), (x, y + 8))):
+        d.line((a, b), fill=(255, 255, 255), width=4)
+        d.line((a, b), fill=PICTURE_COLOR, width=2)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
 
 
 def still_there(f: Found, img: Image.Image) -> bool:

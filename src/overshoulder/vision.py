@@ -48,6 +48,24 @@ PROMPT = ('Find {description} in this screenshot. Answer only with JSON: {{"bbox
           'screenshot, answer {{"bbox_2d": null}}.')
 
 
+# Words that describe a control's kind rather than which one it is; "the Save button" is confirmed by
+# the text "Save".
+FILLER = frozenset("the a an this that button icon link field box control menu item tab label text called "
+                   "named with".split())
+
+
+def _content(s: str) -> set[str]:
+    return {w for w in re.findall(r"[^\W_]+", s.casefold()) if w not in FILLER}
+
+
+def agrees(seen: str, description: str) -> bool:
+    """Whether text or a control name seen in a box confirms the description: every word of it, apart
+    from words like "button", is in the description. Strict on purpose: "Save As" does not confirm
+    "the Save button", and an unconfirmed box is asked about."""
+    words = _content(seen)
+    return bool(words) and words <= _content(description)
+
+
 class VisionError(Exception):
     """The model could not be asked, or answered with something that is not a box."""
 

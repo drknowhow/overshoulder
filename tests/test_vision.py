@@ -1,6 +1,10 @@
 """Vision refs: a vision model is asked where a described control is, for icons with no text that neither
 UI Automation nor OCR can name. The hit is a v-ref, checked against the scope's pixels before every
-action like a t-ref. Off unless the person picks a model on the settings page."""
+action like a t-ref. Off unless the person picks a model on the settings page.
+
+A v-ref is confirmed when text read inside its box, or the control at its centre, matches the
+description. An action on a confirmed one goes ahead; on an unconfirmed one the person is asked, and the
+box on the desk shows them a picture of where the model looked."""
 
 import json
 import sys
@@ -158,14 +162,100 @@ def test_find_describe_returns_a_v_ref_in_screen_pixels(svc):  # noqa: F811
     s, token, lease, _, _ = _make(svc, model)
     [hit] = s.find(token, lease, describe="the gear icon")
     assert hit == {"ref": "v1", "name": "the gear icon", "description": "the gear icon", "source": "vision",
-                   "rect": [250, 70, 280, 100], "model": "fake"}
+                   "rect": [250, 70, 280, 100], "model": "fake", "confirmed": False,
+                   "confirmed_by": "nothing on screen; an action on it asks the person"}
     assert model.asked == [((200, 100), "the gear icon")]
 
 
-def test_a_click_on_a_v_ref_goes_to_the_middle_of_its_box(svc):  # noqa: F811
+# The svc fixture's OCR reads "Save", "Delete" and "Status" from any image, the box's included.
+
+def test_text_read_in_the_box_confirms_it_and_a_click_goes_ahead(svc):  # noqa: F811
+    s, token, lease, _, pressed = _make(svc)
+    [hit] = s.find(token, lease, describe='the "Save" button')
+    assert hit["confirmed"] and hit["confirmed_by"] == "it shows the text 'Save'"
+    assert s.act(token, lease, "click", ref=hit["ref"])["ok"] and pressed == [(265, 85)]
+
+
+def test_the_control_at_the_centre_confirms_it(svc):  # noqa: F811
+    s, token, lease, _, pressed = _make(svc)
+    s.gw.checks.element_in_scope_at = lambda scope, x, y: {"name": "Settings"} if (x, y) == (265, 85) else None
+    [hit] = s.find(token, lease, describe="the settings gear")
+    assert hit["confirmed_by"] == "the control at its centre is named 'Settings'"
+    assert s.act(token, lease, "click", ref=hit["ref"])["ok"] and pressed == [(265, 85)]
+
+
+def test_an_unconfirmed_v_ref_asks_and_the_question_shows_the_box(svc):  # noqa: F811
+    import io
+
+    from overshoulder.gateway.policy import CallbackApprover
+
+    asked = []
+    make, pixels, pressed = svc
+    s, token, lease = make(settings_source=lambda: LOCAL,
+                           approver=CallbackApprover(lambda req: asked.append(req) or True))
+    s.locator_for = lambda _settings: FakeModel()
+    ref = s.find(token, lease, describe="the gear icon")[0]["ref"]
+    out = s.act(token, lease, "click", ref=ref)
+    assert out["ok"] and pressed == [(265, 85)]
+    [req] = asked
+    assert req["reason"] == "click on 'the gear icon', where a vision model saw it and nothing on screen confirms it"
+    pic = Image.open(io.BytesIO(req["picture"])).convert("RGB")
+    assert pic.size == (200, 100)  # the whole scope, which is smaller than the picture's limit
+    assert pic.getpixel((150, 30)) == (37, 99, 235) and pic.getpixel((160, 30)) == (255, 255, 255)
+    assert pic.getpixel((165, 35)) == (37, 99, 235)  # the cross where the click lands
+
+
+def test_an_unconfirmed_v_ref_is_not_clicked_when_the_person_says_no(svc):  # noqa: F811
     s, token, lease, _, pressed = _make(svc)
     ref = s.find(token, lease, describe="the gear icon")[0]["ref"]
-    assert s.act(token, lease, "click", ref=ref)["ok"] and pressed == [(265, 85)]
+    with pytest.raises(GatewayError, match="nothing on screen confirms it") as e:
+        s.act(token, lease, "click", ref=ref)
+    assert e.value.code == "approval_denied" and pressed == []
+
+
+def test_agreeing_ignores_words_like_button_and_is_strict_about_the_rest():
+    assert vision.agrees("Save", 'the "Save" button')
+    assert vision.agrees("Settings", "the settings gear icon")
+    assert not vision.agrees("Save As...", "the Save button")
+    assert not vision.agrees("Settings", "the gear icon")
+    assert not vision.agrees("the", "the button") and not vision.agrees("", "Save")
+
+
+def test_the_picture_is_cut_around_the_box_on_a_big_screen():
+    import io
+
+    from test_ocr import BoundScope
+
+    from overshoulder import locate
+
+    class Big(BoundScope):
+        def __init__(self):
+            super().__init__()
+            self._bounds = Rect(0, 0, 3000, 2000)
+
+    big = Image.new("RGB", (3000, 2000), "white")
+    import overshoulder.driver.capture as capture
+    old = capture.window_image
+    capture.window_image = lambda h, r: big.copy()
+    try:
+        pic = Image.open(io.BytesIO(locate.picture(Big(), Rect(2900, 1950, 2960, 1990)))).convert("RGB")
+    finally:
+        capture.window_image = old
+    assert pic.size == locate.PICTURE_SIZE
+    assert pic.getpixel((900 - 100, 600 - 50 + 20))[2] == 235  # the box's left edge, near the corner
+
+
+def test_a_shared_screenshot_on_the_phone_is_the_picture_with_the_box():
+    import io
+
+    from overshoulder import phone
+
+    png = io.BytesIO()
+    Image.new("RGB", (900, 600), "white").save(png, "PNG")
+    req = {"reason": "click on 'the gear icon'", "process": "app.exe", "picture": png.getvalue(), "hwnd": 0}
+    shared = phone.make_question(req, phone.PhoneSettings(share_screenshot=True), 10)
+    assert Image.open(io.BytesIO(shared.screenshot)).size == (900, 600)
+    assert phone.make_question(req, phone.PhoneSettings(share_screenshot=False), 10).screenshot is None
 
 
 def test_a_v_ref_goes_stale_when_its_pixels_change(svc):  # noqa: F811
@@ -220,6 +310,47 @@ def test_with_vision_off_no_model_is_asked(svc):  # noqa: F811
     with pytest.raises(GatewayError, match="turned off"):
         s.find(token, lease, describe="the gear icon")
     assert model.asked == []
+
+
+@pytest.mark.desktop
+def test_the_desk_box_shows_the_picture_and_closing_it_is_no():
+    import ctypes
+    import io
+    import os
+
+    from overshoulder import approvals, phone
+    from overshoulder.driver import windows as w
+
+    png = io.BytesIO()
+    Image.new("RGB", (300, 200), (37, 99, 235)).save(png, "PNG")
+    req = {"client": "agent", "reason": "click on 'the gear icon'", "picture": png.getvalue()}
+
+    def ask(stop):
+        q = phone.Question("id", req["reason"], "", time.time() + 20, req)
+        got = {}
+        t = threading.Thread(target=lambda: got.setdefault("a", approvals.DesktopBox().ask(q, stop)))
+        t.start()
+        end, box = time.time() + 10, None
+        while time.time() < end and not box:
+            box = next((x.hwnd for x in w.top_windows()
+                        if x.pid == os.getpid() and x.title == approvals.BOX_TITLE), None)
+            time.sleep(0.1)
+        return t, got, box
+
+    stop = threading.Event()
+    t, got, box = ask(stop)
+    assert box, "the box with the picture did not open"
+    assert w.frame_bounds(box).height > 200  # tall enough to hold the picture above the buttons
+    ctypes.windll.user32.PostMessageW(box, 0x0010, 0, 0)  # WM_CLOSE, as the window's X does
+    t.join(10)
+    assert got == {"a": False}
+
+    stop = threading.Event()
+    t, got, box = ask(stop)
+    assert box
+    stop.set()  # another channel answered first
+    t.join(10)
+    assert got == {"a": None} and not w.is_window(box)
 
 
 # -- the settings page ------------------------------------------------------------------------------------
@@ -281,6 +412,7 @@ def test_the_local_model_finds_character_maps_select_button(tmp_path):
         [select] = s.find(token, lease, name="Select", control_type="Button")
         [hit] = s.find(token, lease, describe='the "Select" button')
         assert hit["ref"].startswith("v") and hit["source"] == "vision"
+        assert hit["confirmed_by"] == "the control at its centre is named 'Select'"
         left, top, right, bottom = hit["rect"]
         cx, cy = (select["rect"][0] + select["rect"][2]) // 2, (select["rect"][1] + select["rect"][3]) // 2
         assert left <= cx <= right and top <= cy <= bottom, (hit["rect"], select["rect"])

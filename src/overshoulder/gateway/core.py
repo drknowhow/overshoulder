@@ -57,6 +57,7 @@ class Target:
     pid: int | None = None
     hwnd: int | None = None  # top-level window holding the element
     ref: str = ""  # opaque id the driver can resolve again
+    unconfirmed: bool = False  # a vision box nothing on screen agrees with: an action on it asks
     revalidate: Callable[[], Target] | None = field(default=None, compare=False, repr=False)
 
     def point(self) -> tuple[int, int]:
@@ -113,6 +114,11 @@ def _element_in_scope_at(scope, x: int, y: int) -> dict | None:
 def _label_at(scope, x: int, y: int) -> str:
     from overshoulder import locate  # imported late: locate imports this package's limits module
     return locate.label_at(scope, x, y)
+
+
+def _picture(scope, rect: Rect) -> bytes:
+    from overshoulder import locate
+    return locate.picture(scope, rect)
 
 
 def _foreground_checked(scope, not_elevated: Callable[[int], None]) -> int:
@@ -180,6 +186,8 @@ class Checks:
     # The text on screen a click at a point lands on or beside ("" for none), read with OCR, for apps
     # whose drawn buttons UI Automation can't name.
     label_at: Callable[[Any, int, int], str] = _label_at
+    # A PNG of the scope around a rect with the rect drawn, for an approval about a vision box.
+    picture: Callable[[Any, Rect], bytes] = _picture
     root_of: Callable[[int], int] = lambda h: __import__(
         "overshoulder.driver.background", fromlist=["root_of"]).root_of(h)
     is_password_window: Callable[[int], bool] = lambda h: __import__(
@@ -471,10 +479,16 @@ class Gateway:
                         label, reason = "", f"{action} at {named.point()}, where the text could not be read"
                     if label:
                         reason = policy.approval_reason(action, label, params, focused_type=focused_type)
+                guessed = [t for t in (target, to_target) if t is not None and t.kind == "vision"]
+                if reason is None:
+                    unsure = next((t for t in guessed if t.unconfirmed), None)
+                    if unsure is not None:
+                        reason = (f"{action} on {unsure.name!r}, where a vision model saw it and nothing on "
+                                  "screen confirms it")
                 if reason:
                     req = {"kind": "action", "client": client.name, "action": action, "reason": reason,
                            "target": named.describe() if named else None, "scope": scope_desc,
-                           **self._asked_about(scope, named)}
+                           **self._asked_about(scope, named), **self._picture_of(scope, guessed)}
                     policy.require_approval(self.approver, req)
                     approved_by = req.get("answered_by")
 
@@ -566,6 +580,17 @@ class Gateway:
             procs = []
         hosted = [p for p in procs if p and p != "applicationframehost.exe"]
         return {"process": (hosted or procs or [""])[0], "hwnd": hwnd}
+
+    def _picture_of(self, scope, guessed: list[Target]) -> dict:
+        """{"picture": PNG} of the first vision box an approval is about, which the box on the desk shows
+        (the phone gets it only if the person shares screenshots). {} if there is none or it can't be taken."""
+        t = next((t for t in guessed if t.rect is not None and not t.rect.empty), None)
+        if t is None:
+            return {}
+        try:
+            return {"picture": self.checks.picture(scope, t.rect)}
+        except Exception:  # the question still goes out, in words
+            return {}
 
     def _check_background(self, lease_id: str, client: str, scope) -> None:
         """Stop check between steps of background work. A panic, revoke or operator pause stops it. The

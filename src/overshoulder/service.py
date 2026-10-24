@@ -432,7 +432,8 @@ class Service:
             r = f.rel
             return Target("text" if f.source == "ocr" else "vision",
                           rect=Rect(origin.left + r.left, origin.top + r.top, origin.left + r.right,
-                                    origin.top + r.bottom), name=f.text, hwnd=f.hwnd, ref=ref)
+                                    origin.top + r.bottom), name=f.text, hwnd=f.hwnd, ref=ref,
+                          unconfirmed=f.source == "vision" and not f.confirmed_by)
 
         return Target(**{**fresh().__dict__, "revalidate": fresh})
 
@@ -467,8 +468,29 @@ class Service:
             raise GatewayError(f"the vision model ({locator.name}) could not be asked: {e}") from e
         if box is None:
             return []
-        f = self.found.add(description, box, locate.window_of(scope, origin, box), img, source="vision")
+        f = self.found.add(description, box, locate.window_of(scope, origin, box), img, source="vision",
+                           confirmed_by=self._confirm(scope, img, origin, box, description))
         return [{**f.describe(origin), "model": locator.name}]
+
+    def _confirm(self, scope, img, origin: Rect, box: Rect, description: str) -> str:
+        """What on screen agrees that `box` (scope pixels) is the described control: the name of the control
+        at its centre, or text read inside it. "" when nothing does."""
+        cx, cy = box.center()
+        try:
+            under = self.gw.checks.element_in_scope_at(scope, origin.left + cx, origin.top + cy)
+        except Exception:  # unreadable counts as unconfirmed, which asks
+            under = None
+        name = (under or {}).get("name", "")
+        if name and vision.agrees(name, description):
+            return f"the control at its centre is named {name!r}"
+        if self._ocr_unavailable() is None:
+            pad = locate.PAD * 2
+            crop = img.crop((max(box.left - pad, 0), max(box.top - pad, 0),
+                             min(box.right + pad, img.width), min(box.bottom + pad, img.height)))
+            for ph in ocr.merged(ocr.scan(crop)):
+                if vision.agrees(ph.text, description):
+                    return f"it shows the text {ph.text!r}"
+        return ""
 
     @staticmethod
     def _snap(scope):

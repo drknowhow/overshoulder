@@ -144,11 +144,25 @@ def make_question(request: dict, s: PhoneSettings, timeout_s: float, now: float 
             title = w.title(hwnd)
         except Exception:  # a closed window has no title to share
             title = ""
-    if hwnd and s.share_screenshot:
+    if s.share_screenshot and request.get("picture"):
+        shot = _thumbnail(request["picture"])  # the scope around a vision box, with the box drawn
+    elif hwnd and s.share_screenshot:
         shot = _screenshot(hwnd)
     return Question(id=secrets.token_urlsafe(16), reason=str(request.get("reason") or "an action"),
                     process=str(request.get("process") or ""),
                     expires_at=(now or time.time()) + timeout_s, request=request, title=title, screenshot=shot)
+
+
+def _thumbnail(png: bytes) -> bytes | None:
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(png))
+        img.thumbnail((1280, 1280))
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
 
 
 def _screenshot(hwnd: int) -> bytes | None:

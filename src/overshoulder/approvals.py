@@ -1,14 +1,18 @@
 """Approval prompts: the box on the desk, and the person's phone when they set one up.
 
 The box is a topmost Yes/No message box owned by the Overshoulder process, which the gateway never lets
-an agent click or type into. With phone channels on (phone.py), every channel is asked at once: the
-first answer wins, the other prompts are closed, and no answer before the deadline is "No".
+an agent click or type into. A question about a box a vision model drew comes with a picture of it
+(request["picture"]); then the box is a small window of this process that shows the picture above the
+same Yes/No. With phone channels on (phone.py), every channel is asked at once: the first answer wins,
+the other prompts are closed, and no answer before the deadline is "No".
 """
 
 from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wt
+import gc
+import io
 import json
 import logging
 import queue
@@ -29,6 +33,8 @@ MB_TOPMOST = 0x40000
 IDYES = 6
 IDNO = 7
 WM_COMMAND = 0x0111
+
+BOX_TITLE = "Overshoulder: approve agent action?"
 
 _user32 = ctypes.windll.user32
 _kernel32 = ctypes.windll.kernel32
@@ -78,19 +84,82 @@ class DesktopBox:
         self.last_error = ""
 
     def ask(self, q: phone.Question, stop: threading.Event) -> bool | None:
+        if q.request.get("picture"):
+            try:
+                return self._ask_with_picture(q, stop)
+            finally:
+                gc.collect()  # Tk objects must be freed on the thread that made them, never on another
         tid = _kernel32.GetCurrentThreadId()
         shown = threading.Event()
         threading.Thread(target=self._close_on_stop, args=(stop, shown, tid), daemon=True).start()
         flags = MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_TOPMOST | MB_SETFOREGROUND | MB_SYSTEMMODAL
         ms = max(1, int((q.expires_at - time.time()) * 1000))
         try:
-            answer = _MessageBoxTimeoutW(None, _summary(q.request, self.also),
-                                         "Overshoulder: approve agent action?", flags, 0, ms)
+            answer = _MessageBoxTimeoutW(None, _summary(q.request, self.also), BOX_TITLE, flags, 0, ms)
         finally:
             shown.set()
         if stop.is_set():
             return None  # closed because another channel answered
         return {IDYES: True, IDNO: False}.get(answer)  # anything else is the timeout
+
+    def _ask_with_picture(self, q: phone.Question, stop: threading.Event) -> bool | None:
+        """The same question in a window that shows request["picture"]. No is the default button, and
+        closing the window or Escape is No. Runs a Tk loop on this channel's own thread."""
+        import tkinter as tk
+
+        from PIL import Image, ImageTk
+
+        answer: dict = {}
+        root = tk.Tk()
+        root.title(BOX_TITLE)
+        root.attributes("-topmost", True)
+        root.resizable(False, False)
+
+        def done(value: bool | None) -> None:
+            answer.setdefault("value", value)
+            root.quit()
+
+        img = Image.open(io.BytesIO(q.request["picture"]))
+        img.thumbnail((900, 600))
+        photo = ImageTk.PhotoImage(img, master=root)
+        tk.Label(root, text=_summary(q.request, self.also), justify="left", anchor="w",
+                 padx=14, pady=10).pack(fill="x")
+        tk.Label(root, image=photo, borderwidth=1, relief="solid").pack(padx=14)
+        buttons = tk.Frame(root)
+        buttons.pack(pady=12)
+        tk.Button(buttons, text="Yes", width=12, command=lambda: done(True)).pack(side="left", padx=6)
+        no = tk.Button(buttons, text="No", width=12, command=lambda: done(False), default="active")
+        no.pack(side="left", padx=6)
+        root.protocol("WM_DELETE_WINDOW", lambda: done(False))
+        root.bind("<Escape>", lambda _e: done(False))
+
+        def on_return(_e) -> None:  # Enter presses the focused button, which starts as No
+            focused = root.focus_get()
+            if isinstance(focused, tk.Button):
+                focused.invoke()
+            else:
+                done(False)
+
+        root.bind("<Return>", on_return)
+
+        def watch() -> None:
+            if stop.is_set() or time.time() >= q.expires_at:
+                done(None)
+            else:
+                root.after(100, watch)
+
+        root.after(100, watch)
+        root.lift()
+        root.focus_force()
+        no.focus_set()
+        try:
+            root.mainloop()
+        finally:
+            root.destroy()
+            del photo
+        if stop.is_set():
+            return None  # closed because another channel answered
+        return answer.get("value")
 
     @staticmethod
     def _close_on_stop(stop: threading.Event, done: threading.Event, tid: int) -> None:
