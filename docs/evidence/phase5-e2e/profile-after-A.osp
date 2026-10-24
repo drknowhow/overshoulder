@@ -1,0 +1,23 @@
+#osp 1 made_with=Overshoulder/0.1.0.dev0
+app Microsoft.WindowsCalculator_8wekyb3d8bbwe exe=CalculatorApp.exe rev=3 ver=11.2607.0.0 at=2026-10-24T13:48:12Z "Calculator"
+view main window src=use n=17
+ctl togglepanebutton main Button aid=TogglePaneButton src=use ses=1 last=f4ccab2f9e nh=c7ad3849a916 nses=1 ver=11.2607.0.0 seen=2 ok=2
+ctl listitem main ListItem name=content src=use ses=1 last=f4ccab2f9e ver=11.2607.0.0 seen=2 ok=2
+ctl num1button main Button aid=num1Button src=use ses=1 last=f4ccab2f9e nh=a511861cd483 nses=1 ver=11.2607.0.0 seen=2 ok=2
+ctl num2button main Button aid=num2Button src=use ses=1 last=f4ccab2f9e nh=06dd3dd3c8dc nses=1 ver=11.2607.0.0 seen=1 ok=1
+ctl multiplybutton main Button aid=multiplyButton src=use ses=1 last=f4ccab2f9e nh=69730bc71988 nses=1 ver=11.2607.0.0 seen=1 ok=1
+ctl num3button main Button aid=num3Button src=use ses=1 last=f4ccab2f9e nh=732a6bfc2dab nses=1 ver=11.2607.0.0 seen=1 ok=1
+ctl num4button main Button aid=num4Button src=use ses=1 last=f4ccab2f9e nh=b608d34a97af nses=1 ver=11.2607.0.0 seen=3 ok=3
+ctl plusbutton main Button aid=plusButton src=use ses=1 last=f4ccab2f9e nh=02e76f5e7ce6 nses=1 ver=11.2607.0.0 seen=1 ok=1
+ctl num5button main Button aid=num5Button src=use ses=1 last=f4ccab2f9e nh=5dee06b5d5f0 nses=1 ver=11.2607.0.0 seen=1 ok=1
+ctl equalbutton main Button aid=equalButton src=use ses=1 last=f4ccab2f9e nh=bd31612ec327 nses=1 ver=11.2607.0.0 seen=1 ok=1
+ctl clearbutton main Button aid=clearButton src=use ses=1 last=f4ccab2f9e nh=33d5fbdd4f54 nses=1 ver=11.2607.0.0 seen=1 ok=1
+ctl squarerootbutton main Button aid=squareRootButton src=use ses=1 last=f4ccab2f9e nh=00ab7d6b10e9 nses=1 ver=11.2607.0.0 seen=1 ok=1
+way invoke@button.uia_invoke ok=15 fail=0 src=use ms=395
+way select@listitem.uia_select ok=2 fail=0 src=use ms=453
+quirk q-fc7c6ab4a5 n=1 src=agent "Navigation pane closes itself after a mode is selected. Refs (e-numbers) are renumbered per mode, so find() controls again after switching. Result is read from the 'Display is N' text (auto_id CalculatorResults); invoke on buttons works in background."
+how h-switch-to-scientific-mode n=1 src=agent used=1 "switch to Scientific mode" : invoke Open%20Navigation ; select Scientific%20Calculator
+rev 1 at=2026-10-24T13:48:11Z items=2 "add: how h-switch-to-scientific-mode"
+rev 2 at=2026-10-24T13:48:11Z items=4 "add: quirk q-fc7c6ab4a5"
+rev 3 at=2026-10-24T13:48:12Z items=20 "use: 17 actions, 12 controls, 15 new items"
+end sha256=8fe24cc07f107bf4b5d035352b2764140e0babf177dd7fe54fde601944aaa480

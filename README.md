@@ -10,7 +10,7 @@
 <p align="center">
   <img alt="Platform: Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%2F11-2563eb">
   <img alt="Protocol: MCP" src="https://img.shields.io/badge/protocol-MCP-111827">
-  <img alt="Status: phase 4" src="https://img.shields.io/badge/status-phase%204-f5a623">
+  <img alt="Status: phase 5" src="https://img.shields.io/badge/status-phase%205-f5a623">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-22c55e">
 </p>
 
@@ -26,7 +26,7 @@ Windows Calculator". Video, step images and `steps.md` are in [docs/demo/calcula
 Agents work on their window in the background, so the person at the desk keeps their own cursor and
 keyboard. See [Working beside you](#working-beside-you).
 
-Status: phase 4. Windows 10/11 only.
+Status: phase 5. Windows 10/11 only.
 
 ## Install
 
@@ -83,6 +83,7 @@ Then ask the agent something like "take the Notepad window as your scope and typ
 | `record_start`, `record_stop` | Record the scope and render a tutorial |
 | `redact` | While recording, hide an element in every frame of the tutorial |
 | `annotate`, `render` | Edit one of its recordings' annotation layer and render it again |
+| `profile` | What earlier sessions learned about the scope's app; add a note for the next agent ([below](#app-profiles)) |
 | `release_scope`, `status` | Give the desktop back; see who is driving |
 
 Agents should prefer element refs and `invoke`/`set_value`. Coordinates work as well, for canvas
@@ -120,6 +121,47 @@ nothing about them. Overshoulder then finds them by how the screen looks:
 
 All of this reads only the agent's own scope. Reading text can be switched off in the settings, and
 then nothing is read.
+
+## App profiles
+
+The first time an agent works in an app, Overshoulder starts a profile of it, and every session after
+that revises it. The next agent starts from what the earlier ones learned instead of from nothing.
+
+- **What it learns from use:** the app's windows, the controls agents acted on (their kind and
+  automation id; their names once two sessions have seen them), which methods worked for each kind of
+  action there and which kept failing, the shortcut keys used, and where a vision model found a painted
+  control, with a small hash of its pixels.
+- **What agents add:** `profile(op="add")` keeps a quirk, a shortcut, a how-to (its steps as actions
+  and control names) or a note from a guide with its link. `profile(op="learn")` looks the app over
+  without acting and adds the controls and shortcut keys an agent would use.
+- **How it is used:** `take_scope` returns a short brief of the profile, most used items first, and
+  `profile()` returns all of it. Methods that kept failing in this app are tried last. A find by name or
+  automation id goes straight to a control the profile knows. A description a vision model answered
+  before is checked against the screen and reused without asking the model again: 0.3 s instead of
+  38 s with the model loading cold, measured on a painted button with Qwen3-VL 8B.
+- **What it never holds:** window titles, typed text, what a field showed, file names, or anything an
+  agent saw in only one session. A control whose name is the person's content keeps only its kind.
+  Notes that hold an email address, a path or a link are refused.
+- **What it never does:** grant anything. A profile only changes the order of methods an action may
+  already use, and every hint is checked against the screen. Text in a profile reaches agents marked as
+  notes from other agents, never as instructions.
+
+Profiles are `.osp` files, one line per item, in `%LOCALAPPDATA%\Overshoulder\profiles`, with their
+last 20 revisions in `history\`. `overshoulder profile list` and `overshoulder profile show <app>`
+print them; the settings page lists them and has a switch that turns learning and hints off.
+
+### Sharing a profile
+
+- **Export** from the settings page or with `overshoulder profile export <app> [file]`. The copy leaves
+  out what only this PC needs: anything seen in one session, the revision history and the bookkeeping.
+  An agent can ask to export with `profile(op="export")`; you approve it at the desk first.
+- **Import** is yours to do: upload the file on the settings page, or run
+  `overshoulder profile import <file>`. The file is checked first (its format, its size and the hash on
+  its last line), and the page shows what it brings, including every note other agents wrote, before
+  anything is added. An import adds only the items your profile lacks and marks them as imported; what
+  your PC learned stays as it is.
+- `overshoulder profile associate` makes `.osp` files open the import page when you double-click them
+  (for your Windows user only; `--remove` takes it back).
 
 ## Safety model
 
@@ -195,7 +237,12 @@ the person to stop using the PC, then put their cursor and window back. In
 a box in the background while a program it was denied covers the start point, and records the drag as
 a tutorial whose Shotcut project renders to match the video. In
 [docs/evidence/phase4-e2e](docs/evidence/phase4-e2e), a headless agent works a window of painted
-buttons with text refs and vision refs, and its click on a painted Delete is put to the person.
+buttons with text refs and vision refs, and its click on a painted Delete is put to the person. In
+[docs/evidence/phase5-e2e](docs/evidence/phase5-e2e), three headless agents do Calculator tasks: the
+first with no profile, the second with the profile the first one's session built, and the third in a
+clean data directory with that profile exported and imported. On Calculator, the profile did not make
+the work smaller (29, 26 and 27 tool calls, no failed tries in any run); the later agents followed its
+how-to and said its brief matched what they saw.
 
 ## Waiting for the person
 
@@ -277,6 +324,11 @@ the recording's folder (`%LOCALAPPDATA%\Overshoulder\recordings\<stamp>-<name>`)
 - With `mlt`: `tutorial.mlt`, a Shotcut project of the same edit, with its media in `edit/`. See
   [Finishing in Shotcut](#finishing-in-shotcut).
 
+Everything rendered for people carries a small "Made with Overshoulder" mark at the right end of the
+caption strip, where it never covers the app. An annotated screenshot gets a thin strip underneath for
+it, and `steps.md` ends with a line. The files also say it in their metadata: the MP4's comment tag, a
+PNG text chunk and a GIF comment. Screenshots an agent takes for itself stay clean.
+
 The original video is never changed. Everything added on top comes from `annotations.json` beside it,
 which the agent or you can edit before rendering again:
 
@@ -334,6 +386,7 @@ you can change:
   the annotation track shows nothing a redaction covers.
 - **Annotations**: `edit/overlay.mov`, everything drawn on top (pointer, highlights, badges, keycaps,
   layer items and the caption strip), transparent elsewhere.
+- **Made with Overshoulder**: `edit/mark.png`, the mark on a track of its own.
 - **Narration**: `narration.wav`, when the tutorial is narrated.
 - A marker at each step, named after its caption.
 
@@ -342,7 +395,7 @@ project matches `tutorial.mp4` frame for frame (on the Notepad example above, ev
 0.99 SSIM and 33 dB PSNR). If you save the project in Shotcut, the next render leaves it alone and
 writes `tutorial-2.mlt` with its media in `edit-2/`.
 
-## Limits (phase 4)
+## Limits (phase 5)
 
 - Windows only. Multi-monitor and mixed-DPI setups are untested; development used one 125% monitor.
 - Chromium and Electron apps take typing only while they are in front (measured on VS Code; Chrome
@@ -376,6 +429,12 @@ writes `tutorial-2.mlt` with its media in `edit-2/`.
   Windows 11 has David and Zira). For any other engine, render from the CLI with `--tts-cmd`.
 - The Shotcut project's annotation track is one video: an annotation can be hidden or trimmed with
   it, but changing what it draws means editing `annotations.json` and rendering again.
+- Profiles are keyed by the app's identity (its package or its program's company and name). Two
+  programs that report nothing to tell them apart share one profile. A profile describes the app as it
+  looked when it was learned; after an update, items not yet seen on the new version are marked so in
+  the brief until a session sees them.
+- A shared profile carries a hash that shows it was not changed after export, not who made it.
+  Signatures that name the author are planned with the phase 6 site.
 
 ## Development
 
