@@ -562,9 +562,9 @@ class Service:
         new = [h for h in now if not any(ocr.overlaps(h.box, b.box) for b in was)]
         if not new:
             return [f"{needle!r} was on screen already, in the same place, before the action"]
-        verdict["text_appeared"] = [_rect_list(Rect(origin.left + h.box.left, origin.top + h.box.top,
-                                                    origin.left + h.box.right, origin.top + h.box.bottom))
-                                    for h in new]
+        verdict["text_appeared"] = [{"text": h.text, "rect": _rect_list(Rect(
+            origin.left + h.box.left, origin.top + h.box.top, origin.left + h.box.right, origin.top + h.box.bottom))}
+            for h in new]
         return []
 
     def _pixels(self, scope, settled: bool):

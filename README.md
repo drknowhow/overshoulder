@@ -10,7 +10,7 @@
 <p align="center">
   <img alt="Platform: Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%2F11-2563eb">
   <img alt="Protocol: MCP" src="https://img.shields.io/badge/protocol-MCP-111827">
-  <img alt="Status: phase 3" src="https://img.shields.io/badge/status-phase%203-f5a623">
+  <img alt="Status: phase 4" src="https://img.shields.io/badge/status-phase%204-f5a623">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-22c55e">
 </p>
 
@@ -26,7 +26,7 @@ Windows Calculator". Video, step images and `steps.md` are in [docs/demo/calcula
 Agents work on their window in the background, so the person at the desk keeps their own cursor and
 keyboard. See [Working beside you](#working-beside-you).
 
-Status: phase 3. Windows 10/11 only.
+Status: phase 4. Windows 10/11 only.
 
 ## Install
 
@@ -77,7 +77,7 @@ Then ask the agent something like "take the Notepad window as your scope and typ
 |---|---|
 | `windows` | List windows it could take as a scope |
 | `take_scope` | Lease `window:<hwnd>`, `screen:<n>` or `screen:all` |
-| `observe`, `find`, `read` | See the scope's controls (with refs like `e12`), filter them, read values |
+| `observe`, `find`, `read` | See the scope's controls (with refs like `e12`), filter them, read values; find painted buttons by their text or an icon by a description ([below](#apps-that-paint-their-own-buttons)) |
 | `act` | `click`, `double_click`, `right_click`, `drag`, `invoke`, `toggle`, `select`, `set_value`, `type`, `hotkey`, `focus`, `activate`, each verified afterwards |
 | `screenshot` | Image of the scope |
 | `record_start`, `record_stop` | Record the scope and render a tutorial |
@@ -93,6 +93,33 @@ says which method ran and whether it was a background one.
 
 A drag goes from `ref` or `x`/`y` to `to_ref` or `to_x`/`to_y`. Both ends must be in scope, and a drop
 onto something that discards or sends (a Recycle Bin, a "Delete" target) asks the person first.
+
+### Apps that paint their own buttons
+
+Some apps draw their controls as pixels (games, canvases, many older apps), so Windows tells an agent
+nothing about them. Overshoulder then finds them by how the screen looks:
+
+- `find(text="Save")` reads the scope with the OCR built into Windows and returns where those words
+  are as text refs (`t1`, `t2`...). `observe(text=true)` lists all the text it reads. A find by name
+  that matches no control looks for the name on screen the same way.
+- `find(describe="the gear icon")` asks a vision model where that is and returns a vision ref (`v1`...).
+  It is off until you choose a model in `overshoulder settings`: Qwen3-VL 8B in Ollama on this PC
+  (about 13 GB of graphics memory while loaded, unloaded after 5 idle minutes), or an
+  OpenAI-compatible cloud model, which means screenshots of the agent's window leave the PC.
+- A vision ref is confirmed when the text inside its box, or the name Windows gives the control at its
+  centre, matches the description. An action on an unconfirmed one asks you first, and the box on the
+  desk shows you where the model looked. Your phone gets the words, and the picture only if you share
+  screenshots.
+- Text and vision refs take clicks and drags. Before each action the pixels under the ref are compared
+  with what they were when it was found; if they changed, the ref is stale and has to be found again.
+- A click by `x`/`y` is checked against the text on screen at that point, so `x`/`y` on a painted
+  Delete asks you, as a click on a Delete button does.
+- After an action on a text ref, a vision ref or a point, the result says how much changed around the
+  target (`verify.area`). `expect={"text_appears": "Saved"}` checks with OCR that the words showed up
+  where they were not before.
+
+All of this reads only the agent's own scope. Reading text can be switched off in the settings, and
+then nothing is read.
 
 ## Safety model
 
@@ -166,7 +193,9 @@ Notepad, Calculator and Character Map with the input mode set to "never". Sample
 the person to stop using the PC, then put their cursor and window back. In
 [docs/evidence/phase3-e2e](docs/evidence/phase3-e2e), a headless agent narrows its own session, drags
 a box in the background while a program it was denied covers the start point, and records the drag as
-a tutorial whose Shotcut project renders to match the video.
+a tutorial whose Shotcut project renders to match the video. In
+[docs/evidence/phase4-e2e](docs/evidence/phase4-e2e), a headless agent works a window of painted
+buttons with text refs and vision refs, and its click on a painted Delete is put to the person.
 
 ## Waiting for the person
 
@@ -313,7 +342,7 @@ project matches `tutorial.mp4` frame for frame (on the Notepad example above, ev
 0.99 SSIM and 33 dB PSNR). If you save the project in Shotcut, the next render leaves it alone and
 writes `tutorial-2.mlt` with its media in `edit-2/`.
 
-## Limits (phase 3)
+## Limits (phase 4)
 
 - Windows only. Multi-monitor and mixed-DPI setups are untested; development used one 125% monitor.
 - Chromium and Electron apps take typing only while they are in front (measured on VS Code; Chrome
@@ -333,8 +362,12 @@ writes `tutorial-2.mlt` with its media in `edit-2/`.
   it. The cause is not known ([phone check](docs/evidence/phase3-phone)). Both later runs passed: one
   asked its questions 10 s apart, and the other, after the titles began naming the action, 1.5 s apart.
   Use phone approvals for actions you could undo, or answer at the desk.
-- Apps that hide their controls from UI Automation (canvases, games) can only be driven by
-  coordinates. Verification for them is a screenshot difference.
+- For apps that hide their controls from UI Automation, OCR reads the languages installed for your
+  Windows user. It was measured on two test windows only (the painted-buttons app at 100% and 125%,
+  and Character Map). Refs found this way take only mouse actions; to type, click first.
+- The vision model's own confidence is not used: measured with Qwen3-VL 8B it was 0.99 for right and
+  wrong boxes alike. A cold local model takes about 30 s to load. The cloud option was tested against a
+  stand-in server only, not a real provider.
 - Screen-scope recordings use desktop capture, so anything on that screen is recorded, except the
   windows of programs the session is denied.
 - A redaction is a fixed rectangle of the recorded frame. If the control it covers scrolls or moves

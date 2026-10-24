@@ -1,6 +1,6 @@
 # Overshoulder: plan v3
 
-Status: written 2026-10-20 before any code; phases 0 to 2 were built by 2026-10-23. The README
+Status: written 2026-10-20 before any code; phases 0 to 4 were built by 2026-10-23. The README
 describes what exists today. This file keeps the reasoning behind it.
 
 ## Goal
@@ -104,6 +104,15 @@ list.
 - Verify by before/after screenshot diff in the target region, plus a model
   check of the expected change.
 
+As built in phase 4: Windows OCR (three passes, one with long borders painted
+out, because the engine skips labels inside a row of bordered boxes) and a
+vision model that is off by default. The model's confidence turned out to be
+the same for right and wrong boxes, so there is no threshold: a vision box is
+confirmed by OCR text inside it or a UI Automation name at its centre, and
+otherwise the person is asked with a picture of the box. Verification compares
+pixels around the target, and `text_appears` checks the expected change with
+OCR instead of a model.
+
 ## Tutorial output
 
 - One action per step, with a pause before and after each click.
@@ -132,6 +141,10 @@ list.
    per-session narrowing and the Shotcut `.mlt` export. Hotkeys and per-agent
    client credentials came with the phase 1 gateway.
 4. **Locator fallback.** OCR and vision locate + verify.
+   Built 2026-10-23: text refs from Windows OCR, vision refs from a local or
+   cloud model, the text check under x/y clicks, approval with a picture for
+   unconfirmed vision refs, the area check and `text_appears`. Capture of
+   windows that are not DPI aware was fixed on the way.
 
 Deferred until asked: live overlays, OBS scenes, remote (phone) driving.
 

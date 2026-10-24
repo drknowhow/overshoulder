@@ -390,8 +390,8 @@ def _local_model_ready() -> bool:
 @pytest.mark.desktop
 @pytest.mark.skipif(not _local_model_ready(), reason=f"Ollama with {vision.DEFAULT_LOCAL_MODEL} is not running")
 def test_the_local_model_finds_character_maps_select_button(tmp_path):
-    """OCR misses Select because it is greyed out; the vision model is asked for it by description, and
-    its box has to cover the centre of the button UI Automation reports."""
+    """The vision model is asked for Select by description. Its box has to cover the centre of the button
+    UI Automation reports, and that button's name confirms it."""
     import subprocess
 
     from overshoulder.driver import windows as w

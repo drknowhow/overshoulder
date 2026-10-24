@@ -122,8 +122,8 @@ class DesktopBox:
         img = Image.open(io.BytesIO(q.request["picture"]))
         img.thumbnail((900, 600))
         photo = ImageTk.PhotoImage(img, master=root)
-        tk.Label(root, text=_summary(q.request, self.also), justify="left", anchor="w",
-                 padx=14, pady=10).pack(fill="x")
+        tk.Label(root, text=_summary(q.request, self.also), justify="left", anchor="w", padx=14, pady=10,
+                 wraplength=max(img.width, 560)).pack(fill="x")
         tk.Label(root, image=photo, borderwidth=1, relief="solid").pack(padx=14)
         buttons = tk.Frame(root)
         buttons.pack(pady=12)

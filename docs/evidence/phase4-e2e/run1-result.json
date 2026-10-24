@@ -1,0 +1,40 @@
+{
+  "agent_seconds": 73.5,
+  "agent_exit_code": 0,
+  "injected_input_events": 0,
+  "physical_input_events": 0,
+  "cursor_moved": false,
+  "clicked": [
+    "Save",
+    "Open"
+  ],
+  "click_points": [
+    [
+      74,
+      51
+    ],
+    [
+      202,
+      50
+    ]
+  ],
+  "approval_boxes": [
+    {
+      "n": 1,
+      "kind": "picture box",
+      "text": "",
+      "answered": "No",
+      "screenshot": "box-1.png",
+      "at": 1792804660.6
+    },
+    {
+      "n": 2,
+      "kind": "message box",
+      "text": "e2e-agent asks to:\n\n    click on 'Delete'\n\nTarget: Delete\nProgram: powershell.exe\nScope: {\"kind\": \"window\", \"hwnd\": 201336, \"pid\": 42964, \"process\": \"powershell.exe\", \"class\": \"WindowsForms10.Window.8.app.0.d871d_r13_ad1\", \"title\": \"Overshoulder drawn test\"}\n\nAllow this once?",
+      "answered": "No",
+      "screenshot": "box-2.png",
+      "at": 1792804664.7
+    }
+  ],
+  "delete_clicked": false
+}

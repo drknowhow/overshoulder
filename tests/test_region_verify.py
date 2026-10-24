@@ -113,7 +113,7 @@ def test_text_that_appears_meets_the_expectation(reading):
     s, token, lease = make()
     paint["rects"] = []
     v = _verdict(s.act(token, lease, "click", x=130, y=68, expect={"text_appears": "saved"}))
-    assert v["expect"] == "met" and v["text_appeared"] == [[220, 110, 270, 126]]
+    assert v["expect"] == "met" and v["text_appeared"] == [{"text": "Saved", "rect": [220, 110, 270, 126]}]
 
 
 def test_text_that_was_there_already_did_not_appear(reading):
