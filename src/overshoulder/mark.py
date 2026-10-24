@@ -9,8 +9,8 @@
 The files also say it in their metadata: the MP4 comment tag, a PNG text chunk and a GIF comment.
 Screenshots an agent takes stay clean, because agents and OCR read them.
 
-The visible mark is always on in this release. visible() is the one place that decides it; phase 6
-decides whether a subscription can turn it off. The metadata stays either way.
+The visible mark is on for a new install, and the Tutorials setting "Show Made with Overshoulder" turns it
+off for free. visible() is the one place that reads that setting. The metadata stays either way.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from PIL.PngImagePlugin import PngInfo
 from overshoulder import __version__, brand
 
 TEXT = f"Made with {brand.NAME}"
-URL = "https://github.com/drknowhow/overshoulder"
+URL = "https://overshoulder.yepgent.com"
 TILE = 28  # the mark's size in the strip, in pixels
 WORDS = 18  # the words' size
 GAP, PAD = 8, 16  # between the mark and the words; from the strip's right end
@@ -34,9 +34,23 @@ SHOT_STRIP = 40  # the strip under an annotated screenshot
 _POINTER = [(0, 0), (0, 22), (5.2, 16.9), (8.6, 24.6), (12.2, 23), (8.9, 15.4), (16, 15.4)]  # brand.POINTER_PATH
 
 
+_seen: tuple[tuple, bool] | None = None  # ((settings file, its mtime and size), show_mark)
+
+
 def visible() -> bool:
-    """Whether the visible mark is drawn. Always, in this release."""
-    return True
+    """Whether the visible mark is drawn: the person's show_mark setting, on unless they turned it off.
+    Called for every frame, so the file is read again only when it changes."""
+    global _seen
+    from overshoulder import settings as st
+    p = st.settings_path()
+    try:
+        s = p.stat()
+        stamp = (str(p), s.st_mtime_ns, s.st_size)  # the size too: two saves can land in one clock tick
+    except OSError:
+        stamp = (str(p), None, None)
+    if _seen is None or _seen[0] != stamp:
+        _seen = (stamp, bool(st.load_or_default(p).show_mark))
+    return _seen[1]
 
 
 def comment() -> str:

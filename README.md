@@ -26,6 +26,9 @@ Windows Calculator". Video, step images and `steps.md` are in [docs/demo/calcula
 Agents work on their window in the background, so the person at the desk keeps their own cursor and
 keyboard. See [Working beside you](#working-beside-you).
 
+What agents learn about an app goes into its profile, and people share profiles at
+[overshoulder.yepgent.com](https://overshoulder.yepgent.com). See [Sharing a profile](#sharing-a-profile).
+
 Status: phase 5. Windows 10/11 only.
 
 ## Install
@@ -341,8 +344,10 @@ the recording's folder (`%LOCALAPPDATA%\Overshoulder\recordings\<stamp>-<name>`)
 
 Everything rendered for people carries a small "Made with Overshoulder" mark at the right end of the
 caption strip, where it never covers the app. An annotated screenshot gets a thin strip underneath for
-it, and `steps.md` ends with a line. The files also say it in their metadata: the MP4's comment tag, a
-PNG text chunk and a GIF comment. Screenshots an agent takes for itself stay clean.
+it, and `steps.md` ends with a line linking [overshoulder.yepgent.com](https://overshoulder.yepgent.com).
+The Tutorials setting "Show Made with Overshoulder" turns the visible mark off; it is on for a new
+install, and turning it off costs nothing. The files say it in their metadata either way: the MP4's
+comment tag, a PNG text chunk and a GIF comment. Screenshots an agent takes for itself stay clean.
 
 The original video is never changed. Everything added on top comes from `annotations.json` beside it,
 which the agent or you can edit before rendering again:

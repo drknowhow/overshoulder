@@ -56,6 +56,9 @@ class Settings:
     # Once a week, load the registry's catalog to find newer revisions of profiles installed from it.
     # Off until the person turns it on: nothing goes online unless they ask (catalog.py).
     catalog_weekly_check: bool = False
+    # The visible "Made with Overshoulder" mark on tutorials, GIFs, step images and annotated screenshots.
+    # On for a new install; turning it off is free. The files' metadata says it either way (mark.py).
+    show_mark: bool = True
 
     def clamp(self) -> Settings:
         self.poll_interval_ms = max(100, min(int(self.poll_interval_ms), 10_000))

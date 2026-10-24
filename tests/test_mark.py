@@ -134,3 +134,68 @@ def test_a_gif_comment_goes_after_the_colour_table(tmp_path):
     mark.tag_gif(path)
     with Image.open(path) as gif:
         assert gif.info["comment"].decode() == mark.comment() and gif.n_frames == 2
+
+
+# -- the switch: on for a new install, off hides what people see, the metadata stays ----------------------
+
+def _switch(on: bool) -> None:
+    from overshoulder import settings as st
+    st.save(st.Settings(show_mark=on))  # in this test's own data folder (conftest)
+
+
+def test_the_switch_is_on_for_a_new_install_and_read_when_it_changes():
+    from overshoulder import settings as st
+    assert st.Settings().show_mark and mark.visible() and mark.URL == "https://overshoulder.yepgent.com"
+    _switch(False)
+    assert not mark.visible() and mark.footprint(1906) == 0 and mark.markdown() == ""
+    img = Image.new("RGB", (900, R.STRIP), INK)
+    mark.draw(img, (0, 0, 900, R.STRIP))
+    assert img.getcolors() == [(900 * R.STRIP, INK)]
+    assert mark.layer((900, 300), R.STRIP).getbbox() is None
+    _switch(True)
+    assert mark.visible() and mark.markdown() == f"*Made with Overshoulder* ({mark.URL})"
+
+
+def test_the_settings_page_has_the_switch():
+    from overshoulder import settings as st
+    from overshoulder import settings_page as sp
+    page = sp.render_page(st.Settings(), "tok", [], "logs", False)
+    assert 'name="show_mark" checked' in page and "Made with Overshoulder" in page
+    assert sp.settings_from_form({}).show_mark is False  # an unticked box is off
+    assert sp.settings_from_form({"show_mark": "on"}).show_mark is True
+    assert 'name="show_mark" >' in sp.render_page(st.Settings(show_mark=False), "tok", [], "logs", False)
+
+
+def test_with_the_switch_off_an_annotated_screenshot_has_no_strip_and_keeps_its_text_chunk(tmp_path):
+    _switch(False)
+    shot = tmp_path / "shot.png"
+    Image.new("RGB", (800, 500), (255, 255, 255)).save(shot)
+    with Image.open(R.render_image(shot)["image"]) as img:
+        assert img.size == (800, 500) and img.text["Comment"] == mark.comment()
+
+
+@needs_ffmpeg
+def test_with_the_switch_off_nothing_shows_the_mark_and_the_files_still_say_it(tmp_path):
+    room = mark.footprint(720)  # where the mark goes while it is on
+    _switch(False)
+    rec = make_recording(tmp_path, size=(720, 400))
+    out = R.render(rec, mlt=True, zoom="off")
+    tut = Path(out["video"]).parent
+    box = (720 - room, 400, 720, 400 + R.STRIP)
+    tail = (720 - (2 * mark.PAD + mark.TILE), 400, 720, 400 + R.STRIP)
+    frames = video_frames(Path(out["video"]), (720, 400 + R.STRIP))
+    assert frames and all(blue(f, box) == 0 and words(f, tail) == 0 for f in frames)
+    tags = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format_tags", "-of", "json",
+                                      out["video"]], capture_output=True, text=True, check=True).stdout)
+    assert tags["format"]["tags"]["comment"] == mark.comment()
+    stills = sorted(tut.glob("step-*.png"))
+    assert stills
+    for still in stills:
+        with Image.open(still) as img:
+            assert blue(img, box) == 0 and img.text["Comment"] == mark.comment()
+    with Image.open(out["gif"]) as gif:
+        assert gif.info["comment"].decode() == mark.comment()
+    md = (tut / "steps.md").read_text(encoding="utf-8")
+    assert "Made with Overshoulder" not in md
+    project = Path(out["project"]).read_text(encoding="utf-8")
+    assert 'id="mark_track"' not in project and not (tut / "edit" / "mark.png").exists()

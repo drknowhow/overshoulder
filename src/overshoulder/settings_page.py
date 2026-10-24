@@ -150,6 +150,13 @@ PAGE = """<!doctype html>
     </span></label>
 </section>
 <section>
+  <h2>Tutorials</h2>
+  <p class="hint">Tutorials, GIFs, step pictures and annotated screenshots carry a small mark at the end of
+  their caption strip. Their files say they were made with Overshoulder in their metadata either way.</p>
+  <label class="row"><input type="checkbox" name="show_mark" {show_mark}>
+    <span>Show "Made with Overshoulder" on tutorials and annotated screenshots</span></label>
+</section>
+<section>
   <h2>Automatic detection</h2>
   <p class="hint">Lets an agent that is waiting on you notice when you have finished, without you typing anything.
   Detection only reads window titles, on-screen controls and files. It never clicks or types.</p>
@@ -368,6 +375,7 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
         + (f'<div class="saved">{html.escape(message)}</div>' if message else ""),
         learn_profiles="checked" if s.learn_profiles else "",
         catalog_weekly_check="checked" if s.catalog_weekly_check else "",
+        show_mark="checked" if s.show_mark else "",
         profiles=_profiles_section(profiles or [], form_token),
         find=_find_section(find, form_token),
         form_token=html.escape(form_token),
@@ -431,6 +439,7 @@ def settings_from_form(form, current: st.Settings | None = None) -> st.Settings:
         vision_cloud_key=str(form.get("vision_cloud_key") or current.vision_cloud_key),
         learn_profiles=form.get("learn_profiles") == "on",
         catalog_weekly_check=form.get("catalog_weekly_check") == "on",
+        show_mark=form.get("show_mark") == "on",
     ).clamp()
 
 
