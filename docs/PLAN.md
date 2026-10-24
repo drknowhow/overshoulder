@@ -152,7 +152,12 @@ OCR instead of a model.
    confirmed vision boxes, agent notes, export and import with the settings
    page and the `.osp` file association, and the mark with its metadata.
 6. **Site.** A place to publish and find shared profiles, and how Overshoulder
-   is paid for. Not started; the mark is always on until then.
+   is paid for. Built 2026-10-24: signed `.osp` files, the registry at
+   drknowhow/overshoulder-profiles (checks on every pull request, merged by
+   @yepgent, signed on merge, CC0), the site at overshoulder.yepgent.com, Find
+   profiles and Publish on the settings page, and four seed profiles.
+   Overshoulder stays free with no paid tier; the mark is on for a new install
+   and has a free switch to turn it off, and its metadata stays either way.
 
 Deferred until asked: live overlays, OBS scenes, remote (phone) driving.
 

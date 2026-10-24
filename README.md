@@ -10,7 +10,7 @@
 <p align="center">
   <img alt="Platform: Windows 10/11" src="https://img.shields.io/badge/platform-Windows%2010%2F11-2563eb">
   <img alt="Protocol: MCP" src="https://img.shields.io/badge/protocol-MCP-111827">
-  <img alt="Status: phase 5" src="https://img.shields.io/badge/status-phase%205-f5a623">
+  <img alt="Status: phase 6" src="https://img.shields.io/badge/status-phase%206-f5a623">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-22c55e">
 </p>
 
@@ -29,7 +29,7 @@ keyboard. See [Working beside you](#working-beside-you).
 What agents learn about an app goes into its profile, and people share profiles at
 [overshoulder.yepgent.com](https://overshoulder.yepgent.com). See [Sharing a profile](#sharing-a-profile).
 
-Status: phase 5. Windows 10/11 only.
+Status: phase 6. Windows 10/11 only.
 
 ## Install
 
@@ -175,6 +175,13 @@ print them; the settings page lists them and has a switch that turns learning an
   request, where the registry's checks run. A profile too long for a link opens the page with only the
   file's name, and you paste the text. Overshoulder never signs in to GitHub and doesn't keep your
   user name.
+- **The registry** is [drknowhow/overshoulder-profiles](https://github.com/drknowhow/overshoulder-profiles).
+  Its checks run the export rules on every pull request; then Yep, the agent that looks after the
+  registry, reads the file and merges it as @yepgent. The merge signs the file and the catalog with the
+  registry's key and rebuilds the site. Profiles there are public domain (CC0 1.0). The import page of a
+  signed file says "Reviewed on the registry, published by @&lt;name&gt; in pull request #&lt;n&gt;";
+  any other file says it is not from the registry. `overshoulder profile verify <file>` checks the
+  signature in the terminal.
 - Agents can't install a profile. When an app has none on this PC, the take_scope brief says the
   registry has one, read from the catalog you loaded last. A weekly check for newer revisions of the
   profiles you installed is on the settings page, off until you turn it on.
@@ -260,7 +267,10 @@ buttons with text refs and vision refs, and its click on a painted Delete is put
 first with no profile, the second with the profile the first one's session built, and the third in a
 clean data directory with that profile exported and imported. On Calculator, the profile did not make
 the work smaller (29, 26 and 27 tool calls, no failed tries in any run); the later agents followed its
-how-to and said its brief matched what they saw.
+how-to and said its brief matched what they saw. In [docs/evidence/phase6-e2e](docs/evidence/phase6-e2e),
+headless agents build profiles of Calculator, Notepad, Character Map and Paint, @yepgent publishes them
+on the registry, and a clean data directory finds the Calculator profile on the site, installs it, and
+the next agent's brief carries it.
 
 ## Waiting for the person
 
@@ -297,7 +307,7 @@ a notification titled with the action, such as "Allow click on 'Send'?", with Al
 Allow then asks again: a second notification, "Confirm click on 'Send'?", has Cancel where Allow was
 and a button that names the control, "Confirm Send", beside it. Only that button approves. In
 testing, phone taps sometimes landed on the other button, so one stray tap can refuse an action but
-cannot approve one (see [Limits](#limits-phase-3)). A button
+cannot approve one (see [Limits](#limits-phase-6)). A button
 posts the answer to a second, secret topic. The answer names that question's one-time id and carries
 an HMAC under a key that never leaves your PC, so a forged answer, or a copy of an answer to an
 earlier question, is ignored. When a question is answered anywhere or expires, its notification is
@@ -415,7 +425,7 @@ project matches `tutorial.mp4` frame for frame (on the Notepad example above, ev
 0.99 SSIM and 33 dB PSNR). If you save the project in Shotcut, the next render leaves it alone and
 writes `tutorial-2.mlt` with its media in `edit-2/`.
 
-## Limits (phase 5)
+## Limits (phase 6)
 
 - Windows only. Multi-monitor and mixed-DPI setups are untested; development used one 125% monitor.
 - Chromium and Electron apps take typing only while they are in front (measured on VS Code; Chrome
@@ -453,8 +463,10 @@ writes `tutorial-2.mlt` with its media in `edit-2/`.
   programs that report nothing to tell them apart share one profile. A profile describes the app as it
   looked when it was learned; after an update, items not yet seen on the new version are marked so in
   the brief until a session sees them.
-- A shared profile carries a hash that shows it was not changed after export, not who made it.
-  Signatures that name the author are planned with the phase 6 site.
+- A registry signature says the registry's checks passed and Yep accepted the file, and who published
+  it. It does not say the profile's notes are right: they are what agents saw, and the brief gives them
+  to agents as information, never as instructions. A file from anywhere else carries only the hash that
+  shows it was not changed after export.
 
 ## Development
 
