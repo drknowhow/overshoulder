@@ -232,7 +232,9 @@ def read_index(data: bytes, sig_text: str, keys: dict[str, str] | None = None) -
 
 def _git(root: Path, *args: str) -> str:
     import subprocess
-    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout.strip()
+    no_window = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0  # it runs on Linux in the registry's CI
+    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True,
+                          creationflags=no_window).stdout.strip()
 
 
 def meta_from_github(root: Path, repo: str, token: str) -> dict[str, Published]:
