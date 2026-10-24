@@ -28,6 +28,12 @@ CONTENT_TYPES = frozenset({"tabitem", "listitem", "treeitem", "dataitem", "docum
 LOOKS_PERSONAL = re.compile(r"[\\/@]|://|\bwww\.|\.[a-z0-9]{1,5}(\s|$)|\d{3,}", re.I)
 MAX_NAME = 40
 MAX_ROWS = 5000  # rows a lease keeps for learning; more are not counted
+# What a look keeps: the kinds of control an agent acts on. Content kinds among them collapse to one
+# nameless item per kind and window.
+LOOK_TYPES = frozenset({"button", "splitbutton", "menuitem", "checkbox", "radiobutton", "combobox", "edit",
+                        "slider", "spinner", "document", "tabitem", "listitem", "treeitem", "dataitem",
+                        "hyperlink"})
+MAX_LOOK = 300
 
 
 def is_private(name: str, control_type: str) -> bool:
@@ -64,12 +70,16 @@ def _where(t: dict | None) -> str:
 class _Session:
     """One lease's rows applied to one app's profile."""
 
-    def __init__(self, prof: Profile, lease_id: str, version: str):
+    def __init__(self, prof: Profile, lease_id: str, version: str, src: str = "use"):
         self.prof = prof
         self.sess = hashlib.sha256(lease_id.encode()).hexdigest()[:10]  # which session, not its lease id
         self.version = enc(version) if version else ""
+        self.src = src  # "use" (what actions showed) or "look" (what a read-only look saw)
         self.touched: set[str] = set()
-        self.stats = {"actions": 0, "controls": 0, "ways": 0, "new": 0, "dropped": 0}
+        self.stats = {"actions": 0, "controls": 0, "ways": 0, "keys": 0, "new": 0, "dropped": 0}
+
+    def _source(self, item: Item) -> None:
+        item.fields["src"] = "+".join(sorted({*item.fields.get("src", "").split("+"), self.src} - {""}))
 
     def _put(self, item: Item) -> Item | None:
         try:
@@ -78,16 +88,18 @@ class _Session:
             self.stats["dropped"] += 1  # the profile is full; what it holds already stays
             return None
 
-    def view(self, view: str) -> None:
+    def view(self, view: str, count: bool = True) -> None:
         item = self.prof.get("view", view)
         if item is None:
-            item = self._put(Item("view", view, ["window" if view == "main" else "dialog"], {"src": "use"}))
+            item = self._put(Item("view", view, ["window" if view == "main" else "dialog"], {}))
             if item is None:
                 return
             self.stats["new"] += 1
-        _bump(item, "n")
+        self._source(item)
+        if count:
+            _bump(item, "n")
 
-    def control(self, view: str, t: dict) -> Item | None:
+    def control(self, view: str, t: dict, use: bool = True) -> Item | None:
         ctype = t.get("control_type") or "Unknown"
         if not re.fullmatch(r"[A-Za-z0-9]{1,40}", ctype):
             ctype = "Unknown"
@@ -104,10 +116,14 @@ class _Session:
             fields = {"aid": enc(aid)} if aid else {}
             if private or not name:
                 fields["name"] = "content" if private else "none"
-            item = self._put(Item("ctl", _free_id(self.prof, "ctl", base), [view, ctype], {**fields, "src": "use"}))
+            item = self._put(Item("ctl", _free_id(self.prof, "ctl", base), [view, ctype], fields))
             if item is None:
                 return None
             self.stats["new"] += 1
+        self._source(item)
+        ak = re.sub(r"\s+", "", t.get("access_key") or "")
+        if ak and re.fullmatch(r"[!#-~]{1,20}", ak):
+            item.fields["ak"] = ak  # an access key such as Alt,I: Alt, then I
         if item.id not in self.touched:
             self.touched.add(item.id)
             self.stats["controls"] += 1
@@ -117,7 +133,8 @@ class _Session:
                 self._name_seen(item, name, nh)
             if self.version:
                 item.fields["ver"] = self.version
-        _bump(item, "seen")
+        if use:
+            _bump(item, "seen")
         return item
 
     def _find(self, view: str, ctype: str, aid: str, nh: str, nameless: bool) -> Item | None:
@@ -172,12 +189,22 @@ class _Session:
             if why:
                 item.fields["why"] = why
 
-    def key(self, combo: str) -> None:
+    def key(self, combo: str, of: Item | None = None, count: bool = True) -> None:
         kid = re.sub(r"\s+", "", combo.lower())
         if not re.fullmatch(r"[a-z0-9][a-z0-9+]{0,40}", kid):
             return
-        item = self.prof.get("key", kid) or self._put(Item("key", kid, fields={"src": "use"}))
-        if item is not None:
+        item = self.prof.get("key", kid)
+        if item is None:
+            item = self._put(Item("key", kid))
+            if item is None:
+                return
+            self.stats["new"] += 1
+        self.stats["keys"] += 1
+        self._source(item)
+        if of is not None:
+            item.fields["of"] = of.id
+            item.text = of.text  # the control's name, once a second session has seen it
+        if count:
             _bump(item, "n")
 
     def row(self, r: dict) -> None:
@@ -245,25 +272,58 @@ def by_app(rows: list[dict]) -> dict[str, AppIdentity]:
     return out
 
 
+def look(prof: Profile, lease_id: str, elements: list[dict], version: str = "") -> dict:
+    """Fold what a read-only look saw into the profile: elements are {view, type, name, aid, accel,
+    access_key}. Only controls an agent acts on are kept, at most MAX_LOOK of them."""
+    s = _Session(prof, lease_id, version, src="look")
+    for e in elements:
+        if (e.get("type") or "").lower() not in LOOK_TYPES:
+            continue
+        if s.stats["controls"] >= MAX_LOOK:
+            break
+        view = e.get("view") or "main"
+        s.view(view, count=False)
+        ctl = s.control(view, {"name": e.get("name"), "control_type": e.get("type"),
+                               "automation_id": e.get("aid"), "access_key": e.get("access_key")}, use=False)
+        if ctl is not None and e.get("accel"):
+            s.key(e["accel"], of=ctl, count=False)
+    if version:
+        prof.app.fields["ver"] = enc(version)
+    return s.stats
+
+
+def view_id(main: bool, class_name: str) -> str:
+    """"main" for the scope's own window, else "w-" and the class of the dialog or popup."""
+    return "main" if main else f"w-{slug(class_name, 37) or 'popup'}"
+
+
+def revise(store: ProfileStore, ident: AppIdentity, change, summary) -> dict:
+    """Load (or start) the app's profile, change(prof) -> stats, and save it as the next revision with
+    summary(stats) as its rev text; nothing is saved when change found nothing. A save that loses a race
+    with another writer is done again on the newer file once."""
+    for attempt in (1, 2):
+        try:
+            prof = store.load_or_new(ident)
+            stats = change(prof)
+            if not (stats.get("actions") or stats.get("controls") or stats.get("keys")):
+                return stats
+            store.save(prof, summary(stats))
+            return {**stats, "rev": prof.revision}
+        except ProfileConflict:
+            if attempt == 2:
+                return {"error": "the profile kept changing while it was being saved"}
+        except OspError as e:
+            return {"error": str(e)}  # an unreadable profile is left as it is, never overwritten
+    return {}
+
+
 def learn_lease(store: ProfileStore, lease_id: str, rows: list[dict]) -> dict:
-    """Revise the profile of every app the lease acted on. Returns {app id: stats or error}."""
+    """Revise the profile of every app the lease acted on. Returns {app id: stats or error}; an app whose
+    rows were all refusals by the gateway's own rules is left out."""
     out = {}
     for app_id, ident in by_app(rows).items():
-        for attempt in (1, 2):
-            try:
-                prof = store.load_or_new(ident)
-                stats = apply(prof, lease_id, rows, ident.version)
-                if not stats["actions"]:
-                    break  # only refusals by the gateway's own rules: nothing about the app
-                summary = (f"use: {stats['actions']} actions, {stats['controls']} controls, "
-                           f"{stats['new']} new items")
-                store.save(prof, summary)
-                out[app_id] = {**stats, "rev": prof.revision}
-                break
-            except ProfileConflict:
-                if attempt == 2:
-                    out[app_id] = {"error": "the profile kept changing while this session was saved"}
-            except OspError as e:
-                out[app_id] = {"error": str(e)}  # an unreadable profile is left as it is, never overwritten
-                break
+        res = revise(store, ident, lambda prof, i=ident: apply(prof, lease_id, rows, i.version),
+                     lambda st: f"use: {st['actions']} actions, {st['controls']} controls, {st['new']} new items")
+        if res.get("actions") or "error" in res:
+            out[app_id] = res
     return out

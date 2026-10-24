@@ -157,6 +157,43 @@ def test_a_session_with_only_refusals_writes_nothing(tmp_path):
     assert out == {} and store.list() == []
 
 
+LOOKED = [
+    {"view": "main", "type": "Button", "name": "Add New Tab", "aid": "AddButton", "accel": "", "access_key": ""},
+    {"view": "main", "type": "MenuItem", "name": "Save", "aid": "SaveItem", "accel": "Ctrl+S", "access_key": "Alt, S"},
+    {"view": "main", "type": "TabItem", "name": "pets.txt. Unmodified.", "aid": "", "accel": "", "access_key": ""},
+    {"view": "main", "type": "TabItem", "name": "todo.txt. Modified.", "aid": "", "accel": "", "access_key": ""},
+    {"view": "main", "type": "Text", "name": "Ln 1, Col 1", "aid": "", "accel": "", "access_key": ""},
+    {"view": "main", "type": "Window", "name": TITLE, "aid": "", "accel": "", "access_key": ""},
+    {"view": "w-32770", "type": "Button", "name": "OK", "aid": "1", "accel": "", "access_key": ""},
+]
+
+
+def test_a_look_adds_controls_and_keys_without_counting_uses():
+    prof = new_profile(AppIdentity(NOTEPAD, "Notepad", "Notepad.exe"))
+    stats = learn.look(prof, "lease-look-1", LOOKED)
+    assert (stats["controls"], stats["keys"]) == (4, 1)  # Text and Window are not kept; two tabs make one
+    save = prof.get("ctl", "saveitem")
+    assert save.fields["src"] == "look" and save.fields["ak"] == "Alt,S" and "seen" not in save.fields
+    key = prof.get("key", "ctrl+s")
+    assert key.fields["of"] == "saveitem" and key.text is None and "n" not in key.fields
+    assert prof.get("ctl", "tabitem").fields["name"] == "content"
+    assert prof.get("ctl", "1").args == ["w-32770", "Button"]
+    learn.look(prof, "lease-look-2", LOOKED)
+    assert prof.get("key", "ctrl+s").text == "Save"  # the name, once a second look saw it
+    learn.apply(prof, "QRn0u20nxuTH97NO", session())
+    add = prof.get("ctl", "addbutton")
+    assert add.fields["src"] == "look+use" and add.num("seen") == 1
+    text = prof.dumps()
+    for s in ["pets.txt", "todo.txt", "Ln 1", TITLE]:
+        assert s not in text, s
+
+
+def test_view_id():
+    assert learn.view_id(True, "Notepad") == "main"
+    assert learn.view_id(False, "#32770") == "w-32770"
+    assert learn.view_id(False, "") == "w-popup"
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only driver")
 def test_the_gateway_learns_when_a_lease_ends(tmp_path):
     from test_gateway import FakeScope, ok_checks

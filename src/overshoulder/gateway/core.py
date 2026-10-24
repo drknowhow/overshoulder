@@ -798,12 +798,10 @@ class Gateway:
 
 
 def _view_of(scope, target: Target) -> str:
-    """"main" for the scope's own window, else "w-" and the class of the dialog or popup holding the target."""
+    """Which of the app's windows holds the target, as its profile names them (learn.view_id)."""
     binding = getattr(scope, "binding", None)
-    if binding is None or not target.hwnd or target.hwnd == binding.hwnd:
-        return "main"
-    from overshoulder.appid import slug
-    return f"w-{slug(w.class_name(target.hwnd), 37) or 'popup'}"
+    main = binding is None or not target.hwnd or target.hwnd == binding.hwnd
+    return learn.view_id(main, "" if main else w.class_name(target.hwnd))
 
 
 def _redact_text(params: dict) -> dict:

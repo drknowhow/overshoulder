@@ -75,7 +75,7 @@ def test_lists_the_agent_tools(daemon):
     _, port, token = daemon
     names = {t.name for t in call(port, token, None).tools}
     assert {"windows", "take_scope", "observe", "find", "act", "release_scope", "status", "record_start",
-            "record_stop", "redact", "annotate", "render", "wait_for"} <= names
+            "record_stop", "redact", "annotate", "render", "wait_for", "profile"} <= names
 
 
 @pytest.mark.skipif(not __import__("shutil").which("ffmpeg"), reason="needs ffmpeg on PATH")

@@ -209,6 +209,15 @@ def activate(hwnd: int) -> None:
     UIAElementInfo(hwnd).element.SetFocus()
 
 
+def keys_of(info) -> tuple[str, str]:
+    """(accelerator key, access key) as UI Automation reports them, e.g. ("Ctrl+S", "Alt, F")."""
+    try:
+        e = info.element
+        return e.CurrentAcceleratorKey or "", e.CurrentAccessKey or ""
+    except Exception:
+        return "", ""
+
+
 def read(el: Element) -> dict:
     """Name, plus value or document text when the element exposes them."""
     info = el.info
