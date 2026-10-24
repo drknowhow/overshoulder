@@ -13,6 +13,9 @@ from overshoulder.osp import Item, Profile, enc
 # Fields kept for learning that tell an agent nothing: which session saw an item last, name hashes and
 # session counts, where an item came from, when the profile was saved, and a vision box's pixels hash.
 BOOKKEEPING = frozenset({"last", "nh", "nses", "ses", "src", "at", "exe", "box", "sz", "dh"})
+# What Overshoulder learned itself. Any other source (an agent's note, an import) stays in the brief, so
+# the agent can tell who wrote the text it reads.
+LEARNED = frozenset({"use", "look"})
 BRIEF_LINES = 120  # take_scope's brief; profile(op="get") has no limit
 # A method that has failed this often in an app and never worked there is tried after the others.
 DEMOTE_FAILS = 2
@@ -27,11 +30,14 @@ def _rank(item: Item) -> int:
         return item.num("seen") + item.num("ok") + item.num("ses")
     if item.kind == "paint":
         return item.num("hit") + item.num("ses")
+    if item.kind == "how":
+        return item.num("used") + item.num("n")
     return item.num("n")
 
 
 def _trim(item: Item, version: str) -> Item:
-    fields = {k: v for k, v in item.fields.items() if k not in BOOKKEEPING}
+    fields = {k: v for k, v in item.fields.items()
+              if k not in BOOKKEEPING or (k == "src" and set(v.split("+")) - LEARNED)}
     if fields.get("ver") == version:
         del fields["ver"]  # seen on the running version; a ver= left on an item means it is not yet
     return Item(item.kind, item.id, list(item.args), fields, item.text, [list(s) for s in item.steps])
