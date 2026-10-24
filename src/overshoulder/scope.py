@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass
 from typing import Protocol
 
+from overshoulder.appid import AppIdentity
 from overshoulder.driver import display
 from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
@@ -76,6 +77,15 @@ class WindowBinding:
     process: str
     class_name: str
     title: str
+    app: AppIdentity | None = None  # which app this is, for its profile (overshoulder.profiles)
+
+
+def _app_identity(pid: int, image: str) -> AppIdentity | None:
+    from overshoulder.driver import appinfo
+    try:
+        return appinfo.read(pid, image)
+    except OSError:
+        return None  # a hint for profiles; the scope binds without it
 
 
 def bind_window(hwnd: int) -> WindowBinding:
@@ -88,7 +98,7 @@ def bind_window(hwnd: int) -> WindowBinding:
     app_pid = w.hosted_app_pid(hwnd) or owner_pid
     app_ident = w.process_identity(app_pid) or ident
     return WindowBinding(hwnd, app_pid, owner_pid, ident[0], app_ident[1].rsplit("\\", 1)[-1],
-                         w.class_name(hwnd), w.title(hwnd))
+                         w.class_name(hwnd), w.title(hwnd), _app_identity(app_pid, app_ident[1]))
 
 
 class WindowScope:
@@ -99,8 +109,11 @@ class WindowScope:
 
     def describe(self) -> dict:
         b = self.binding
-        return {"kind": "window", "hwnd": b.hwnd, "pid": b.pid, "process": b.process,
-                "class": b.class_name, "title": b.title}
+        out = {"kind": "window", "hwnd": b.hwnd, "pid": b.pid, "process": b.process,
+               "class": b.class_name, "title": b.title}
+        if b.app:
+            out["app"] = b.app.describe()
+        return out
 
     def check_alive(self) -> None:
         b = self.binding

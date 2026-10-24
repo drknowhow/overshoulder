@@ -112,6 +112,30 @@ def _annotate(a) -> int:
     return 0
 
 
+def _profile(a) -> int:
+    from overshoulder.osp import OspError
+    from overshoulder.profiles import ProfileStore
+    store = ProfileStore(default_home())
+    if a.pcmd == "list":
+        rows = store.list()
+        for r in rows:
+            if "error" in r:
+                print(f"{r['id']}  (unreadable: {r['error']})")
+            else:
+                ver = f" {r['version']}" if r["version"] else ""
+                print(f"{r['id']}  {r['name']}{ver}  rev {r['rev']}, {r['items']} items")
+        if not rows:
+            print(f"no profiles yet in {store.dir}")
+        return 0
+    try:
+        prof = store.find(a.app)
+    except (LookupError, OspError) as e:
+        print(e.args[0], file=sys.stderr)
+        return 2
+    sys.stdout.write(prof.dumps())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     from overshoulder.server import DEFAULT_PORT
 
@@ -188,6 +212,11 @@ def main(argv: list[str] | None = None) -> int:
                     help='any TTS program, run once per line: {text_file} is the line, {out} the audio to write; '
                          'implies --narrate. Example: piper -m en.onnx -f {out} < {text_file}')
     sub.add_parser("voices", help="list the Windows voices --narrate can use")
+    pr = sub.add_parser("profile", help="the app profiles agents have built (.osp files)")
+    psub = pr.add_subparsers(dest="pcmd", required=True)
+    psub.add_parser("list")
+    psub.add_parser("show", help="print one profile").add_argument(
+        "app", help="the app id, or part of its id or name that matches only one profile")
 
     a = ap.parse_args(argv)
     if a.cmd == "serve":
@@ -240,6 +269,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "annotate":
         return _annotate(a)
+    if a.cmd == "profile":
+        return _profile(a)
     if a.cmd == "render":
         from pathlib import Path
 
