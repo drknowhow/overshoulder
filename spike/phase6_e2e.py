@@ -167,7 +167,7 @@ def main():
                 (EVIDENCE / f"e2e-agent-{r['agent']}-report.md").write_text(scrub(r["report"], *names) + "\n",
                                                                             encoding="utf-8")
             for name, html in pages.items():  # the session is gone with the daemon; its token goes anyway
-                (EVIDENCE / f"page-{name}.html").write_text(html.replace(person.ft, "<form token>"),
+                (EVIDENCE / f"page-{name}.html").write_text(scrub(html.replace(person.ft, "<form token>"), *names),
                                                             encoding="utf-8")
             for log in sorted((home / "logs").glob("actions-*.jsonl")):
                 (EVIDENCE / "e2e-actions.jsonl").write_text(scrub(log.read_text(encoding="utf-8"), *names),
