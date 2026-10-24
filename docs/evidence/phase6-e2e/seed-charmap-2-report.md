@@ -1,0 +1,5 @@
+**DONE**: The first match for "arrow" in Arial is `U+02C2: Modifier Letter Left Arrowhead`.
+
+- **What I read:** The name came from the "Selected Character" line in Advanced view, because the status bar strip at the very bottom stayed blank. Arial was already selected, so I only re-set it. Unticking Advanced view restored the window to Arial, "Characters to copy" empty and Copy disabled. Nothing was copied and no dialog was left open. The scope is released.
+- **Search button:** `set_value` on "Search for" left Search disabled. The profile's workaround, typing one character with `ref`, didn't enable it, and the field read back `sarrow`. The character I typed with `ref` was inserted at the start of the text. Typing a character without `ref`, after focusing the field and pressing End, enabled Search. I then set the exact text `arrow` again and invoked Search.
+- **Click side effect:** My first click on the first cell left a magnified preview of `<` on screen. A second click at the same spot cleared it, and the selection didn't change.

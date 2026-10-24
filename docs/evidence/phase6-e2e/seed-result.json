@@ -1,0 +1,367 @@
+{
+  "runs": [
+    {
+      "app": "calculator",
+      "session": 1,
+      "agent_seconds": 42.5,
+      "agent_exit_code": 0,
+      "turns": 31,
+      "cost_usd": 0.30502170000000006,
+      "tool_calls": 30,
+      "by_tool": {
+        "ToolSearch": 1,
+        "take_scope": 1,
+        "observe": 2,
+        "act": 18,
+        "find": 3,
+        "read": 2,
+        "profile": 2,
+        "release_scope": 1
+      },
+      "failed_tries": 0,
+      "failures": [],
+      "profile_at_take_scope": {
+        "rev": 0,
+        "brief_lines": 0
+      },
+      "expected": [
+        "413",
+        "12"
+      ],
+      "results_found": [
+        "413",
+        "12"
+      ],
+      "window_closed": true
+    },
+    {
+      "app": "calculator",
+      "session": 2,
+      "agent_seconds": 36.9,
+      "agent_exit_code": 0,
+      "turns": 28,
+      "cost_usd": 0.2792614,
+      "tool_calls": 27,
+      "by_tool": {
+        "ToolSearch": 1,
+        "take_scope": 1,
+        "observe": 2,
+        "act": 17,
+        "find": 3,
+        "read": 2,
+        "release_scope": 1
+      },
+      "failed_tries": 0,
+      "failures": [],
+      "profile_at_take_scope": {
+        "rev": 3,
+        "brief_lines": 18
+      },
+      "expected": [
+        "4359",
+        "169"
+      ],
+      "results_found": [
+        "4359",
+        "169"
+      ],
+      "window_closed": true
+    },
+    {
+      "app": "notepad",
+      "session": 1,
+      "agent_seconds": 63.0,
+      "agent_exit_code": 0,
+      "turns": 25,
+      "cost_usd": 0.40114500000000003,
+      "tool_calls": 24,
+      "by_tool": {
+        "ToolSearch": 1,
+        "take_scope": 1,
+        "observe": 3,
+        "read": 1,
+        "act": 6,
+        "screenshot": 5,
+        "find": 3,
+        "profile": 3,
+        "release_scope": 1
+      },
+      "failed_tries": 1,
+      "failures": [
+        {
+          "call": "profile {\"op\": \"add\", \"item\": {\"kind\": \"how\", \"text\": \"find a word in the document and read its line and column\", \"steps\": [[\"hotkey\", \"ctrl+f\"], [\"type\", \"Find box (al",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"bad_request\",\n    \"message\": \"step action 'find' is not one of activate, click, double_click, drag, focus, hotkey, invoke, right_click, select, set_value, toggle, type\"\n  }\n}"
+        }
+      ],
+      "profile_at_take_scope": {
+        "rev": 0,
+        "brief_lines": 0
+      },
+      "expected": [
+        "fox"
+      ],
+      "results_found": [
+        "fox"
+      ],
+      "window_closed": true
+    },
+    {
+      "app": "notepad",
+      "session": 2,
+      "agent_seconds": 115.0,
+      "agent_exit_code": 0,
+      "turns": 48,
+      "cost_usd": 0.7399434000000001,
+      "tool_calls": 47,
+      "by_tool": {
+        "ToolSearch": 1,
+        "take_scope": 1,
+        "observe": 5,
+        "act": 23,
+        "screenshot": 9,
+        "find": 7,
+        "release_scope": 1
+      },
+      "failed_tries": 8,
+      "failures": [
+        {
+          "call": "act {\"action\": \"hotkey\", \"combo\": \"ctrl+plus\", \"ref\": \"e356\"}",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"bad_request\",\n    \"message\": \"unknown key 'plus'\"\n  }\n}"
+        },
+        {
+          "call": "act {\"action\": \"hotkey\", \"combo\": \"ctrl+=\", \"ref\": \"e356\"}",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"bad_request\",\n    \"message\": \"unknown key '='\"\n  }\n}"
+        },
+        {
+          "call": "act {\"action\": \"hotkey\", \"combo\": \"ctrl+add\", \"ref\": \"e356\"}",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"bad_request\",\n    \"message\": \"unknown key 'add'\"\n  }\n}"
+        },
+        {
+          "call": "act {\"action\": \"hotkey\", \"combo\": \"ctrl+oem_plus\", \"ref\": \"e356\"}",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"bad_request\",\n    \"message\": \"unknown key 'oem_plus'\"\n  }\n}"
+        },
+        {
+          "call": "act {\"action\": \"hotkey\", \"combo\": \"ctrl+equals\", \"ref\": \"e356\"}",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"bad_request\",\n    \"message\": \"unknown key 'equals'\"\n  }\n}"
+        },
+        {
+          "call": "act {\"action\": \"hotkey\", \"combo\": \"ctrl+numpad_add\"}",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"bad_request\",\n    \"message\": \"unknown key 'numpad_add'\"\n  }\n}"
+        },
+        {
+          "call": "act {\"action\": \"hotkey\", \"combo\": \"ctrl+oemplus\"}",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"bad_request\",\n    \"message\": \"unknown key 'oemplus'\"\n  }\n}"
+        },
+        {
+          "call": "act {\"action\": \"hotkey\", \"combo\": \"ctrl+numpadplus\"}",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"bad_request\",\n    \"message\": \"unknown key 'numpadplus'\"\n  }\n}"
+        }
+      ],
+      "profile_at_take_scope": {
+        "rev": 3,
+        "brief_lines": 10
+      },
+      "expected": [
+        "shoulder"
+      ],
+      "results_found": [
+        "shoulder"
+      ],
+      "window_closed": true
+    },
+    {
+      "app": "charmap",
+      "session": 1,
+      "agent_seconds": 64.2,
+      "agent_exit_code": 0,
+      "turns": 26,
+      "cost_usd": 0.3388559000000001,
+      "tool_calls": 25,
+      "by_tool": {
+        "ToolSearch": 1,
+        "take_scope": 1,
+        "observe": 3,
+        "read": 1,
+        "act": 10,
+        "find": 4,
+        "profile": 3,
+        "screenshot": 1,
+        "release_scope": 1
+      },
+      "failed_tries": 2,
+      "failures": [
+        {
+          "call": "act {\"action\": \"invoke\", \"ref\": \"e461\"}",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"approval_denied\",\n    \"message\": \"not approved: denied on desktop: invoke on 'Reset'\",\n    \"answered_by\": \"desktop\"\n  }\n}"
+        },
+        {
+          "call": "profile {\"op\": \"add\", \"item\": {\"kind\": \"how\", \"text\": \"find a character by its name (e.g. Copyright Sign); the first match is preselected and its name shows in the stat",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"bad_request\",\n    \"message\": \"step action 'read' is not one of activate, click, double_click, drag, focus, hotkey, invoke, right_click, select, set_value, toggle, type\"\n  }\n}"
+        }
+      ],
+      "profile_at_take_scope": {
+        "rev": 0,
+        "brief_lines": 0
+      },
+      "expected": [
+        "Copyright"
+      ],
+      "results_found": [
+        "Copyright"
+      ],
+      "window_closed": true
+    },
+    {
+      "app": "charmap",
+      "session": 2,
+      "agent_seconds": 71.2,
+      "agent_exit_code": 0,
+      "turns": 33,
+      "cost_usd": 0.41334,
+      "tool_calls": 32,
+      "by_tool": {
+        "ToolSearch": 1,
+        "take_scope": 1,
+        "observe": 5,
+        "read": 1,
+        "act": 14,
+        "find": 6,
+        "screenshot": 3,
+        "release_scope": 1
+      },
+      "failed_tries": 0,
+      "failures": [],
+      "profile_at_take_scope": {
+        "rev": 3,
+        "brief_lines": 15
+      },
+      "expected": [
+        "Arrow"
+      ],
+      "results_found": [
+        "Arrow"
+      ],
+      "window_closed": true
+    },
+    {
+      "app": "paint",
+      "session": 1,
+      "agent_seconds": 236.6,
+      "agent_exit_code": 0,
+      "turns": 70,
+      "cost_usd": 1.0695404000000004,
+      "tool_calls": 69,
+      "by_tool": {
+        "ToolSearch": 1,
+        "take_scope": 1,
+        "observe": 12,
+        "act": 26,
+        "read": 6,
+        "find": 16,
+        "windows": 1,
+        "profile": 5,
+        "release_scope": 1
+      },
+      "failed_tries": 1,
+      "failures": [
+        {
+          "call": "find {\"describe\": \"the Text tool (letter A) in the Tools flyout\"}",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"gateway_error\",\n    \"message\": \"finding controls by how they look is turned off on the settings page\"\n  }\n}"
+        }
+      ],
+      "profile_at_take_scope": {
+        "rev": 0,
+        "brief_lines": 0
+      },
+      "expected": [],
+      "results_found": [],
+      "window_closed": true
+    },
+    {
+      "app": "paint",
+      "session": 2,
+      "agent_seconds": 117.1,
+      "agent_exit_code": 0,
+      "turns": 46,
+      "cost_usd": 0.6770344,
+      "tool_calls": 45,
+      "by_tool": {
+        "ToolSearch": 1,
+        "take_scope": 1,
+        "observe": 5,
+        "read": 1,
+        "act": 17,
+        "screenshot": 5,
+        "find": 12,
+        "wait_for": 2,
+        "release_scope": 1
+      },
+      "failed_tries": 1,
+      "failures": [
+        {
+          "call": "wait_for {\"conditions\": [{\"window_appears\": {\"title_re\": \"Resize\"}}, {\"element_appears\": {\"title_re\": \"Paint\", \"name_re\": \"Resize|Pixels\"}}], \"timeout_s\": 3}",
+          "result": "{\n  \"ok\": false,\n  \"error\": {\n    \"code\": \"wait_refused\",\n    \"message\": \"unknown condition kind None; one of ['element_appears', 'element_gone', 'file', 'text_contains', 'title_changes', 'window_appears', 'window_closes']\"\n  }\n}"
+        }
+      ],
+      "profile_at_take_scope": {
+        "rev": 5,
+        "brief_lines": 57
+      },
+      "expected": [
+        "100%"
+      ],
+      "results_found": [
+        "100%"
+      ],
+      "window_closed": true
+    }
+  ],
+  "seeds": {
+    "calculator": {
+      "app_id": "Microsoft.WindowsCalculator_8wekyb3d8bbwe",
+      "path": "apps/Microsoft.WindowsCalculator_8wekyb3d8bbwe/yepgent.osp",
+      "export": "wrote <work>\\calculator.osp: 13 items; left out 10 seen in one session only, 4 revision history",
+      "bytes": 1527,
+      "items": 13,
+      "errors": [],
+      "flags": []
+    },
+    "notepad": {
+      "app_id": "Microsoft.WindowsNotepad_8wekyb3d8bbwe",
+      "path": "apps/Microsoft.WindowsNotepad_8wekyb3d8bbwe/yepgent.osp",
+      "export": "wrote <work>\\notepad.osp: 10 items; left out 2 seen in one session only, 2 tried once only, 5 used once only, 4 revision history",
+      "bytes": 1125,
+      "items": 10,
+      "errors": [],
+      "flags": []
+    },
+    "charmap": {
+      "app_id": "microsoft-corporation.charmap",
+      "path": "apps/microsoft-corporation.charmap/yepgent.osp",
+      "export": "wrote <work>\\charmap.osp: 14 items; left out 2 tried once only, 1 used once only, 4 revision history",
+      "bytes": 1600,
+      "items": 14,
+      "errors": [],
+      "flags": []
+    },
+    "paint": {
+      "app_id": "Microsoft.Paint_8wekyb3d8bbwe",
+      "path": "apps/Microsoft.Paint_8wekyb3d8bbwe/yepgent.osp",
+      "export": "wrote <work>\\paint.osp: 17 items; left out 38 seen in one session only, 3 tried once only, 3 used once only, 6 revision history",
+      "bytes": 1837,
+      "items": 17,
+      "errors": [],
+      "flags": []
+    }
+  },
+  "approval_boxes": [
+    {
+      "n": 1,
+      "kind": "message box",
+      "text": "e2e-agent asks to:\n\n    invoke on 'Reset'\n\nTarget: Reset Button\nProgram: charmap.exe\nScope: {\"kind\": \"window\", \"hwnd\": 44307164, \"pid\": 32728, \"process\": \"charmap.exe\", \"class\": \"#32770\", \"title\": \"Character Map\", \"app\": {\"id\": \"microsoft-corporation.charmap\", \"name\": \"Character Map\", \"versi\n\nAllow this once?",
+      "answered": "No",
+      "screenshot": "box-1.png",
+      "at": 1792874333.0
+    }
+  ]
+}

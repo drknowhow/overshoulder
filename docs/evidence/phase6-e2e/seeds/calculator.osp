@@ -1,0 +1,16 @@
+#osp 1 made_with=Overshoulder/0.1.0.dev0
+app Microsoft.WindowsCalculator_8wekyb3d8bbwe rev=0 ver=11.2607.0.0 "Calculator"
+view main window src=use n=35
+ctl togglepanebutton main Button aid=TogglePaneButton src=use ses=2 ver=11.2607.0.0 seen=4 ok=4 "Open Navigation"
+ctl listitem main ListItem name=content src=use ses=2 ver=11.2607.0.0 seen=4 ok=4
+ctl num1button main Button aid=num1Button src=use ses=2 ver=11.2607.0.0 seen=3 ok=3 "One"
+ctl multiplybutton main Button aid=multiplyButton src=use ses=2 ver=11.2607.0.0 seen=2 ok=2 "Multiply by"
+ctl num3button main Button aid=num3Button src=use ses=2 ver=11.2607.0.0 seen=2 ok=2 "Three"
+ctl num5button main Button aid=num5Button src=use ses=2 ver=11.2607.0.0 seen=2 ok=2 "Five"
+ctl equalbutton main Button aid=equalButton src=use ses=2 ver=11.2607.0.0 seen=2 ok=2 "Equals"
+ctl clearbutton main Button aid=clearButton src=use ses=2 ver=11.2607.0.0 seen=4 ok=4 "Clear"
+way invoke@button.uia_invoke ok=31 fail=0 src=use ms=390
+way select@listitem.uia_select ok=4 fail=0 src=use ms=448
+quirk q-0ef521c0e0 n=1 src=agent "Mode switch rebuilds the UI: refs from before (e.g. digits) go stale, so observe again. The nav pane closes itself after choosing a mode. Display is read via the name 'Display is N' on CalculatorResults. Buttons work with invoke in background."
+how h-switch-to-scientific-mode n=1 src=agent used=2 "switch to Scientific mode" : invoke Open%20Navigation ; select Scientific%20Calculator
+end sha256=8a030b7bc3059baaed43859b72f685c2aba8b8884d5ce57a56e7d49497340dc3

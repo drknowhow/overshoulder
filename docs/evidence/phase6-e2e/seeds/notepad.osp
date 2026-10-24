@@ -1,0 +1,13 @@
+#osp 1 made_with=Overshoulder/0.1.0.dev0
+app Microsoft.WindowsNotepad_8wekyb3d8bbwe rev=0 ver=11.2607.14.0 "Notepad"
+view main window src=use n=21
+way hotkey@focus.posted_keys ok=10 fail=0 src=use ms=724
+way type@focus.posted_chars ok=2 fail=0 src=use ms=656
+way click@point.posted_click ok=2 fail=0 src=use ms=1196
+way hotkey@document.posted_keys ok=5 fail=0 src=use ms=689
+key ctrl+f src=use n=2
+key enter src=use n=3
+key escape src=use n=5
+quirk q-bb763009f0 n=1 src=agent "The Find panel's box and buttons are not in observe/find output; use screenshot to see it. It opens prefilled with an old term, selected, so typing replaces it. Escape closed it, but the first Escape seemed to do nothing; clicking its X by x/y did not close it. Status bar updates only after Enter."
+how h-find-a-word-then-read-line-and-column-fr n=1 src=agent "find a word, then read line and column from the status bar text 'Line N, Column N' (found via find name_re 'Line \\d+')" : hotkey ctrl+f ; type Find%20box%20(focused%20on%20open) ; hotkey enter ; hotkey escape
+end sha256=d3d472ed58b046b678c30e14b55c793a981e66bb10e1d12dcdb1079bf7bb17df

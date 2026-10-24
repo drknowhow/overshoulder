@@ -1,0 +1,17 @@
+#osp 1 made_with=Overshoulder/0.1.0.dev0
+app microsoft-corporation.charmap rev=0 ver=5.2.3668.0 "Character Map"
+view main window src=use n=24
+ctl 105 main ComboBox aid=105 src=use ses=2 ver=5.2.3668.0 seen=2 ok=2 "Font :"
+ctl 119 main CheckBox aid=119 src=use ses=2 ver=5.2.3668.0 seen=4 ok=4 "Advanced view"
+ctl 132 main Edit aid=132 src=use ses=2 ver=5.2.3668.0 seen=10 ok=10 "Search for :"
+ctl 133 main Button aid=133 src=use ses=2 ver=5.2.3668.0 seen=3 ok=2 ask=1 "Search"
+way set_value@combobox.uia_value ok=2 fail=0 src=use ms=389
+way toggle@checkbox.uia_toggle ok=4 fail=0 src=use ms=430
+way set_value@edit.set_text_message ok=5 fail=0 src=use ms=395
+way focus@edit.uia_focus ok=2 fail=0 src=use ms=398
+way type@edit.replace_selection ok=3 fail=0 src=use ms=548
+way invoke@button.button_message ok=2 fail=0 src=use ms=409
+way click@point.posted_click ok=3 fail=0 src=use ms=1082
+quirk q-5f2c3b9ba7 n=1 src=agent "set_value on 'Search for :' fills the text but leaves Search disabled. Typing one more character into it (type, background) enables Search; then set_value the exact text again. Search turns into Reset, and the first match is auto-selected."
+how h-find-a-character-by-its-name-e-g-copyrig n=1 src=agent "find a character by its name (e.g. Copyright Sign); first match is preselected, its name shows in 'Selected Character :'" : toggle Advanced%20view ; set_value Search%20for%20%3A ; type Search%20for%20%3A ; set_value Search%20for%20%3A ; invoke Search ; click Character%20Grid ; toggle Advanced%20view
+end sha256=62f0cf8a40cbd1fcec95ea8c62049adb8491d705b1e0e5d165abedc1b20f8812

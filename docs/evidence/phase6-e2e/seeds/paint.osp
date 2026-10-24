@@ -1,0 +1,20 @@
+#osp 1 made_with=Overshoulder/0.1.0.dev0
+app Microsoft.Paint_8wekyb3d8bbwe rev=0 ver=11.2605.81.0 "Paint"
+view main window src=look+use n=43
+ctl collapsedbutton main Button aid=CollapsedButton src=look+use ak=Alt,S,H ses=2 ver=11.2605.81.0 seen=13 ok=13 "Image"
+ctl view main MenuItem src=look+use ak=Alt,V ses=2 ver=11.2605.81.0 seen=2 ok=2 "View"
+ctl zoom-in main Button src=look+use ses=2 ver=11.2605.81.0 seen=1 ok=1 "Zoom in"
+ctl zoom-out main Button src=look+use ses=2 ver=11.2605.81.0 seen=1 ok=1 "Zoom out"
+way hotkey@focus.posted_keys ok=19 fail=0 src=use ms=716
+way select@radiobutton.uia_select ok=3 fail=0 src=use ms=438
+way invoke@button.uia_invoke ok=16 fail=0 src=use ms=429
+way invoke@menuitem.uia_invoke ok=2 fail=0 src=use ms=445
+key ctrl+w src=use n=4
+key escape src=use n=4
+key right src=use n=3
+key enter src=use n=5
+key tab src=use n=3
+quirk q-b739bbef2e n=1 src=agent "Tools/Image/Shapes flyout items are not in the UIA tree or screenshots (only an empty PopupHost). invoke Tools, then hotkey background: enter=Pencil, tab,tab,enter=Text; arrows do nothing. Confirm via canvas group name 'Using <X> tool on Canvas'"
+quirk q-57b84eb542 n=1 src=agent "Canvas group name 'Using <X> tool on Canvas' updated after flyout picks but stayed stale ('Pencil') after select on the Brushes radio; the ribbon highlight and the Size slider show the real tool. Undo stays disabled until something is drawn"
+how h-read-image-size-in-px-resize-and-skew-op n=1 src=agent used=1 "read image size in px: Resize and Skew opens in Percentage mode (reads 100), so pick Pixels, then read the Horizontal and Vertical edits (width, height); Cancel closes it. Status bar text CanvasSizeTextBlock shows the same size" : hotkey ctrl+w ; select Pixels ; invoke Cancel
+end sha256=2f866085e0c6e55713f3d017e09645ba14607634f87022d7bc81cebd891a0266
