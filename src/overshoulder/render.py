@@ -4,7 +4,8 @@ Everything is drawn here, after the fact, from the recording's tracks: a pointer
 numbered step badges, a highlight around each target, and a caption bar. The video also zooms in on
 each step's target and back out (zoom.py). The recording itself never contains overlays, so a
 tutorial can be re-rendered with different styling or edits. With mlt=True the same pass also writes
-a Shotcut project of the edit (shotcut.py).
+a Shotcut project of the edit (shotcut.py). What it makes carries the "Made with Overshoulder" mark
+(mark.py).
 
 The pointer is the agent's by default: it glides to each step's target just before the step. Agents
 mostly act in the background, where the real cursor belongs to the person and is somewhere else; the
@@ -23,7 +24,7 @@ from pathlib import Path
 
 from PIL import Image, ImageColor, ImageDraw, ImageFont
 
-from overshoulder import brand
+from overshoulder import brand, mark
 from overshoulder import keys as kc
 from overshoulder import layer as lay
 from overshoulder import narrate as nr
@@ -233,8 +234,9 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
     magnifies the app but not the annotations. keys: draw keystroke captions. items: layer items
     showing now, in screen pixels (layer.active); redactions are applied to the pixels before the
     zoom, so no output can show what they cover. Returns the frame with a caption strip of STRIP
-    pixels added underneath. parts: filled with the frame's two layers for the Shotcut export,
-    "clean" (redacted, not zoomed) and "overlay" (RGBA: the annotations, then the opaque strip).
+    pixels added underneath, the mark at its right end. parts: filled with the frame's two layers for
+    the Shotcut export, "clean" (redacted, not zoomed) and "overlay" (RGBA: the annotations, then the
+    opaque strip without the mark, which has a track of its own).
     """
     ox, oy = origin
     items = items or []
@@ -292,16 +294,18 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
     framed = Image.alpha_composite(base, layer).convert("RGB")
     out = Image.new("RGB", (base.width, base.height + STRIP), CAPTION_BG[:3])
     out.paste(framed, (0, 0))
+    room = base.width - mark.footprint(base.width)  # the caption is centred in the strip left of the mark
     if active:
         s = active[-1]
         sd = ImageDraw.Draw(out)
-        text, font = _fit(sd, f"{s.n}. {s.caption}", base.width - 32, 26)
-        sd.text((base.width / 2, base.height + STRIP / 2), text, font=font, fill=(255, 255, 255), anchor="mm")
+        text, font = _fit(sd, f"{s.n}. {s.caption}", room - 32, 26)
+        sd.text((room / 2, base.height + STRIP / 2), text, font=font, fill=(255, 255, 255), anchor="mm")
     if parts is not None:
         over = Image.new("RGBA", out.size, (0, 0, 0, 0))
         over.paste(layer, (0, 0))
         over.paste(out.crop((0, base.height, out.width, out.height)), (0, base.height))
         parts.update(clean=clean, overlay=over)
+    mark.draw(out, (0, base.height, out.width, out.height))
     return out
 
 
@@ -396,14 +400,16 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
                             "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdout=subprocess.PIPE,
                            creationflags=nr.NO_WINDOW)
     full_h = height + STRIP
-    enc = _encoder(ffmpeg, (width, full_h), fps, out / "tutorial.mp4")
+    enc = _encoder(ffmpeg, (width, full_h), fps, out / "tutorial.mp4", tags=True)
     timeline = enc_clean = enc_over = project = None
     if mlt:
         project, edit_name = sc.names(out)
         edit = out / edit_name
         edit.mkdir(exist_ok=True)
-        for old in edit.glob("hold-*.png"):
-            old.unlink()
+        for old in [*edit.glob("hold-*.png"), edit / "mark.png"]:
+            old.unlink(missing_ok=True)
+        if mark.visible():
+            mark.layer((width, full_h), STRIP).save(edit / "mark.png")
         timeline = sc.Timeline(edit_name)
         enc_clean = _encoder(ffmpeg, (width, full_h), fps, edit / "clean.mp4")
         enc_over = _encoder(ffmpeg, (width, full_h), fps, edit / "overlay.mov", alpha=True)
@@ -524,7 +530,8 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
                     # Each still shows its own step only, even if the video already moved on.
                     solo = replace(by_n[n], start=t - 1, end=t + 1)
                     annotate(img, t, origin, pointer_for(fr, t), [solo], fonts, keys=keys,
-                             items=lay.active(drawn, t, windows, frame_origin, still_of=solo.id)).save(path)
+                             items=lay.active(drawn, t, windows, frame_origin, still_of=solo.id)).save(
+                        path, pnginfo=mark.png_info())
                     saved[n] = path.name
             i += 1
         if hold:
@@ -542,6 +549,8 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
         lines.append(f"{s.n}. {s.caption}")
         if s.n in saved:
             lines.append(f"\n   ![Step {s.n}]({saved[s.n]})\n")
+    if mark.markdown():
+        lines += ["", "---", "", mark.markdown()]
     (out / "steps.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     shown = {s.id: s for s in steps}
     (out / "steps.json").write_text(json.dumps(
@@ -557,7 +566,8 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
         result.update(narration=str(out / "narration.srt"), narration_audio=str(out / "narration.wav"),
                       lines=len(cues), held_s=round(held / fps, 1))
     if timeline is not None and written:
-        sc.write(project, size=(width, full_h), fps=fps, timeline=timeline, clean_frames=i, narration=bool(cues))
+        sc.write(project, size=(width, full_h), fps=fps, timeline=timeline, clean_frames=i, narration=bool(cues),
+                 mark=(out / timeline.edit / "mark.png").exists())
         result.update(project=str(project), project_media=str(out / timeline.edit))
     (out / "tutorial.gif").unlink(missing_ok=True)
     if gif and written:
@@ -565,14 +575,16 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     return result
 
 
-def _encoder(ffmpeg: str, size: tuple[int, int], fps: int, path: Path, alpha: bool = False) -> subprocess.Popen:
+def _encoder(ffmpeg: str, size: tuple[int, int], fps: int, path: Path, alpha: bool = False,
+             tags: bool = False) -> subprocess.Popen:
     """An ffmpeg process that encodes raw frames from its stdin: H.264, or with alpha=True RGBA frames
-    as QuickTime Animation, which keeps the transparency."""
+    as QuickTime Animation, which keeps the transparency. tags: put the mark's comment in its metadata."""
     codec = ["-c:v", "qtrle", "-pix_fmt", "argb"] if alpha else \
         ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
     return subprocess.Popen([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt",
                              "rgba" if alpha else "rgb24", "-s", f"{size[0]}x{size[1]}", "-r", str(fps), "-i", "-",
-                             *codec, str(path)], stdin=subprocess.PIPE, creationflags=nr.NO_WINDOW)
+                             *codec, *(mark.ffmpeg_args() if tags else []), str(path)], stdin=subprocess.PIPE,
+                            creationflags=nr.NO_WINDOW)
 
 
 def export_gif(video: Path, gif: Path, width: int = GIF_WIDTH, fps: int = GIF_FPS) -> dict:
@@ -584,12 +596,14 @@ def export_gif(video: Path, gif: Path, width: int = GIF_WIDTH, fps: int = GIF_FP
           "[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle")
     subprocess.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(video), "-vf", vf, "-loop", "0",
                     str(gif)], check=True, creationflags=nr.NO_WINDOW)
+    mark.tag_gif(gif)
     return {"gif": str(gif), "gif_bytes": gif.stat().st_size}
 
 
 def render_image(image: Path, out: Path | None = None) -> dict:
-    """Apply a screenshot's layer (<name>.annotations.json) and write <name>.annotated.png. Step and
-    time fields mean nothing for one image: every drawn item and redaction shows."""
+    """Apply a screenshot's layer (<name>.annotations.json) and write <name>.annotated.png, with a thin
+    strip underneath that carries the mark. Step and time fields mean nothing for one image: every drawn
+    item and redaction shows."""
     image = Path(image)
     layer = lay.Layer.for_image(image)
     items = layer.drawn()
@@ -608,7 +622,7 @@ def render_image(image: Path, out: Path | None = None) -> dict:
     lay.draw_spotlights(d, base.size, items, at)
     lay.draw(d, items, at, {"make": _font})
     path = Path(out or image.with_name(image.stem + ".annotated.png"))
-    Image.alpha_composite(base, over).convert("RGB").save(path)
+    mark.under(Image.alpha_composite(base, over).convert("RGB")).save(path, pnginfo=mark.png_info())
     return {"image": str(path), "annotations": len(items), "size": list(base.size)}
 
 

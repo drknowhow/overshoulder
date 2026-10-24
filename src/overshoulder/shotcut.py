@@ -8,6 +8,7 @@ The project holds the parts render() puts together, so a melt render of it match
   zoom, with a keyframe on every frame while the camera moves.
 - V2 "Annotations": edit/overlay.mov, everything drawn on top (pointer, highlights, badges, keycaps,
   layer items and the caption strip), transparent everywhere else.
+- V3 "Made with Overshoulder": edit/mark.png, the mark at the right end of the caption strip (mark.py).
 - A1 "Narration": narration.wav, when the tutorial is narrated.
 - A marker at each step, named after its caption.
 
@@ -142,10 +143,10 @@ def _producer(root: ET.Element, pid: str, resource: str, service: str, length: i
 
 
 def write(path: Path, *, size: tuple[int, int], fps: int, timeline: Timeline, clean_frames: int,
-          narration: bool) -> Path:
+          narration: bool, mark: bool = False) -> Path:
     """Write the project. The media must already be in place next to it: <edit>/clean.mp4
-    (clean_frames long), <edit>/overlay.mov (one frame per output frame), the holds' stills and, if
-    narration, narration.wav."""
+    (clean_frames long), <edit>/overlay.mov (one frame per output frame), the holds' stills, with mark
+    <edit>/mark.png and, with narration, narration.wav."""
     w, h = size
     frames = timeline.frames
     edit = timeline.edit
@@ -177,6 +178,8 @@ def write(path: Path, *, size: tuple[int, int], fps: int, timeline: Timeline, cl
                        "transition.distort": 0, "transition.rect": keyframes(s.rects)})
         entries.append((p.get("id"), first, last))
     _producer(mlt, "overlay", f"{edit}/overlay.mov", "avformat-novalidate", frames, 0, frames - 1, "overlay.mov")
+    if mark:
+        _producer(mlt, "mark", f"{edit}/mark.png", "qimage", frames, 0, frames - 1, "mark.png")
     if narration:
         _producer(mlt, "narration", "narration.wav", "avformat-novalidate", frames, 0, frames - 1, "narration.wav")
 
@@ -189,6 +192,11 @@ def write(path: Path, *, size: tuple[int, int], fps: int, timeline: Timeline, cl
                 {"shotcut:video": 1, "shotcut:name": "Annotations"})
     ET.SubElement(v2, "entry", producer="overlay", attrib={"in": "0", "out": str(frames - 1)})
     tracks = ["background", "recording", "annotations"]
+    if mark:
+        v3 = _props(ET.SubElement(mlt, "playlist", id="mark_track"),
+                    {"shotcut:video": 1, "shotcut:name": "Made with Overshoulder"})
+        ET.SubElement(v3, "entry", producer="mark", attrib={"in": "0", "out": str(frames - 1)})
+        tracks.append("mark_track")
     if narration:
         a1 = _props(ET.SubElement(mlt, "playlist", id="narration_track"),
                     {"shotcut:audio": 1, "shotcut:name": "Narration", "hide": 1})
@@ -211,6 +219,9 @@ def write(path: Path, *, size: tuple[int, int], fps: int, timeline: Timeline, cl
            {"a_track": 0, "b_track": 1, "threads": 0, "mlt_service": "qtblend", "disable": 1})
     _props(ET.SubElement(tractor, "transition", id="blend2"),
            {"a_track": 1, "b_track": 2, "threads": 0, "mlt_service": "qtblend", "disable": 0})
+    if mark:
+        _props(ET.SubElement(tractor, "transition", id="blend3"),
+               {"a_track": 1, "b_track": 3, "threads": 0, "mlt_service": "qtblend", "disable": 0})
 
     ET.indent(mlt)
     path = Path(path)
