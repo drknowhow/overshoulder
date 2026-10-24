@@ -35,6 +35,7 @@ def test_display_name():
     assert display_name("x.exe", "", "Product") == "Product"
     assert display_name("x.exe", "d" * 61, "") == "x"
     assert display_name("python.exe", "Python", script="drawnapp") == "drawnapp"
+    assert display_name("Notepad.exe", "Notepad.exe", "") == "Notepad"
 
 
 def test_identify_keeps_the_version_out_of_the_id():

@@ -13,7 +13,7 @@ def _sample() -> Profile:
                steps=[["click", "close-tab"], ["click", "dont-save"]]))
     p.put(Item("ctl", "add-tab", ["main", "Button"], {"aid": "AddButton", "seen": "5"}, "Add New Tab"))
     p.put(Item("view", "main", ["window"]))
-    p.put(Item("way", "click", ["background"], {"ok": "9", "fail": "1"}))
+    p.put(Item("way", "click@button.uia_invoke", fields={"ok": "9", "fail": "1"}))
     return p
 
 
@@ -53,7 +53,8 @@ def test_hash_mismatch_is_refused():
     ("note n a=1 a=2", "twice"),
     ("note n a=1 pos", "after a field"),
     ("note n BAD=1", "bad field"),
-    ("way click background \"x\"", "takes no text"),
+    ('way click@button.posted_click "x"', "takes no text"),
+    ("way click@button.posted_click extra", "positional"),
     ("note n : click x", "takes no steps"),
     ("how h : click a ; ; click b", "empty step"),
     ("note -bad", "bad id"),

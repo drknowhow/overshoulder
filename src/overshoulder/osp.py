@@ -61,7 +61,7 @@ KINDS: dict[str, Spec] = {
     "app": Spec(),
     "view": Spec(("type",)),
     "ctl": Spec(("view", "type"), required=2),
-    "way": Spec(("method",), required=1, text=False),
+    "way": Spec(text=False),  # id: <action>@<where>.<method>, e.g. type@document.replace_selection
     "key": Spec(),
     "quirk": Spec(),
     "how": Spec(steps=True),

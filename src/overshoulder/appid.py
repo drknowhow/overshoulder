@@ -67,9 +67,10 @@ def make_id(exe: str, publisher: str = "", package_family: str = "", script: str
 def display_name(exe: str, description: str = "", product: str = "", script: str = "") -> str:
     if script:
         return script
+    exe_name = re.split(r"[\\/]", exe)[-1].lower()
     for text in (description, product):
         text = text.strip()
-        if text and len(text) <= 60:
+        if text and len(text) <= 60 and text.lower() != exe_name:  # Store Notepad's description is "Notepad.exe"
             return text
     return _stem(exe)
 

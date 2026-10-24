@@ -13,12 +13,14 @@ Each action runs observe -> bind -> act once -> verify:
 from __future__ import annotations
 
 import os
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from overshoulder import learn
 from overshoulder import scope as sc
 from overshoulder.driver import input as inp
 from overshoulder.driver import uia
@@ -38,6 +40,7 @@ from overshoulder.gateway.errors import (
 from overshoulder.gateway.lease import DEFAULT_TTL_S, HUMAN_PAUSE, LeaseManager
 from overshoulder.gateway.limits import PROCESS_NAMES, LeaseLimits, Limits, NarrowedScope
 from overshoulder.gateway.log import ActionLog
+from overshoulder.profiles import ProfileStore
 
 KEYBOARD_ACTIONS = frozenset({"type", "hotkey"})
 MOUSE_ACTIONS = frozenset({"click", "double_click", "right_click", "drag"})
@@ -279,7 +282,8 @@ class Gateway:
                  log: ActionLog | None = None, approver: policy.Approver | None = None,
                  checks: Checks | None = None, scope_factory: Callable[[str], Any] = sc.parse_scope,
                  allow_elevated: bool = False, protected_pids: set[int] | None = None,
-                 human_wait_s: float = 20.0, settings_source: Callable[[], Any] | None = None):
+                 human_wait_s: float = 20.0, settings_source: Callable[[], Any] | None = None,
+                 profiles: ProfileStore | None = None):
         # An elevated gateway could drive elevated windows past UIPI, defeating the elevated-window deny.
         if not allow_elevated and policy.self_elevated():
             raise Denied("refusing to run elevated; start Overshoulder from a normal (non-admin) process")
@@ -302,6 +306,10 @@ class Gateway:
         # Borrow mode: the person's cursor and window, kept while a menu or dialog an agent opened stays in
         # front for its next step. lease id -> (saved desk state, monotonic time it was kept).
         self._kept: dict[str, tuple[Any, float]] = {}
+        # App profiles (learn.py): a lease's action rows are kept with it and learned from when it ends.
+        self.profiles = profiles or ProfileStore(default_home())
+        self._learners: list[threading.Thread] = []
+        self.leases.on_end = self._lease_ended
 
     # -- lease lifecycle -----------------------------------------------------------------------
 
@@ -370,6 +378,34 @@ class Gateway:
         self._give_back(lease_id)
         self.log.write("lease_released", client=client.name, lease=lease_id)
 
+    def _lease_ended(self, lease, reason: str) -> None:
+        rows = lease.meta.pop("rows", None)
+        if rows:
+            t = threading.Thread(target=self._learn, args=(lease.id, rows), name="overshoulder-learn", daemon=True)
+            self._learners = [x for x in self._learners if x.is_alive()] + [t]
+            t.start()
+
+    def _learn(self, lease_id: str, rows: list[dict]) -> None:
+        try:
+            if not getattr(self.settings_source(), "learn_profiles", True):
+                return
+            out = learn.learn_lease(self.profiles, lease_id, rows)
+            if out:
+                self.log.write("profile_learned", lease=lease_id, apps=out)
+        except Exception as e:  # a bug here must not reach the agent or the next lease
+            self.log.write("profile_error", lease=lease_id, error=f"{type(e).__name__}: {e}")
+
+    def wait_learning(self, timeout: float = 10.0) -> None:
+        """Wait for profiles still being learned from ended leases (tests, shutdown)."""
+        for t in list(self._learners):
+            t.join(timeout)
+
+    def _keep_row(self, lease, row: dict) -> None:
+        if lease is not None and row.get("action") in learn.ACTING:
+            rows = lease.meta.setdefault("rows", [])
+            if len(rows) < learn.MAX_ROWS:
+                rows.append(row)
+
     def status(self) -> dict:
         out = {**self.leases.status(), "input_mode": self.settings_source().input_mode}
         lease = self.leases.active()
@@ -420,6 +456,7 @@ class Gateway:
         lease = None
         scope_desc = None
         result = None  # what perform returned; logged with a failed verify to show which methods ran
+        view = None  # which of the app's windows the target is in, for its profile
         logged_params = {k: v for k, v in params.items() if k != "secret"}
         try:
             client = self.registry.authenticate(token)
@@ -439,6 +476,7 @@ class Gateway:
             if target is not None:
                 self._check_target_processes(lim, scope, target)
                 target = self._bind(scope, target, action)
+                view = _view_of(scope, target)
                 if target.pid:
                     self.checks.not_elevated(target.pid)
                 policy.require_not_password(action, target.is_password)
@@ -516,11 +554,13 @@ class Gateway:
             # Every refusal and driver failure is logged before it propagates.
             error = e.to_dict() if isinstance(e, GatewayError) else \
                 {"code": getattr(e, "code", type(e).__name__), "message": str(e)}
-            self.log.write("action", client=client_name, lease=lease_id, action=action, params=logged_params,
-                           target=target.describe() if target else None, ok=False, error=error,
-                           scope=scope_desc, ms=round((time.time() - t0) * 1000),
-                           **({"to": to_target.describe()} if to_target is not None else {}),
-                           **({"result": result} if isinstance(result, dict) else {}))
+            row = self.log.write("action", client=client_name, lease=lease_id, action=action,
+                                 params=logged_params, target=target.describe() if target else None, ok=False,
+                                 error=error, scope=scope_desc, ms=round((time.time() - t0) * 1000),
+                                 **({"view": view} if view else {}),
+                                 **({"to": to_target.describe()} if to_target is not None else {}),
+                                 **({"result": result} if isinstance(result, dict) else {}))
+            self._keep_row(lease, row)
             raise
         out = {"ok": True, "result": result, "verify": verdict}
         try:
@@ -529,9 +569,14 @@ class Gateway:
                                  verify=_loggable(verdict, lease.meta.get("log_text")), scope=scope_desc,
                                  t_act=round(t_act, 3),
                                  ms=round((time.time() - t0) * 1000),
+                                 **({"view": view} if view else {}),
+                                 **({"attempts": [{"method": a.get("method"), "ok": a.get("ok")}
+                                                  for a in result["attempts"]]}
+                                    if isinstance(result, dict) and result.get("attempts") else {}),
                                  **({"to": to_target.describe()} if to_target is not None else {}),
                                  **({"approved_by": approved_by} if approved_by else {}))
             out["ts"] = row["ts"]
+            self._keep_row(lease, row)
         except OSError as e:
             # The action already happened; report the log failure instead of inviting a retry.
             out["log_error"] = str(e)
@@ -752,6 +797,15 @@ class Gateway:
         return target
 
 
+def _view_of(scope, target: Target) -> str:
+    """"main" for the scope's own window, else "w-" and the class of the dialog or popup holding the target."""
+    binding = getattr(scope, "binding", None)
+    if binding is None or not target.hwnd or target.hwnd == binding.hwnd:
+        return "main"
+    from overshoulder.appid import slug
+    return f"w-{slug(w.class_name(target.hwnd), 37) or 'popup'}"
+
+
 def _redact_text(params: dict) -> dict:
     """Replace typed text, and expectations that would echo it, with their length."""
     out = dict(params)
@@ -783,4 +837,5 @@ def gateway_for_tests(tmp: Path, **kw) -> Gateway:
     reg = ClientRegistry(tmp / "clients.json")
     kw.setdefault("allow_elevated", True)
     kw.setdefault("settings_source", lambda: st.Settings(input_mode="full"))
+    kw.setdefault("profiles", ProfileStore(tmp))
     return Gateway(registry=reg, log=ActionLog(tmp / "actions.jsonl"), **kw)

@@ -49,6 +49,9 @@ class LeaseManager:
         self._queue: deque[str] = deque()
         self._queue_seen: dict[str, float] = {}
         self._paused: str | None = None
+        # Called with (lease, reason) whenever a lease ends: released, expired or revoked. It runs under
+        # the lease lock, so it must only hand the lease off.
+        self.on_end: Callable[[Lease, str], None] | None = None
 
     # -- state ---------------------------------------------------------------------------------
 
@@ -56,6 +59,11 @@ class LeaseManager:
         self._revoked[lease.id] = reason
         while len(self._revoked) > REVOKED_MEMORY:
             self._revoked.popitem(last=False)
+        if self.on_end is not None:
+            try:
+                self.on_end(lease, reason)
+            except Exception:  # learning is never allowed to keep a lease alive
+                pass
 
     def _expire(self) -> None:
         now = self._clock()

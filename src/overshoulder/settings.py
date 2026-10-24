@@ -51,6 +51,8 @@ class Settings:
     vision_cloud_url: str = ""
     vision_cloud_model: str = ""
     vision_cloud_key: str = field(default="", repr=False)
+    # When a lease ends, what its actions showed about each app is added to that app's profile (learn.py).
+    learn_profiles: bool = True
 
     def clamp(self) -> Settings:
         self.poll_interval_ms = max(100, min(int(self.poll_interval_ms), 10_000))
