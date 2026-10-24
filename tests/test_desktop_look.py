@@ -83,3 +83,27 @@ def test_a_look_at_notepad_keeps_no_content(svc, tmp_path):
     assert "aid=AddButton" in text
     for secret in ("pets_overshoulder_look", "Buy cat food", win.title):
         assert secret not in text, secret
+
+
+def test_a_how_to_an_agent_added_counts_the_session_that_follows_it(svc):
+    from test_desktop_service import _close, _wait_window
+    s, token = svc
+    subprocess.Popen(["calc.exe"])
+    win = _wait_window("^Calculator$")
+    time.sleep(1.0)
+    how = {"kind": "how", "text": "multiply six by seven",
+           "steps": [["invoke", "Six"], ["invoke", "Multiply by"], ["invoke", "Seven"], ["invoke", "Equals"]]}
+    try:
+        lease = s.acquire(token, f"window:{win.hwnd}")["lease_id"]
+        assert s.profile(token, lease, "add", how)["added"]["new"]
+        s.release(token, lease)
+        lease = s.acquire(token, f"window:{win.hwnd}")["lease_id"]
+        for aid in ("clearButton", "num6Button", "multiplyButton", "num7Button", "equalButton"):
+            [el] = s.find(token, lease, auto_id=aid)
+            assert s.act(token, lease, "invoke", ref=el["ref"])["ok"]
+        s.release(token, lease)
+        s.gw.wait_learning()
+    finally:
+        _close(win.hwnd)
+    prof = s.gw.profiles.load("Microsoft.WindowsCalculator_8wekyb3d8bbwe")
+    assert prof.get("how", "h-multiply-six-by-seven").num("used") == 1

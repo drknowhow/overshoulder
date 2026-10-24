@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import re
 
+from overshoulder import notes
 from overshoulder.appid import AppIdentity, slug
 from overshoulder.osp import MAX_TEXT, Item, OspError, Profile, dec, enc
 from overshoulder.profiles import ProfileConflict, ProfileStore
@@ -329,13 +330,13 @@ class _Session:
 def apply(prof: Profile, lease_id: str, rows: list[dict], version: str = "") -> dict:
     """Fold one lease's action rows for this profile's app into it. Rows of other apps are skipped."""
     s = _Session(prof, lease_id, version)
-    for r in rows:
-        if ((r.get("scope") or {}).get("app") or {}).get("id") != prof.app_id:
-            continue
+    mine = [r for r in rows if ((r.get("scope") or {}).get("app") or {}).get("id") == prof.app_id]
+    for r in mine:
         if r.get("event") == "action" and r.get("action") in ACTING:
             s.row(r)
         elif r.get("event") == "hint":
             s.hint(r)
+    s.stats["hows"] = notes.follow(prof, [r for r in mine if r.get("action") in ACTING])
     if version:
         prof.app.fields["ver"] = enc(version)
     return s.stats
@@ -386,7 +387,7 @@ def revise(store: ProfileStore, ident: AppIdentity, change, summary) -> dict:
         try:
             prof = store.load_or_new(ident)
             stats = change(prof)
-            if not (stats.get("actions") or stats.get("controls") or stats.get("keys") or stats.get("hints")):
+            if not any(stats.get(k) for k in ("actions", "controls", "keys", "hints", "notes")):
                 return stats
             store.save(prof, summary(stats))
             return {**stats, "rev": prof.revision}
