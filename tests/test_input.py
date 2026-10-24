@@ -66,8 +66,16 @@ def test_hotkey_marks_arrow_keys_extended():
 
 
 def test_vk_for_rejects_unknown_names():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="plus, minus"):
         inp.vk_for("hyper")
+
+
+def test_vk_for_names_punctuation_and_numpad_keys():
+    # A seed agent tried plus, =, add, oem_plus and four more before giving up on ctrl+plus in Notepad.
+    assert inp.vk_for("plus") == inp.vk_for("=") == inp.vk_for("equals") == 0xBB
+    assert inp.vk_for("minus") == inp.vk_for("-") == 0xBD
+    assert inp.vk_for("num0") == 0x60 and inp.vk_for("add") == 0x6B
+    assert [e.ki.wVk for e in inp.hotkey_inputs("ctrl+plus")] == [0x11, 0xBB, 0xBB, 0x11]
 
 
 def test_normalize_point_maps_virtual_desktop_corners():

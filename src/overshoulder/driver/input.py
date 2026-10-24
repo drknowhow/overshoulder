@@ -210,6 +210,13 @@ _NAMED_VK = {
     "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
     "left": 0x25, "up": 0x26, "right": 0x27, "down": 0x28,
     **{f"f{i}": 0x6F + i for i in range(1, 13)},
+    # The punctuation keys of a US layout ("plus" is the =/+ key, so ctrl+plus zooms in), by name or
+    # by their own character. A combo can't hold a bare "+": it separates the keys.
+    "plus": 0xBB, "equals": 0xBB, "=": 0xBB, "minus": 0xBD, "-": 0xBD, "comma": 0xBC, ",": 0xBC,
+    "period": 0xBE, ".": 0xBE, "/": 0xBF, ";": 0xBA, "'": 0xDE, "[": 0xDB, "]": 0xDD, "\\": 0xDC,
+    "`": 0xC0,
+    **{f"num{i}": 0x60 + i for i in range(10)},
+    "add": 0x6B, "subtract": 0x6D, "multiply": 0x6A,
 }
 # Keys that need KEYEVENTF_EXTENDEDKEY to be told apart from their numpad twins.
 _EXTENDED = {0x2D, 0x2E, 0x24, 0x23, 0x21, 0x22, 0x25, 0x26, 0x27, 0x28, 0x5B}
@@ -221,7 +228,9 @@ def vk_for(name: str) -> int:
         return _NAMED_VK[key]
     if len(key) == 1 and (key.isascii() and key.isalnum()):
         return ord(key.upper())
-    raise ValueError(f"unknown key {name!r}")
+    raise ValueError(f"unknown key {name!r}: use a letter, a digit, one of = - , . / ; ' [ ] \\ `, "
+                     "or a name such as plus, minus, enter, esc, tab, space, delete, f1-f12, num0-num9, "
+                     "add, subtract, multiply")
 
 
 def hotkey_inputs(combo: str) -> list[INPUT]:
