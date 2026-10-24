@@ -40,8 +40,20 @@ def test_a_look_at_calculator_lists_its_buttons_and_access_keys(svc):
     try:
         out, got = _look(s, token, win.hwnd)
         out2, _ = _look(s, token, win.hwnd)
+        # Two looks kept the name "Seven", so a find by it goes straight to the automation id.
+        lease = s.acquire(token, f"window:{win.hwnd}")["lease_id"]
+        t0 = time.perf_counter()
+        anchored = s.find(token, lease, name="Seven")
+        t1 = time.perf_counter()
+        walked = s.find(token, lease, name_re="^Seven$")  # a pattern walks the window
+        t2 = time.perf_counter()
+        s.release(token, lease)
     finally:
         _close(win.hwnd)
+    print(f"find by the profile's anchor {1000 * (t1 - t0):.0f} ms, by a walk {1000 * (t2 - t1):.0f} ms")
+    assert [h.get("via") for h in anchored] == ["profile"] and "via" not in walked[0]
+    assert anchored[0]["ref"] == walked[0]["ref"] and anchored[0]["rect"] == walked[0]["rect"]
+    assert t1 - t0 < t2 - t1
     assert out["app"]["id"] == "Microsoft.WindowsCalculator_8wekyb3d8bbwe"
     assert out["rev"] == 1 and out2["rev"] == 2 and out["controls"] >= 20
     text = got["profile"]

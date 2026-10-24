@@ -145,6 +145,26 @@ def walk(cache: ElementCache, root_hwnd: int, max_nodes: int = 400, max_depth: i
     return out
 
 
+def by_automation_id(cache: ElementCache, root_hwnd: int, auto_id: str) -> list[Element]:
+    """Elements under a top-level window with this automation id, found by UI Automation's own FindAll
+    instead of a walk, which reads each element over COM. Offscreen ones are skipped, as walk skips them.
+    Their depth is not counted (1)."""
+    from pywinauto.uia_defines import IUIA
+    iuia = IUIA()
+    cond = iuia.iuia.CreatePropertyCondition(iuia.UIA_dll.UIA_AutomationIdPropertyId, auto_id)
+    found = UIAElementInfo(root_hwnd).element.FindAll(iuia.tree_scope["descendants"], cond)
+    out = []
+    for i in range(found.Length if found else 0):
+        e = found.GetElement(i)
+        try:
+            if e.CurrentIsOffscreen:
+                continue
+        except Exception:
+            continue
+        out.append(cache.put(UIAElementInfo(e), root_hwnd, 1))
+    return out
+
+
 def find(elements: list[Element], name: str | None = None, name_re: str | None = None,
          control_type: str | None = None, auto_id: str | None = None) -> list[Element]:
     rx = re.compile(name_re, re.IGNORECASE) if name_re else None

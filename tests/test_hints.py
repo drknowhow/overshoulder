@@ -234,3 +234,102 @@ def test_act_orders_the_ladder_from_the_profile(svc):
     settings["s"] = st.Settings(input_mode="full", learn_profiles=False)
     s.act(token, lease, "type", text="hi")
     assert orders[-1] is None  # profiles turned off: the ladder's own order
+
+
+# -- anchors: find by the automation id the profile knows ---------------------------------------------
+
+def _anchor_svc(svc, monkeypatch, there=True):  # noqa: F811
+    from types import SimpleNamespace
+
+    from overshoulder import service
+    from overshoulder.driver.uia import Element
+
+    s, token, _, _ = svc
+    equals = Element("e9", SimpleNamespace(name="Equals", control_type="Button", automation_id="equalButton"), 0x10, 1)
+    calls = []
+    state = {"there": there}
+    monkeypatch.setattr(service.uia, "roots_for_window", lambda h: [0x10])
+    monkeypatch.setattr(service.uia, "by_automation_id",
+                        lambda cache, root, aid: calls.append(("aid", aid)) or ([equals] if state["there"] else []))
+    monkeypatch.setattr(service.uia, "walk", lambda cache, root, max_nodes=0: calls.append(("walk",)) or [equals])
+    monkeypatch.setattr(service.uia, "describe_all",
+                        lambda els: [{"ref": e.ref, "name": e.info.name, "type": e.info.control_type} for e in els])
+    prof = _prof()
+    prof.put(Item("ctl", "equalbutton", ["main", "Button"], {"aid": "equalButton", "seen": "4"}, "Equals"))
+    s.gw.profiles.save(prof, "seeded")
+    return s, token, calls, state
+
+
+def _lease(s, token, fn):
+    lease = s.acquire(token, "window:16")["lease_id"]
+    try:
+        return fn(lease)
+    finally:
+        s.release(token, lease)
+        s.gw.wait_learning()
+
+
+def test_a_find_by_a_known_name_goes_straight_to_its_automation_id(svc, monkeypatch):
+    s, token, calls, _ = _anchor_svc(svc, monkeypatch)
+    hits = _lease(s, token, lambda lease: s.find(token, lease, name="Equals"))
+    assert hits == [{"ref": "e9", "name": "Equals", "type": "Button", "via": "profile"}]
+    assert calls == [("aid", "equalButton")]  # no walk of the window
+    assert s.gw.profiles.load(NOTEPAD).get("ctl", "equalbutton").num("hit") == 1
+    calls.clear()
+    _lease(s, token, lambda lease: s.find(token, lease, name_re="^Equals$"))
+    assert calls == [("walk",)]  # a pattern is a search, not a known control
+
+
+def test_an_anchor_that_misses_three_times_is_no_longer_tried(svc, monkeypatch):
+    s, token, calls, state = _anchor_svc(svc, monkeypatch, there=False)
+    for n in (1, 2, 3):
+        hits = _lease(s, token, lambda lease: s.find(token, lease, name="Equals"))
+        assert hits == [{"ref": "e9", "name": "Equals", "type": "Button"}]  # the walk found it
+        assert s.gw.profiles.load(NOTEPAD).get("ctl", "equalbutton").num("miss") == n
+    calls.clear()
+    state["there"] = True
+    _lease(s, token, lambda lease: s.find(token, lease, auto_id="equalButton"))
+    assert calls == [("walk",)]
+    assert "miss=3" in hints.brief(s.gw.profiles.load(NOTEPAD), VERSION)
+
+
+def test_a_hit_clears_the_misses(svc, monkeypatch):
+    s, token, _, state = _anchor_svc(svc, monkeypatch, there=False)
+    _lease(s, token, lambda lease: s.find(token, lease, auto_id="equalButton"))
+    state["there"] = True
+    _lease(s, token, lambda lease: s.find(token, lease, auto_id="equalButton"))
+    ctl = s.gw.profiles.load(NOTEPAD).get("ctl", "equalbutton")
+    assert "miss" not in ctl.fields and ctl.num("hit") == 1
+
+
+def test_an_ambiguous_name_is_not_an_anchor(svc, monkeypatch):
+    s, token, calls, _ = _anchor_svc(svc, monkeypatch)
+    prof = s.gw.profiles.load(NOTEPAD)
+    prof.put(Item("ctl", "equals2", ["w-dialog", "Button"], {"aid": "okEquals"}, "Equals"))
+    s.gw.profiles.save(prof, "two")
+    _lease(s, token, lambda lease: s.find(token, lease, name="Equals"))
+    assert calls == [("walk",)]
+
+
+# -- vision boxes seen before ------------------------------------------------------------------------
+
+def test_learning_keeps_a_confirmed_box_and_its_words_only_after_two_sessions():
+    from overshoulder import learn
+    row = {"event": "hint", "scope": SCOPE, "hint": "paint", "view": "main", "desc": "the  gear icon",
+           "box": [150, 20, 180, 50], "size": [200, 100], "dh": "00ff00ff00ff00ff"}
+    prof = _prof()
+    learn.apply(prof, "lease-one", [row], VERSION)
+    [item] = prof.of_kind("paint")
+    assert item.id == learn.paint_id(NOTEPAD, "main", "The gear icon")
+    assert (item.fields["box"], item.fields["sz"], item.fields["dh"], item.text) == \
+        ("150,20,180,50", "200,100", "00ff00ff00ff00ff", None)
+    learn.apply(prof, "lease-two", [row], VERSION)
+    assert item.text == "the gear icon"
+    secret = {**row, "desc": "the attachment pets.txt"}
+    for lease in ("a", "b"):
+        learn.apply(prof, lease, [secret], VERSION)
+    assert all(x.text != "the attachment pets.txt" for x in prof.of_kind("paint"))
+    for bad in ({**row, "box": [1, 2, 3]}, {**row, "dh": "zz"}, {**row, "view": "Main Window"}, {**row, "desc": ""}):
+        before = prof.dumps()
+        learn.apply(prof, "c", [bad], VERSION)
+        assert prof.dumps() == before

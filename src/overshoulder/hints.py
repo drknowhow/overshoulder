@@ -11,8 +11,8 @@ from overshoulder.learn import way_id
 from overshoulder.osp import Item, Profile, enc
 
 # Fields kept for learning that tell an agent nothing: which session saw an item last, name hashes and
-# session counts, where an item came from, and when the profile was saved.
-BOOKKEEPING = frozenset({"last", "nh", "nses", "ses", "src", "at", "exe"})
+# session counts, where an item came from, when the profile was saved, and a vision box's pixels hash.
+BOOKKEEPING = frozenset({"last", "nh", "nses", "ses", "src", "at", "exe", "box", "sz", "dh"})
 BRIEF_LINES = 120  # take_scope's brief; profile(op="get") has no limit
 # A method that has failed this often in an app and never worked there is tried after the others.
 DEMOTE_FAILS = 2
@@ -25,6 +25,8 @@ def _rank(item: Item) -> int:
         return item.num("ok") + item.num("fail")
     if item.kind == "ctl":
         return item.num("seen") + item.num("ok") + item.num("ses")
+    if item.kind == "paint":
+        return item.num("hit") + item.num("ses")
     return item.num("n")
 
 

@@ -228,7 +228,9 @@ class Daemon:
             that is and returns a v-ref (source "vision"), or nothing if it sees none; it works only when
             the person has turned a vision model on, and can take a minute while a local model loads. A
             v-ref is "confirmed" when text inside its box or the control at its centre matches the
-            description; acting on an unconfirmed one asks the person, who sees the box."""
+            description; acting on an unconfirmed one asks the person, who sees the box. The app's profile
+            is tried first: a control it knows by that name or id, or a box a model found for the same
+            words before and the screen confirms again, comes back at once with "via": "profile"."""
             return await authed(ctx, lambda token: {"elements": d.svc.find(
                 token, d.lease_for(token), name, name_re, control_type, auto_id, text=text, describe=describe)})
 

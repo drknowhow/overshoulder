@@ -420,3 +420,77 @@ def test_the_local_model_finds_character_maps_select_button(tmp_path):
     finally:
         proc.kill()
         vision.OllamaLocator().unload()
+
+
+# -- a box the app's profile kept ------------------------------------------------------------------------
+
+APP = "Microsoft.WindowsNotepad_8wekyb3d8bbwe"
+
+
+def _profiled(svc, monkeypatch, model):  # noqa: F811
+    from test_ocr import BoundScope
+
+    from overshoulder.appid import AppIdentity
+
+    monkeypatch.setattr(BoundScope.binding, "app", AppIdentity(APP, "Notepad", "Notepad.exe"), raising=False)
+    s, token, lease, pixels, pressed = _make(svc, model)
+    s.release(token, lease)
+    return s, token, pixels
+
+
+def _describe(s, token, words='the "Save" button'):
+    lease = s.acquire(token, "window:16")["lease_id"]
+    try:
+        return s.find(token, lease, describe=words)
+    finally:
+        s.release(token, lease)
+        s.gw.wait_learning()
+
+
+def test_a_second_describe_of_a_confirmed_box_skips_the_model(svc, monkeypatch):  # noqa: F811
+    model = FakeModel()
+    s, token, _ = _profiled(svc, monkeypatch, model)
+    [first] = _describe(s, token)
+    assert first["model"] == "fake" and first["confirmed"] and len(model.asked) == 1
+    [again] = _describe(s, token)
+    assert len(model.asked) == 1, "the model was asked again"
+    assert again["via"] == "profile" and again["rect"] == first["rect"]
+    assert again["confirmed_by"] == "it shows the text 'Save'"  # confirmed by the screen now, not the file
+    item = s.gw.profiles.load(APP).of_kind("paint")[0]
+    assert item.num("hit") == 1 and item.text == 'the "Save" button'
+
+
+def test_an_unconfirmed_box_is_not_kept(svc, monkeypatch):  # noqa: F811
+    model = FakeModel()
+    s, token, _ = _profiled(svc, monkeypatch, model)
+    _describe(s, token, "the gear icon")  # the fake OCR reads nothing like it
+    _describe(s, token, "the gear icon")
+    assert len(model.asked) == 2 and s.gw.profiles.load(APP) is None
+
+
+def test_changed_pixels_or_a_resized_window_ask_the_model(svc, monkeypatch):  # noqa: F811
+    model = FakeModel()
+    s, token, pixels = _profiled(svc, monkeypatch, model)
+    _describe(s, token)
+    ImageDraw.Draw(pixels["img"]).rectangle((165, 20, 180, 50), fill="black")  # half the box repainted
+    [hit] = _describe(s, token)
+    assert len(model.asked) == 2 and hit["model"] == "fake"
+    pixels["img"] = Image.new("RGB", (240, 100), "white")
+    _describe(s, token)
+    assert len(model.asked) == 3
+    item = s.gw.profiles.load(APP).of_kind("paint")[0]
+    assert item.fields["sz"] == "240,100" and "miss" not in item.fields  # each new box replaced the old
+
+
+def test_a_box_that_misses_three_times_is_no_longer_checked(svc, monkeypatch):  # noqa: F811
+    model = FakeModel()
+    s, token, pixels = _profiled(svc, monkeypatch, model)
+    _describe(s, token)
+    model.box = None  # the model no longer sees it either
+    ImageDraw.Draw(pixels["img"]).rectangle((165, 20, 180, 50), fill="black")
+    for n in (1, 2, 3):
+        assert _describe(s, token) == []
+        assert s.gw.profiles.load(APP).of_kind("paint")[0].num("miss") == n
+    rev = s.gw.profiles.load(APP).revision
+    _describe(s, token)
+    assert s.gw.profiles.load(APP).revision == rev  # not checked, so nothing to learn

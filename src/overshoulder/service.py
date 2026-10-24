@@ -22,7 +22,7 @@ from overshoulder.gateway.clients import default_home
 from overshoulder.gateway.core import Gateway, Target
 from overshoulder.gateway.errors import GatewayError, TargetStale
 from overshoulder.gateway.limits import black_out, hidden_rects
-from overshoulder.osp import OspError
+from overshoulder.osp import OspError, dec
 
 ACTIONS = ("click", "double_click", "right_click", "drag", "invoke", "toggle", "select", "set_value", "type",
            "hotkey", "focus", "activate")
@@ -169,13 +169,20 @@ class Service:
         scope's pixels with OCR for those words, for apps that paint their own controls; its hits are
         t-refs with source "ocr". A find by name alone that UI Automation has no match for also looks
         for the name on screen that way. describe= asks the vision model chosen on the settings page
-        where the described control is ("the gear icon"); its hit is a v-ref with source "vision"."""
+        where the described control is ("the gear icon"); its hit is a v-ref with source "vision".
+
+        The app's profile is tried first: a control it knows by this name or automation id is looked up
+        by its automation id instead of walking the window, and a described control a vision model found
+        before is checked where it was. Such hits carry "via": "profile"."""
         def perform(_t, p):
             scope = self._scope(lease_id)
             if describe is not None:
-                return self._locate(scope, describe)
+                return self._locate(scope, describe, lease_id)
             if text is not None:
                 return self._read_text(scope, text)
+            if (name is not None or auto_id) and not name_re and scope.kind == "window":
+                if hits := self._anchored(lease_id, scope, name, control_type, auto_id):
+                    return hits
             roots = uia.roots_for_window(scope.binding.hwnd) if scope.kind == "window" else \
                 [h for h in [w.foreground()] if h and scope.owns_window(h)]
             hits = []
@@ -554,12 +561,15 @@ class Service:
         return [self.found.add(ph.text, ph.box, locate.window_of(scope, origin, ph.box), img).describe(origin)
                 for ph in hits]
 
-    def _locate(self, scope, description: str) -> list[dict]:
-        """Where the vision model sees the described control, as a v-ref, or [] if it says it isn't there."""
+    def _locate(self, scope, description: str, lease_id: str | None = None) -> list[dict]:
+        """Where the vision model sees the described control, as a v-ref, or [] if it says it isn't there.
+        A box the profile kept for these words is checked first (_seen_before), without the model."""
         settings = self.gw.settings_source()
         if (why := vision.unavailable(settings)) is not None:
             raise GatewayError(why)
         img, origin = locate.scope_pixels(scope)
+        if (seen := self._seen_before(lease_id, scope, img, origin, description)) is not None:
+            return seen
         locator = self.locator_for(settings)
         try:
             box = locator.locate(img, description)
@@ -567,9 +577,76 @@ class Service:
             raise GatewayError(f"the vision model ({locator.name}) could not be asked: {e}") from e
         if box is None:
             return []
+        confirmed_by = self._confirm(scope, img, origin, box, description)
         f = self.found.add(description, box, locate.window_of(scope, origin, box), img, source="vision",
-                           confirmed_by=self._confirm(scope, img, origin, box, description))
+                           confirmed_by=confirmed_by)
+        if confirmed_by:
+            crop = img.crop((box.left, box.top, box.right, box.bottom))
+            self._hint(lease_id, scope, hint="paint", view="main", desc=description,
+                       box=[box.left, box.top, box.right, box.bottom], size=list(img.size), dh=locate.dhash(crop))
         return [{**f.describe(origin), "model": locator.name}]
+
+    def _seen_before(self, lease_id: str | None, scope, img, origin: Rect, description: str) -> list[dict] | None:
+        """The box the profile kept for this description, if the window is the same size, the pixels there
+        still look the same and the screen confirms it again now (_confirm): the confirmation comes from
+        the screen, never from the file. None means ask the model."""
+        prof = self._profile_of(lease_id, scope) if lease_id else None
+        if prof is None or scope.kind != "window":
+            return None
+        item = prof.get("paint", learn.paint_id(prof.app_id, "main", description))
+        if item is None or learn.stale(item):
+            return None
+        try:
+            box = Rect(*(int(v) for v in item.fields["box"].split(",")))
+            size = tuple(int(v) for v in item.fields["sz"].split(","))
+        except (KeyError, TypeError, ValueError):
+            return None
+        if size != img.size or box.empty:
+            return None  # a resized window may have moved the control: not a miss, the model is asked
+        crop = img.crop((box.left, box.top, box.right, box.bottom))
+        same = locate.same_picture(locate.dhash(crop), item.fields.get("dh", ""))
+        confirmed_by = self._confirm(scope, img, origin, box, description) if same else ""
+        self._hint(lease_id, scope, hint="paint", view="main", desc=description, hit=bool(confirmed_by))
+        if not confirmed_by:
+            return None
+        f = self.found.add(description, box, locate.window_of(scope, origin, box), img, source="vision",
+                           confirmed_by=confirmed_by)
+        return [{**f.describe(origin), "via": "profile"}]
+
+    def _anchored(self, lease_id: str, scope, name: str | None, control_type: str | None,
+                  auto_id: str | None) -> list[dict]:
+        """A find answered from the profile: the one control it knows by this name (once two sessions saw
+        it) or automation id, looked up by that id. [] when there is no such control or it is not there."""
+        prof = self._profile_of(lease_id, scope)
+        if prof is None:
+            return []
+
+        def fits(it) -> bool:
+            aid = dec(it.fields.get("aid", ""))
+            return bool(aid) and not learn.stale(it) and (auto_id is None or aid == auto_id) \
+                and (name is None or it.text == name) \
+                and (control_type is None or it.args[1].lower() == control_type.lower())
+
+        known = [it for it in prof.of_kind("ctl") if fits(it)]
+        if len(known) != 1:
+            return []
+        aid, hits = dec(known[0].fields["aid"]), []
+        for root in uia.roots_for_window(scope.binding.hwnd):
+            try:
+                els = uia.by_automation_id(self.cache, root, aid)
+            except Exception:  # an anchor never fails a find: the walk follows
+                els = []
+            hits += uia.describe_all(uia.find(els, name, None, control_type, aid))
+        self._hint(lease_id, scope, hint="anchor", ctl=known[0].id, hit=bool(hits))
+        return [{**h, "via": "profile"} for h in hits]
+
+    def _hint(self, lease_id: str | None, scope, **row) -> None:
+        """A hint row for the lease's learning (Gateway.keep_hint), naming the app but no window title."""
+        binding = getattr(scope, "binding", None)
+        app = getattr(binding, "app", None)
+        if lease_id and app is not None:
+            self.gw.keep_hint(lease_id, {"scope": {"app": app.describe(), "process": getattr(binding, "process", "")},
+                                         **row})
 
     def _confirm(self, scope, img, origin: Rect, box: Rect, description: str) -> str:
         """What on screen agrees that `box` (scope pixels) is the described control: the name of the control

@@ -400,6 +400,16 @@ class Gateway:
         for t in list(self._learners):
             t.join(timeout)
 
+    def keep_hint(self, lease_id: str, row: dict) -> None:
+        """How one of a profile's hints fared in this lease (learn.py, hint rows): folded into the app's
+        profile with the lease's action rows when it ends."""
+        lease = self.leases.active()
+        if lease is None or lease.id != lease_id:
+            return
+        rows = lease.meta.setdefault("rows", [])
+        if len(rows) < learn.MAX_ROWS:
+            rows.append({**row, "event": "hint"})
+
     def _keep_row(self, lease, row: dict) -> None:
         if lease is not None and row.get("action") in learn.ACTING:
             rows = lease.meta.setdefault("rows", [])

@@ -23,7 +23,8 @@ def now() -> str:
 
 
 def new_profile(app: AppIdentity) -> Profile:
-    fields = {"exe": enc(app.exe), "rev": "0"}
+    fields = {"exe": enc(app.exe)} if app.exe else {}  # a field's value can't be empty
+    fields["rev"] = "0"
     if app.version:
         fields["ver"] = enc(app.version)
     return Profile(Item("app", app.id, fields=fields, text=app.name[:300] or None))

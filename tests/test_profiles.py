@@ -87,3 +87,14 @@ def test_cli_profile_list_and_show(tmp_path, monkeypatch, capsys):
     assert main(["profile", "show", "notepad"]) == 0
     assert capsys.readouterr().out.startswith("#osp 1 made_with=Overshoulder/")
     assert main(["profile", "show", "gimp"]) == 2
+
+
+def test_an_app_with_no_process_name_still_gets_a_profile(tmp_path):
+    from overshoulder.appid import AppIdentity
+    from overshoulder.profiles import ProfileStore, new_profile
+
+    store = ProfileStore(tmp_path)
+    prof = new_profile(AppIdentity("acme.painter", "Painter", ""))
+    assert "exe" not in prof.app.fields
+    store.save(prof, "first")
+    assert store.load("acme.painter").revision == 1

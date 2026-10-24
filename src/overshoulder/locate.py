@@ -39,6 +39,27 @@ SETTLED_SHARE = 0.001
 SETTLE_TRIES = 4
 SETTLE_S = 0.05
 _REF = re.compile(r"[tv]\d+")
+# dhash: two pictures whose hashes differ in at most this many of 64 bits count as the same picture.
+DHASH_NEAR = 6
+
+
+def dhash(img: Image.Image) -> str:
+    """A 64-bit difference hash of a picture: in a 9x8 grey copy, whether each pixel is brighter than the
+    one to its right. Close pictures give close hashes, and nothing the picture shows can be read back
+    from one, so a profile can keep it."""
+    g = img.convert("L").resize((9, 8), Image.Resampling.LANCZOS).tobytes()
+    bits = 0
+    for row in range(8):
+        for col in range(8):
+            bits = (bits << 1) | (g[row * 9 + col] > g[row * 9 + col + 1])
+    return f"{bits:016x}"
+
+
+def same_picture(a: str, b: str) -> bool:
+    try:
+        return bin(int(a, 16) ^ int(b, 16)).count("1") <= DHASH_NEAR
+    except ValueError:
+        return False
 
 
 def is_found_ref(ref: str | None) -> bool:

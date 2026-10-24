@@ -7,6 +7,12 @@ the app refuses, which controls asked the person), never the person's content:
 - a name is kept only after two sessions saw the same one, never when it looks like a file, path, address
   or number, and never for the kinds of control whose names are content (tabs, list, tree and data items,
   documents, text, links, images, windows), whose automation ids are dropped too.
+
+Hint rows say how the profile's own hints fared in the session (service.py): whether a control found by
+its stored automation id was there (anchor), and where a vision model saw a described control that the
+screen confirmed (paint: its box, the window's size and a 64-bit hash of the box's pixels, never the
+pixels; the description is kept as text only after two sessions, like a name). A hint that misses
+STALE_MISSES times running is no longer tried.
 """
 
 from __future__ import annotations
@@ -34,6 +40,8 @@ LOOK_TYPES = frozenset({"button", "splitbutton", "menuitem", "checkbox", "radiob
                         "slider", "spinner", "document", "tabitem", "listitem", "treeitem", "dataitem",
                         "hyperlink"})
 MAX_LOOK = 300
+STALE_MISSES = 3
+_BOX = re.compile(r"\d{1,5}(,\d{1,5}){3}")
 
 
 def is_private(name: str, control_type: str) -> bool:
@@ -43,6 +51,16 @@ def is_private(name: str, control_type: str) -> bool:
 
 def name_hash(app_id: str, control_type: str, name: str) -> str:
     return hashlib.sha256(f"{app_id}\0{control_type}\0{name}".encode()).hexdigest()[:12]
+
+
+def paint_id(app_id: str, view: str, description: str) -> str:
+    """A painted control's id: a hash of what the agent called it, so the same words find it again."""
+    words = " ".join(description.lower().split())
+    return "p-" + hashlib.sha256(f"{app_id}\0{view}\0{words}".encode()).hexdigest()[:12]
+
+
+def stale(item: Item) -> bool:
+    return item.num("miss") >= STALE_MISSES
 
 
 def _bump(item: Item, key: str, by: int = 1) -> None:
@@ -82,7 +100,7 @@ class _Session:
         self.version = enc(version) if version else ""
         self.src = src  # "use" (what actions showed) or "look" (what a read-only look saw)
         self.touched: set[str] = set()
-        self.stats = {"actions": 0, "controls": 0, "ways": 0, "keys": 0, "new": 0, "dropped": 0}
+        self.stats = {"actions": 0, "controls": 0, "ways": 0, "keys": 0, "hints": 0, "new": 0, "dropped": 0}
 
     def _source(self, item: Item) -> None:
         item.fields["src"] = "+".join(sorted({*item.fields.get("src", "").split("+"), self.src} - {""}))
@@ -213,6 +231,60 @@ class _Session:
         if count:
             _bump(item, "n")
 
+    def hint(self, r: dict) -> None:
+        """An anchor or a vision box: how one of the profile's hints fared, or a box worth keeping."""
+        kind, hit = r.get("hint"), r.get("hit")
+        if kind == "anchor":
+            item = self.prof.get("ctl", str(r.get("ctl") or ""))
+        elif kind == "paint":
+            view, desc = r.get("view") or "main", " ".join(str(r.get("desc") or "").split())
+            if not desc or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,39}", view):
+                return
+            item = self.prof.get("paint", paint_id(self.prof.app_id, view, desc))
+            if hit is None:
+                item = self._painted(item, view, desc, r)
+            if item is not None:
+                self._words_seen(item, desc)
+        else:
+            return
+        if item is None:
+            return
+        self.stats["hints"] += 1
+        if hit is None or hit:
+            item.fields.pop("miss", None)
+            if hit:
+                _bump(item, "hit")
+        else:
+            _bump(item, "miss")
+
+    def _painted(self, item: Item | None, view: str, desc: str, r: dict) -> Item | None:
+        """A box a vision model drew around desc that the screen confirmed: kept to be checked first next time."""
+        box, size, dh = r.get("box"), r.get("size"), str(r.get("dh") or "")
+        if not (isinstance(box, list) and len(box) == 4 and isinstance(size, list) and len(size) == 2
+                and re.fullmatch(r"[0-9a-f]{16}", dh)):
+            return None
+        box_s, size_s = ",".join(str(int(v)) for v in box), ",".join(str(int(v)) for v in size)
+        if not _BOX.fullmatch(box_s) or not re.fullmatch(r"\d{1,5},\d{1,5}", size_s):
+            return None
+        if item is None:
+            item = self._put(Item("paint", paint_id(self.prof.app_id, view, desc), [view], {}))
+            if item is None:
+                return None
+            self.stats["new"] += 1
+        self._source(item)
+        item.fields.update(box=box_s, sz=size_s, dh=dh)
+        if self.version:
+            item.fields["ver"] = self.version
+        return item
+
+    def _words_seen(self, item: Item, desc: str) -> None:
+        """A description becomes a painted control's text in the second session that uses the same words."""
+        if item.fields.get("last") != self.sess:
+            _bump(item, "ses")
+            item.fields["last"] = self.sess
+        if item.num("ses") >= 2 and item.text is None and not is_private(desc, "Button"):
+            item.text = desc[:MAX_TEXT]
+
     def row(self, r: dict) -> None:
         action = r.get("action")
         ok = bool(r.get("ok"))
@@ -258,21 +330,24 @@ def apply(prof: Profile, lease_id: str, rows: list[dict], version: str = "") -> 
     """Fold one lease's action rows for this profile's app into it. Rows of other apps are skipped."""
     s = _Session(prof, lease_id, version)
     for r in rows:
-        if r.get("event") == "action" and r.get("action") in ACTING \
-                and ((r.get("scope") or {}).get("app") or {}).get("id") == prof.app_id:
+        if ((r.get("scope") or {}).get("app") or {}).get("id") != prof.app_id:
+            continue
+        if r.get("event") == "action" and r.get("action") in ACTING:
             s.row(r)
+        elif r.get("event") == "hint":
+            s.hint(r)
     if version:
         prof.app.fields["ver"] = enc(version)
     return s.stats
 
 
 def by_app(rows: list[dict]) -> dict[str, AppIdentity]:
-    """The apps a lease's rows act on (a lease can be re-scoped from one app to another)."""
+    """The apps a lease's rows act on or hint about (a lease can be re-scoped from one app to another)."""
     out: dict[str, AppIdentity] = {}
     for r in rows:
         scope = r.get("scope") or {}
         app = scope.get("app") or {}
-        if r.get("event") == "action" and r.get("action") in ACTING and app.get("id"):
+        if app.get("id") and (r.get("event") == "hint" or (r.get("event") == "action" and r.get("action") in ACTING)):
             out[app["id"]] = AppIdentity(app["id"], app.get("name") or app["id"], scope.get("process") or "",
                                          version=app.get("version") or "")
     return out
@@ -311,7 +386,7 @@ def revise(store: ProfileStore, ident: AppIdentity, change, summary) -> dict:
         try:
             prof = store.load_or_new(ident)
             stats = change(prof)
-            if not (stats.get("actions") or stats.get("controls") or stats.get("keys")):
+            if not (stats.get("actions") or stats.get("controls") or stats.get("keys") or stats.get("hints")):
                 return stats
             store.save(prof, summary(stats))
             return {**stats, "rev": prof.revision}
@@ -329,7 +404,8 @@ def learn_lease(store: ProfileStore, lease_id: str, rows: list[dict]) -> dict:
     out = {}
     for app_id, ident in by_app(rows).items():
         res = revise(store, ident, lambda prof, i=ident: apply(prof, lease_id, rows, i.version),
-                     lambda st: f"use: {st['actions']} actions, {st['controls']} controls, {st['new']} new items")
-        if res.get("actions") or "error" in res:
+                     lambda st: f"use: {st['actions']} actions, {st['controls']} controls, {st['new']} new items"
+                                + (f", {st['hints']} hints" if st["hints"] else ""))
+        if res.get("actions") or res.get("hints") or "error" in res:
             out[app_id] = res
     return out
