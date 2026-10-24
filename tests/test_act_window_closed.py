@@ -41,7 +41,7 @@ def svc(tmp_path, monkeypatch):
             return {"method": "posted_keys", "background": True}
 
     class Ladder:
-        def __init__(self, scope_, p, method):
+        def __init__(self, scope_, p, method, order=None):
             pass
 
         def hotkey(self, combo):

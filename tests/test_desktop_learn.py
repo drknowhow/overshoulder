@@ -61,3 +61,44 @@ def test_two_notepad_sessions_revise_its_profile(tmp_path):
         assert (tmp_path / "profiles" / "history" / NOTEPAD / "rev-1.osp").exists()
     finally:
         bghelpers.close_discarding(win.hwnd)
+
+
+def test_a_profile_sends_typing_straight_to_the_method_that_worked(tmp_path):
+    """take_scope brings the profile's brief, and typing tries first what worked in this app before."""
+    import bghelpers
+    from test_desktop_service import _focus, _one, _wait_window
+
+    from overshoulder.gateway.core import gateway_for_tests
+    from overshoulder.osp import Item
+    from overshoulder.service import Service
+
+    s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
+    token = s.gw.registry.add("hinted")
+    path = tmp_path / "pets_overshoulder_hint.txt"
+    path.write_text("", encoding="utf-8")
+    bghelpers.wait_no_window("Notepad")
+    subprocess.Popen(["notepad.exe", str(path)])
+    win = _wait_window("pets_overshoulder_hint")
+    time.sleep(1.5)
+    methods = []
+    try:
+        _focus(win.hwnd)
+        for n in (1, 2):
+            out = s.acquire(token, f"window:{win.hwnd}")
+            lease = out["lease_id"]
+            if n == 2:
+                assert "way type@document.posted_chars ok=2 fail=0" in out["profile"]["brief"]
+            doc = _one(s.find(token, lease, control_type="Document"))
+            res = s.act(token, lease, "type", ref=doc, text=f" hello there {n}", expect={"text_contains": "hello"})
+            assert res["ok"], res
+            methods.append([a["method"] for a in res["result"]["attempts"]])
+            s.release(token, lease)
+            s.gw.wait_learning()
+            if n == 1:  # what an app that refuses EM_REPLACESEL would have taught it
+                prof = s.gw.profiles.load(NOTEPAD)
+                prof.put(Item("way", "type@document.replace_selection", fields={"ok": "0", "fail": "2"}))
+                prof.put(Item("way", "type@document.posted_chars", fields={"ok": "2", "fail": "0"}))
+                s.gw.profiles.save(prof, "seeded for the test")
+    finally:
+        bghelpers.close_discarding(win.hwnd)
+    assert methods == [["replace_selection"], ["posted_chars"]]

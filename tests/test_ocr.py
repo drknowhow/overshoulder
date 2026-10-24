@@ -135,7 +135,7 @@ def svc(tmp_path, monkeypatch):
             return {"method": "posted_click", "background": True}
 
     class Ladder:
-        def __init__(self, scope_, p, method):
+        def __init__(self, scope_, p, method, order=None):
             pass
 
         def press(self, el, t, button="left", count=1):

@@ -35,7 +35,7 @@ def painting(svc, monkeypatch):  # noqa: F811
     paint = {"rects": [(10, 10, 50, 26)], "fill": "black"}
 
     class Ladder:
-        def __init__(self, scope_, p, method):
+        def __init__(self, scope_, p, method, order=None):
             pass
 
         def press(self, el, t, button="left", count=1):

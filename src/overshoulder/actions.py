@@ -22,6 +22,10 @@ The method argument picks how far down the ladder an action may go:
 Real input is never used to retry something that may already have happened (a hotkey, or a click
 whose effect is just not visible), so nothing is done twice.
 
+An app's profile may change the order of the background rungs (order=, from hints.order): a method that
+keeps failing in that app is tried after the others. It never adds, removes or skips a rung, and real
+input stays last.
+
 Every rung asks the gateway first: p["background_target"](hwnd) before messaging a window, and
 p["borrow"]() around any use of the person's mouse or keyboard. A borrow follows their input mode: it
 waits until they are idle, brings the window forward, and afterwards puts their cursor and foreground
@@ -72,12 +76,13 @@ class Outcome:
 
 
 class Ladder:
-    def __init__(self, scope, p: dict, method: str = "auto"):
+    def __init__(self, scope, p: dict, method: str = "auto", order=None):
         if method not in METHODS:
             raise ValueError(f"method must be one of {METHODS}")
         self.scope = scope
         self.p = p
         self.method = method
+        self.order = order  # [rung names] -> the same names, maybe reordered; None keeps the ladder's order
         self.out = Outcome()
 
     # -- shared pieces ---------------------------------------------------------------------------
@@ -106,6 +111,16 @@ class Ladder:
     def _borrowed(self, b, name: str) -> None:
         self._attempt(name, True)
         self.out.extra["borrow"] = b.report
+
+    def _ordered(self, rungs: list[str]) -> list[str]:
+        """The rungs in the order the profile suggests, or as given if the suggestion is not a reordering."""
+        if self.order is None or len(rungs) < 2:
+            return rungs
+        try:
+            got = list(self.order(list(rungs)))
+        except Exception:  # a hint never fails an action
+            return rungs
+        return got if sorted(got) == sorted(rungs) else rungs
 
     def _done(self, name: str, background: bool = True) -> Outcome:
         self.out.method, self.out.background = name, background
@@ -165,19 +180,28 @@ class Ladder:
     def press(self, el, target, button: str = "left", count: int = 1) -> Outcome:
         """click / double_click / right_click."""
         kind = (target.control_type or "").lower()
-        if button == "left" and count == 1 and (done := self._button_message(el)) is not None:
-            return done
-        if self.method != "input" and el is not None and button == "left" and count == 1 and kind in PRESSABLE:
-            for name, fn in (("uia_invoke", uia.invoke), ("uia_toggle", uia.toggle), ("uia_select", uia.select)):
-                try:
-                    self.p["abort"]()
-                    self._guarded(lambda fn=fn: fn(el))
-                    self._attempt(name, True)
-                    return self._done(name)
-                except Exception as e:  # pattern not supported: next rung
-                    if getattr(e, "code", None) in ("lease_revoked", "paused", "needs_real_input"):
-                        raise
-                    self._attempt(name, False, type(e).__name__)
+        rungs = []
+        if button == "left" and count == 1 and self.method != "input":
+            native = self._native(el)
+            if native and w.class_name(native) == "Button":
+                rungs.append("button_message")
+            if el is not None and kind in PRESSABLE:
+                rungs += ["uia_invoke", "uia_toggle", "uia_select"]
+        patterns = {"uia_invoke": uia.invoke, "uia_toggle": uia.toggle, "uia_select": uia.select}
+        for name in self._ordered(rungs):
+            if name == "button_message":
+                if (done := self._button_message(el)) is not None:
+                    return done
+                continue
+            try:
+                self.p["abort"]()
+                self._guarded(lambda fn=patterns[name]: fn(el))
+                self._attempt(name, True)
+                return self._done(name)
+            except Exception as e:  # pattern not supported: next rung
+                if getattr(e, "code", None) in ("lease_revoked", "paused", "needs_real_input"):
+                    raise
+                self._attempt(name, False, type(e).__name__)
         x, y = target.point()
         if self.method != "input":
             top = self.top_at(x, y)
@@ -281,30 +305,26 @@ class Ladder:
             self._no_background_left("Chromium/Electron apps do not reliably accept posted typing in the background")
             return self._real_type(el, text)
         before = self._read(el, hwnd)
-        if bg.is_edit_class(hwnd) and "\n" not in text and "\r" not in text:
-            # One message inserts the whole text at the caret, so no character can arrive out of order
-            # (posted characters were seen to swap in Windows 11 Notepad: "{x}" read back as "x{}").
-            # Line breaks go as posted characters instead, where Enter keeps its meaning.
+        # One message (replace_selection) inserts the whole text at the caret, so no character can arrive
+        # out of order (posted characters were seen to swap in Windows 11 Notepad: "{x}" read back as
+        # "x{}"). Line breaks go as posted characters instead, where Enter keeps its meaning.
+        one_message = bg.is_edit_class(hwnd) and "\n" not in text and "\r" not in text
+        sends = {"replace_selection": lambda: bg.replace_selection(hwnd, text),
+                 "posted_chars": lambda: bg.post_text(hwnd, text, abort=self.p["abort"])}
+        why = "the app did not accept posted characters"
+        for name in self._ordered(["replace_selection", "posted_chars"] if one_message else ["posted_chars"]):
             try:
-                self._guarded(lambda: bg.replace_selection(hwnd, text))
-                landed = self._wait_landed(el, hwnd, before, text)
-                self._attempt("replace_selection", landed is not False, _landed_detail(landed))
-                if landed is not False:
-                    return self._typed("replace_selection", landed)
+                self._guarded(sends[name])
             except bg.BackgroundUnsupported as e:
-                self._attempt("replace_selection", False, str(e))
-        # Below here read-back has proved nothing arrived yet, so no method can type the text twice.
-        try:
-            self._guarded(lambda: bg.post_text(hwnd, text, abort=self.p["abort"]))
-        except bg.BackgroundUnsupported as e:
-            self._attempt("posted_chars", False, str(e))
-            self._no_background_left(str(e))
-            return self._real_type(el, text)
-        landed = self._wait_landed(el, hwnd, before, text)
-        self._attempt("posted_chars", landed is not False, _landed_detail(landed))
-        if landed is not False:
-            return self._typed("posted_chars", landed)
-        self._no_background_left("the app did not accept posted characters")
+                self._attempt(name, False, str(e))
+                why = str(e)
+                continue
+            landed = self._wait_landed(el, hwnd, before, text)
+            self._attempt(name, landed is not False, _landed_detail(landed))
+            if landed is not False:
+                return self._typed(name, landed)
+            # Read-back has proved nothing arrived, so the next method cannot type the text twice.
+        self._no_background_left(why)
         return self._real_type(el, text)
 
     def _typed(self, name: str, landed) -> Outcome:
@@ -330,20 +350,25 @@ class Ladder:
 
     def set_value(self, el, value: str) -> Outcome:
         native = self._native(el)
-        if native and bg.is_edit_class(native):
-            self.p["background_target"](native, typing=True)
+        edit = bool(native) and bg.is_edit_class(native)
+        for name in self._ordered(["set_text_message", "uia_value"] if edit else ["uia_value"]):
+            if name == "set_text_message":
+                self.p["background_target"](native, typing=True)
+                try:
+                    self._guarded(lambda: bg.set_text(native, value))
+                    self._attempt(name, True)
+                    return self._done(name)
+                except bg.BackgroundUnsupported as e:
+                    self._attempt(name, False, str(e))
+                continue
             try:
-                self._guarded(lambda: bg.set_text(native, value))
-                self._attempt("set_text_message", True)
-                return self._done("set_text_message")
-            except bg.BackgroundUnsupported as e:
-                self._attempt("set_text_message", False, str(e))
-        try:
-            self._guarded(lambda: uia.set_value(el, value))
-            self._attempt("uia_value", True)
-            return self._done("uia_value")
-        except Exception as e:
-            self._attempt("uia_value", False, type(e).__name__)
+                self._guarded(lambda: uia.set_value(el, value))
+                self._attempt(name, True)
+                return self._done(name)
+            except Exception as e:
+                if getattr(e, "code", None) in ("lease_revoked", "paused", "needs_real_input"):
+                    raise
+                self._attempt(name, False, type(e).__name__)
         raise NeedsRealInput("this control takes no value through UI Automation or edit messages; "
                              "focus it and use type instead")
 

@@ -59,7 +59,13 @@ def _free_id(prof: Profile, kind: str, base: str) -> str:
     return f"{base}-{n}"
 
 
-def _where(t: dict | None) -> str:
+def way_id(action: str, where: str, method: str) -> str:
+    """A way item's id: <action>@<where>.<method>, e.g. type@document.replace_selection."""
+    return f"{action}@{where}.{slug(method, 24).replace('-', '_') or 'any'}"
+
+
+def where_of(t: dict | None) -> str:
+    """What an action was aimed at, as way ids name it: a control type, focus, point, text or vision."""
     if not t:
         return "focus"
     if t.get("kind") == "element":
@@ -171,7 +177,7 @@ class _Session:
                 self._put(item)
 
     def way(self, action: str, where: str, method: str, ok: bool, why: str = "", ms: int | None = None) -> None:
-        wid = f"{action}@{where}.{slug(method, 24).replace('-', '_') or 'any'}"
+        wid = way_id(action, where, method)
         item = self.prof.get("way", wid)
         if item is None:
             item = self._put(Item("way", wid, fields={"ok": "0", "fail": "0", "src": "use"}))
@@ -232,7 +238,7 @@ class _Session:
                 _bump(ctl, "fail")
         if code == "approval_denied":
             return
-        where = _where(t)
+        where = where_of(t)
         if ok:
             method = (r.get("verify") or {}).get("method") or ""
             for a in r.get("attempts") or []:
