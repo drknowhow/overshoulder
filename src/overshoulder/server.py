@@ -39,7 +39,11 @@ DEFAULT_PORT = 47621
 INSTRUCTIONS = """Overshoulder lets you see and operate desktop apps on this Windows PC, one scope at a time.
 1. windows() lists candidate windows; take_scope("window:<hwnd>") leases one (or "screen:1"/"screen:all",
    which a person must approve). Only one agent drives at a time; if busy you get your queue position.
-2. observe() returns the scope's UI elements with refs (e1, e2...). find() filters them.
+2. observe() returns the scope's UI elements with refs (e1, e2...). find() filters them. Apps that draw
+   their own buttons (games, canvases, some older apps) show no elements for them: find(text="Save")
+   reads the screen with OCR and returns t-refs (t1, t2...) with source "ocr", and observe(text=true)
+   lists all the text it reads. A t-ref takes click, double_click, right_click and drag, and goes stale
+   when the text under it changes.
 3. act(action, ref=... | x=..,y=..) runs one action and verifies it. Prefer refs and invoke/set_value
    over coordinates. Actions: """ + ", ".join(ACTIONS) + """. A drag also takes the drop point:
    to_ref or to_x/to_y.
@@ -195,20 +199,25 @@ class Daemon:
 
         @mcp.tool()
         async def observe(ctx: Context, max_nodes: int = 300, only_named: bool = True,
-                          screenshot: bool = False) -> list:
-            """Describe the scope: bounds and UI elements with refs. screenshot=true also returns an image."""
+                          screenshot: bool = False, text: bool = False) -> list:
+            """Describe the scope: bounds and UI elements with refs. screenshot=true also returns an image.
+            text=true also reads the text on screen with OCR and lists it under "texts" as t-refs."""
             out = await authed(ctx, lambda token: d.svc.observe(token, d.lease_for(token), max_nodes,
-                                                                only_named, screenshot))
+                                                                only_named, screenshot, text))
             if isinstance(out, dict) and out.get("screenshot"):
                 return [json.dumps(out), Image(path=out["screenshot"])]
             return [json.dumps(out)]
 
         @mcp.tool()
         async def find(ctx: Context, name: str | None = None, name_re: str | None = None,
-                       control_type: str | None = None, auto_id: str | None = None) -> dict:
-            """Find elements in scope by exact name, name regex, control type and/or automation id."""
+                       control_type: str | None = None, auto_id: str | None = None,
+                       text: str | None = None) -> dict:
+            """Find elements in scope by exact name, name regex, control type and/or automation id.
+            text="Save" instead reads the screen with OCR and returns where those words are as t-refs
+            (source "ocr"), for buttons an app draws itself. A find by name alone that matches no element
+            looks for the name on screen the same way."""
             return await authed(ctx, lambda token: {"elements": d.svc.find(
-                token, d.lease_for(token), name, name_re, control_type, auto_id)})
+                token, d.lease_for(token), name, name_re, control_type, auto_id, text=text)})
 
         @mcp.tool()
         async def read(ctx: Context, ref: str) -> dict:

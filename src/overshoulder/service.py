@@ -11,15 +11,16 @@ import threading
 import time
 from pathlib import Path
 
+from overshoulder import locate
 from overshoulder import scope as sc
 from overshoulder.actions import Ladder
-from overshoulder.driver import capture, uia
+from overshoulder.driver import capture, ocr, uia
 from overshoulder.driver import windows as w
 from overshoulder.driver.display import enable_dpi_awareness
 from overshoulder.driver.windows import Rect
 from overshoulder.gateway.clients import default_home
 from overshoulder.gateway.core import Gateway, Target
-from overshoulder.gateway.errors import GatewayError
+from overshoulder.gateway.errors import GatewayError, TargetStale
 from overshoulder.gateway.limits import black_out, hidden_rects
 
 ACTIONS = ("click", "double_click", "right_click", "drag", "invoke", "toggle", "select", "set_value", "type",
@@ -38,6 +39,7 @@ class Service:
         enable_dpi_awareness()
         self.gw = gateway or Gateway()
         self.cache = uia.ElementCache()
+        self.found = locate.FoundCache()  # t-refs: text read off the scope's pixels
         self._cache_lease: str | None = None
         self.shots_dir = shots_dir or default_home() / "shots"
         self.recordings_dir = self.shots_dir.parent / "recordings"
@@ -61,6 +63,7 @@ class Service:
         out = self.gw.acquire(token, scope, ttl_s, log_text=log_text, limits=limits)
         if out["lease_id"] != self._cache_lease:
             self.cache.clear()
+            self.found.clear()
             self._cache_lease = out["lease_id"]
         return out
 
@@ -71,6 +74,7 @@ class Service:
         finished = self.stop_recordings_for(lease_id)
         self.gw.release(token, lease_id)
         self.cache.clear()
+        self.found.clear()
         return {"released": True, **({"recording": finished} if finished else {})}
 
     def status(self) -> dict:
@@ -85,7 +89,8 @@ class Service:
     # -- observation ---------------------------------------------------------------------------
 
     def observe(self, token: str, lease_id: str, max_nodes: int = 300, only_named: bool = True,
-                screenshot: bool = False) -> dict:
+                screenshot: bool = False, text: bool = False) -> dict:
+        """text=True also reads the text on the scope's pixels with OCR, as t-refs under "texts"."""
         def perform(_t, p):
             scope = self._scope(lease_id)
             out: dict = {"scope": scope.describe(), "bounds": _rect_list(scope.bounds())}
@@ -102,31 +107,44 @@ class Service:
                                                       only_named=only_named))
             out["elements"] = elements[:max_nodes]
             out["truncated"] = len(elements) > max_nodes
+            if text:
+                out["texts"] = self._read_text(scope)
             if screenshot:
                 out["screenshot"] = str(self._shot(scope, "observe"))
             return out
 
         return self.gw.run(token, lease_id, "observe", perform, read_only=True,
-                           params={"max_nodes": max_nodes})["result"]
+                           params={"max_nodes": max_nodes, "text": text})["result"]
 
     def find(self, token: str, lease_id: str, name: str | None = None, name_re: str | None = None,
              control_type: str | None = None, auto_id: str | None = None,
-             max_nodes: int = 2000) -> list[dict]:
+             max_nodes: int = 2000, text: str | None = None) -> list[dict]:
+        """Elements by name, name regex, control type and/or automation id. text= instead reads the
+        scope's pixels with OCR for those words, for apps that paint their own controls; its hits are
+        t-refs with source "ocr". A find by name alone that UI Automation has no match for also looks
+        for the name on screen that way."""
         def perform(_t, p):
             scope = self._scope(lease_id)
+            if text is not None:
+                return self._read_text(scope, text)
             roots = uia.roots_for_window(scope.binding.hwnd) if scope.kind == "window" else \
                 [h for h in [w.foreground()] if h and scope.owns_window(h)]
             hits = []
             for root in roots:
                 els = uia.walk(self.cache, root, max_nodes=max_nodes)
                 hits += uia.describe_all(uia.find(els, name, name_re, control_type, auto_id))
+            if not hits and name and not (name_re or control_type or auto_id) and self._ocr_unavailable() is None:
+                hits = self._read_text(scope, name)
             return hits
 
         return self.gw.run(token, lease_id, "find", perform, read_only=True,
                            params={"name": name, "name_re": name_re, "control_type": control_type,
-                                   "auto_id": auto_id})["result"]
+                                   "auto_id": auto_id, "text": text})["result"]
 
     def read(self, token: str, lease_id: str, ref: str) -> dict:
+        if locate.is_found_ref(ref):
+            raise ValueError(f"{ref} is text found on screen, not a control; find(text=...) again to see "
+                             "what is there now")
         target = self._element_target(ref)
         return self.gw.run(token, lease_id, "read_value",
                            lambda t, p: uia.read(self.cache.get(ref)), target=target, read_only=True,
@@ -286,6 +304,11 @@ class Service:
             raise ValueError(f"unknown action {action!r}; one of {ACTIONS}")
         if method not in METHODS:
             raise ValueError(f"method must be one of {METHODS}")
+        for r in (ref, to_ref):
+            if locate.is_found_ref(r) and action not in locate.MOUSE_ACTIONS:
+                raise ValueError(f"{r} is text found on screen; it takes "
+                                 f"{', '.join(sorted(locate.MOUSE_ACTIONS))}. To type there, click it first, "
+                                 "then type without a ref")
         target = self._element_target(ref) if ref else (
             Target("point", x=int(x), y=int(y)) if x is not None and y is not None else None)
         to_target = None
@@ -351,11 +374,12 @@ class Service:
                         **({"expect_failed": ["the scope's window closed"]} if expect else {})}
             pixels = capture.changed_fraction(before["img"], after) if before["img"] and after else 0.0
             verdict = {"ok": True, "changed": pixels > CHANGE_EPSILON, "pixels_changed": round(pixels, 5), **ran}
-            if action == "drag" and ref and t is not None and t.rect is not None:
-                st = uia.element_state(self.cache.get(ref))
-                verdict["moved"] = st is None or st["rect"] != t.rect  # gone counts: it may have been dropped in
-            if ref and uia.element_state(self.cache.get(ref)) is not None:
-                readback = uia.read(self.cache.get(ref))
+            el_ref = None if locate.is_found_ref(ref) else ref  # a t-ref has no element to read back
+            if action == "drag" and el_ref and t is not None and t.rect is not None:
+                state = uia.element_state(self.cache.get(el_ref))
+                verdict["moved"] = state is None or state["rect"] != t.rect  # gone counts: it may have been dropped in
+            if el_ref and uia.element_state(self.cache.get(el_ref)) is not None:
+                readback = uia.read(self.cache.get(el_ref))
                 verdict["readback"] = {k: (v[:200] if isinstance(v, str) else v) for k, v in readback.items()}
             if expect:
                 verdict.update(self._check_expect(expect, ref, lease_id, verdict))
@@ -367,6 +391,8 @@ class Service:
     # -- helpers -------------------------------------------------------------------------------
 
     def _element_target(self, ref: str) -> Target:
+        if locate.is_found_ref(ref):
+            return self._found_target(ref)
         el = self.cache.get(ref)
         if el is None:
             raise GatewayError(f"unknown ref {ref!r}; observe or find first")
@@ -383,6 +409,44 @@ class Service:
         if t is None:
             raise GatewayError(f"element {ref} no longer exists; observe again")
         return Target(**{**t.__dict__, "revalidate": fresh})
+
+    def _found_target(self, ref: str) -> Target:
+        """A t-ref as a target, checked against the scope's pixels now (locate.still_there)."""
+        f = self.found.get(ref)
+        if f is None:
+            raise GatewayError(f"unknown ref {ref!r}; find it first")
+        lease_id = self._cache_lease
+
+        def fresh() -> Target:
+            scope = self._scope(lease_id)
+            if scope is None:
+                raise TargetStale(f"{ref} was found under a scope that has ended; find it again")
+            img, origin = locate.scope_pixels(scope)
+            if not locate.still_there(f, img):
+                raise TargetStale(f"the text {f.text!r} at {ref} has changed or moved; find it again")
+            r = f.rel
+            return Target("text", rect=Rect(origin.left + r.left, origin.top + r.top, origin.left + r.right,
+                                            origin.top + r.bottom), name=f.text, hwnd=f.hwnd, ref=ref)
+
+        return Target(**{**fresh().__dict__, "revalidate": fresh})
+
+    def _ocr_unavailable(self) -> str | None:
+        """Why text on screen can't be read now, or None."""
+        if not getattr(self.gw.settings_source(), "ocr_enabled", True):
+            return "reading text on screen is turned off on the settings page"
+        if not ocr.available():
+            return "Windows OCR is not available on this PC (no language with OCR is installed)"
+        return None
+
+    def _read_text(self, scope, query: str | None = None) -> list[dict]:
+        """The text on the scope's pixels as t-refs: every phrase, or the runs of words that read query."""
+        if (why := self._ocr_unavailable()) is not None:
+            raise GatewayError(why)
+        img, origin = locate.scope_pixels(scope)
+        passes = ocr.scan(img)
+        hits = ocr.merged(passes) if query is None else ocr.find(passes, query)
+        return [self.found.add(ph.text, ph.box, locate.window_of(scope, origin, ph.box), img).describe(origin)
+                for ph in hits]
 
     @staticmethod
     def _snap(scope):

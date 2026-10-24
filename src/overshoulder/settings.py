@@ -41,6 +41,8 @@ class Settings:
     wait_processes: list[str] = field(default_factory=list)
     input_mode: str = DEFAULT_INPUT_MODE
     borrow_idle_s: int = 5
+    # Agents may read text on screen with Windows OCR to find controls UI Automation can't see.
+    ocr_enabled: bool = True
 
     def clamp(self) -> Settings:
         self.poll_interval_ms = max(100, min(int(self.poll_interval_ms), 10_000))

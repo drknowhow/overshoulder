@@ -15,6 +15,14 @@ dependencies = [
   "mss>=10",
   "pillow>=10",
   "mcp>=2.3,<3",
+  # Windows.Media.Ocr, for finding text in apps that paint their own controls (driver/ocr.py).
+  "winrt-runtime==3.2.1; sys_platform == 'win32'",
+  "winrt-Windows.Foundation==3.2.1; sys_platform == 'win32'",
+  "winrt-Windows.Foundation.Collections==3.2.1; sys_platform == 'win32'",
+  "winrt-Windows.Globalization==3.2.1; sys_platform == 'win32'",
+  "winrt-Windows.Graphics.Imaging==3.2.1; sys_platform == 'win32'",
+  "winrt-Windows.Media.Ocr==3.2.1; sys_platform == 'win32'",
+  "winrt-Windows.Storage.Streams==3.2.1; sys_platform == 'win32'",
 ]
 
 [project.scripts]

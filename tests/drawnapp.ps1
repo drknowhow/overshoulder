@@ -4,7 +4,8 @@
 # monitor Windows stretches the window, as it does for many older apps. Writes
 # {"ready", "clicked": [], "points": []} once shown, then after every click
 # {"clicked": [names], "points": [[x, y] in the window's own pixels]}. A click on a button also writes
-# "Clicked <name>" in the status line. A green square sits in the bottom-right corner.
+# "Clicked <name>" in the status line. A green square sits in the bottom-right corner. One real WinForms
+# button, Apply, is there too, so UI Automation's box for it can be compared with what OCR reads.
 param([string]$Out, [switch]$Aware)
 
 if ($Aware) {
@@ -63,5 +64,17 @@ $form.Add_MouseClick({
     $form.Invalidate()
     Save
 })
+$apply = New-Object System.Windows.Forms.Button
+$apply.Text = 'Apply'
+$apply.Font = $font
+$apply.Location = New-Object System.Drawing.Point(150, 140)
+$apply.Size = New-Object System.Drawing.Size(110, 40)
+$apply.Add_Click({
+    $script:clicked += 'Apply'
+    $script:status = 'Clicked Apply'
+    $form.Invalidate()
+    Save
+})
+$form.Controls.Add($apply)
 $form.Add_Shown({ Save })
 [System.Windows.Forms.Application]::Run($form)

@@ -94,6 +94,14 @@ PAGE = """<!doctype html>
     <input id="idle" type="number" name="borrow_idle_s" min="1" max="120" value="{borrow_idle_s}"></div>
 </section>
 <section>
+  <h2>Finding controls</h2>
+  <p class="hint">Some apps draw their own buttons, so Windows can't tell an agent what they are. Reading
+  the text on screen lets an agent find a button by its label. The text is read on this PC with the OCR
+  built into Windows, only in the window the agent has been given, and nothing is sent anywhere.</p>
+  <label class="row"><input type="checkbox" name="ocr_enabled" {ocr_enabled}>
+    <span>Let agents read text on screen to find controls</span></label>
+</section>
+<section>
   <h2>Automatic detection</h2>
   <p class="hint">Lets an agent that is waiting on you notice when you have finished, without you typing anything.
   Detection only reads window titles, on-screen controls and files. It never clicks or types.</p>
@@ -218,6 +226,7 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
         form_token=html.escape(form_token),
         input_modes=modes,
         borrow_idle_s=s.borrow_idle_s,
+        ocr_enabled="checked" if s.ocr_enabled else "",
         waits_enabled="checked" if s.waits_enabled else "",
         kinds=kinds,
         poll_interval_ms=s.poll_interval_ms,
@@ -256,6 +265,7 @@ def settings_from_form(form) -> st.Settings:
         wait_processes=[p for p in str(form.get("wait_processes", "")).replace(";", ",").split(",")],
         input_mode=str(form.get("input_mode", st.DEFAULT_INPUT_MODE)),
         borrow_idle_s=num("borrow_idle_s", 5),
+        ocr_enabled=form.get("ocr_enabled") == "on",
     ).clamp()
 
 
