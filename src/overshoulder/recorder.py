@@ -1,7 +1,9 @@
 """Clean recordings of a scope: video without overlays, plus the tracks the renderer needs.
 
 Window scopes are captured with PrintWindow(PW_RENDERFULLCONTENT): only the window's own pixels,
-even when something covers it, so nothing outside the scope can leak into a recording. Screen scopes
+even when something covers it, so nothing outside the scope can leak into a recording. A window that is
+not per-monitor DPI aware is captured at the size it draws at and stretched to its size on screen, as
+DWM shows it. Screen scopes
 grab the monitor rect, with the windows of any program the session may not see blacked out before the
 frame reaches the encoder (gateway.limits). The cursor is not captured; its position is sampled every
 frame into frames.jsonl. The renderer draws every annotation later, and by default it draws the
@@ -25,6 +27,7 @@ import threading
 import time
 from pathlib import Path
 
+from overshoulder.driver import display
 from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
 from overshoulder.gateway.limits import black_out, hidden_rects
@@ -62,11 +65,16 @@ class BITMAPINFOHEADER(ctypes.Structure):
 
 
 def print_window_bgra(hwnd: int) -> tuple[bytes, Rect] | None:
-    """The whole window (GetWindowRect area) as top-down BGRA bytes, or None if it cannot be drawn."""
+    """The whole window (GetWindowRect area) as top-down BGRA bytes, or None if it cannot be drawn.
+
+    PrintWindow gets a window's drawing before DWM stretches it, so a DPI-unaware window on a 125%
+    monitor would fill only the top-left 80% of a bitmap of its screen size. It is drawn at its own size
+    and scaled to the screen size instead, so every caller gets the window as it looks on screen.
+    """
     outer = w.window_rect(hwnd)
-    width, height = outer.width, outer.height
-    if width <= 0 or height <= 0:
+    if outer.width <= 0 or outer.height <= 0:
         return None
+    width, height = drawn_size(outer.width, outer.height, display.window_scale(hwnd))
     wdc = user32.GetWindowDC(hwnd)
     mdc = gdi32.CreateCompatibleDC(wdc)
     bmp = gdi32.CreateCompatibleBitmap(wdc, width, height)
@@ -78,12 +86,28 @@ def print_window_bgra(hwnd: int) -> tuple[bytes, Rect] | None:
         buf = ctypes.create_string_buffer(width * height * 4)
         if not gdi32.GetDIBits(mdc, bmp, 0, height, buf, ctypes.byref(bih), DIB_RGB_COLORS):
             return None
-        return buf.raw, outer
+        return stretch_bgra(buf.raw, (width, height), (outer.width, outer.height)), outer
     finally:
         gdi32.SelectObject(mdc, old)
         gdi32.DeleteObject(bmp)
         gdi32.DeleteDC(mdc)
         user32.ReleaseDC(hwnd, wdc)
+
+
+def drawn_size(width: int, height: int, scale: float) -> tuple[int, int]:
+    """The size a window draws itself at, from its size on screen and display.window_scale."""
+    if abs(scale - 1) < 0.01:
+        return width, height
+    return max(1, round(width / scale)), max(1, round(height / scale))
+
+
+def stretch_bgra(raw: bytes, size: tuple[int, int], to: tuple[int, int]) -> bytes:
+    """A BGRA buffer resized from `size` to `to`, the way DWM stretches a window that is not DPI aware."""
+    if size == to:
+        return raw
+    from PIL import Image
+    img = Image.frombuffer("RGBA", size, raw, "raw", "BGRA", 0, 1).resize(to, Image.Resampling.BILINEAR)
+    return img.tobytes("raw", "BGRA")
 
 
 def crop_bgra(raw: bytes, outer: Rect, inner: Rect) -> tuple[bytes, int, int]:

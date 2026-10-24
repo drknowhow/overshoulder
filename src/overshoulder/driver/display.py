@@ -82,3 +82,27 @@ def monitors() -> list[Monitor]:
 
     user32.EnumDisplayMonitors(None, None, _cb, 0)
     return found
+
+
+_MONITOR_DEFAULTTONEAREST = 2
+
+
+def window_scale(hwnd: int) -> float:
+    """How much DWM stretches a window's own drawing on screen: its monitor's DPI over the DPI it draws at.
+
+    1.0 for a per-monitor aware window. A DPI-unaware window draws at 96 DPI, so on a 125% monitor this
+    is 1.25: the window paints and reads mouse points in its own pixels, which the screen shows 1.25 times
+    larger.
+    """
+    user32 = ctypes.windll.user32
+    user32.GetDpiForWindow.argtypes = [wt.HWND]
+    user32.GetDpiForWindow.restype = wt.UINT
+    user32.MonitorFromWindow.argtypes = [wt.HWND, wt.DWORD]
+    user32.MonitorFromWindow.restype = wt.HMONITOR
+    own = user32.GetDpiForWindow(hwnd)
+    hmon = user32.MonitorFromWindow(hwnd, _MONITOR_DEFAULTTONEAREST)
+    dx, dy = ctypes.c_uint(), ctypes.c_uint()
+    if not own or not hmon or ctypes.windll.shcore.GetDpiForMonitor(
+            hmon, _MDT_EFFECTIVE_DPI, ctypes.byref(dx), ctypes.byref(dy)):
+        return 1.0
+    return dx.value / own
