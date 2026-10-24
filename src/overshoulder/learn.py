@@ -387,7 +387,7 @@ def revise(store: ProfileStore, ident: AppIdentity, change, summary) -> dict:
         try:
             prof = store.load_or_new(ident)
             stats = change(prof)
-            if not any(stats.get(k) for k in ("actions", "controls", "keys", "hints", "notes")):
+            if not any(stats.get(k) for k in ("actions", "controls", "keys", "hints", "notes", "imported")):
                 return stats
             store.save(prof, summary(stats))
             return {**stats, "rev": prof.revision}

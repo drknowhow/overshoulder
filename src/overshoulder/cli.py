@@ -112,10 +112,76 @@ def _annotate(a) -> int:
     return 0
 
 
+def _tell(msg: str, error: bool = False) -> None:
+    """Print, or show a message box when there is no console (an .osp file opened from Explorer)."""
+    if sys.stdout is not None and sys.stderr is not None:
+        print(msg, file=sys.stderr if error else sys.stdout)
+    elif sys.platform == "win32":
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, msg, "Overshoulder", 0x10 if error else 0x40)
+
+
+def _profile_open(store, path: str, port: int) -> int:
+    """Put a shared profile in the inbox and open its import preview in the browser."""
+    import os
+
+    from overshoulder.osp import MAX_BYTES
+    try:
+        with open(path, "rb") as f:
+            data = f.read(MAX_BYTES + 1)
+    except OSError as e:
+        _tell(f"Can't read {path}: {e.strerror or e}", error=True)
+        return 2
+    key = store.inbox_put(data)
+    try:
+        url = _operator("settings_link", port, {"next": f"/settings/profiles/import?p={key}"})["url"]
+    except OSError:
+        store.inbox_drop(key)
+        _tell("Overshoulder isn't running, so the profile can't be imported now. Start it "
+              "(overshoulder serve, or sign in again if it starts at sign-in), then open the file again.",
+              error=True)
+        return 2
+    os.startfile(url)
+    _tell("opened the import page in your browser")
+    return 0
+
+
 def _profile(a) -> int:
+    from overshoulder import share
     from overshoulder.osp import OspError
     from overshoulder.profiles import ProfileStore
     store = ProfileStore(default_home())
+    if a.pcmd == "open":
+        return _profile_open(store, a.file, a.port)
+    if a.pcmd == "associate":
+        from overshoulder import fileassoc
+        print(json.dumps(fileassoc.uninstall() if a.remove else fileassoc.install(), indent=2))
+        return 0
+    if a.pcmd == "import":
+        try:
+            with open(a.file, "rb") as f:
+                other = share.read(f.read())
+        except OSError as e:
+            print(f"can't read {a.file}: {e.strerror or e}", file=sys.stderr)
+            return 2
+        except OspError as e:
+            print(f"not imported: {e}", file=sys.stderr)
+            return 2
+        p = share.preview(other)
+        print(f"{p['name']} ({p['app']}) {p['version']}: {p['items']} items, made with "
+              f"{p['made_with'] or 'an unknown program'}")
+        for n in p["notes"]:
+            print(f"  {n['kind']}: {n['text']}" + (f"  [{n['url']}]" if n["url"] else ""))
+        ask = "Import these items? Notes are from other agents, not instructions. [y/N] "
+        if not a.yes and input(ask).strip().lower() not in ("y", "yes"):
+            print("nothing imported")
+            return 1
+        res = share.import_profile(store, other)
+        if "error" in res:
+            print(f"not imported: {res['error']}", file=sys.stderr)
+            return 2
+        print(f"imported {res['imported']} items; {res['kept_local']} were already here and stay as they were")
+        return 0
     if a.pcmd == "list":
         rows = store.list()
         for r in rows:
@@ -132,6 +198,14 @@ def _profile(a) -> int:
     except (LookupError, OspError) as e:
         print(e.args[0], file=sys.stderr)
         return 2
+    if a.pcmd == "export":
+        shared, st = share.export(prof)
+        out = a.out or f"{prof.app_id}.osp"
+        with open(out, "w", encoding="utf-8", newline="\n") as f:
+            f.write(shared.dumps())
+        why = ", ".join(f"{n} {k}" for k, n in st["dropped"].items()) or "nothing"
+        print(f"wrote {out}: {st['kept']} items; left out {why}")
+        return 0
     sys.stdout.write(prof.dumps())
     return 0
 
@@ -217,6 +291,16 @@ def main(argv: list[str] | None = None) -> int:
     psub.add_parser("list")
     psub.add_parser("show", help="print one profile").add_argument(
         "app", help="the app id, or part of its id or name that matches only one profile")
+    pe = psub.add_parser("export", help="write a copy to share: no window titles, typed text or file names")
+    pe.add_argument("app", help="the app id, or part of its id or name that matches only one profile")
+    pe.add_argument("out", nargs="?", help="file to write (default: <app id>.osp here)")
+    pi = psub.add_parser("import", help="add the items of someone else's profile that yours lacks")
+    pi.add_argument("file")
+    pi.add_argument("--yes", action="store_true", help="don't ask first")
+    po = psub.add_parser("open", help="open a shared .osp file on the import page (what opening the file runs)")
+    po.add_argument("file")
+    pa = psub.add_parser("associate", help="open .osp files with Overshoulder (this user only)")
+    pa.add_argument("--remove", action="store_true")
 
     a = ap.parse_args(argv)
     if a.cmd == "serve":

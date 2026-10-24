@@ -15,6 +15,7 @@ import logging
 import secrets
 import threading
 from pathlib import Path
+from urllib.parse import quote
 
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.utilities.types import Image
@@ -31,7 +32,7 @@ from overshoulder.gateway.errors import GatewayError, Paused, Unauthorized
 from overshoulder.narrate import NarrationError
 from overshoulder.scope import ScopeError
 from overshoulder.service import ACTIONS, Service
-from overshoulder.settings_page import Sessions
+from overshoulder.settings_page import NEXT_RE, Sessions
 from overshoulder.settings_page import routes as settings_routes
 
 DEFAULT_PORT = 47621
@@ -257,7 +258,11 @@ class Daemon:
                 never typed values)
               {"kind": "note", "text": "what the guide says, in your words", "url": "https://..."}
             Notes describe the app, never the person: no file names, paths, addresses or account details.
-            Up to 300 characters of text each."""
+            Up to 300 characters of text each.
+
+            op="export" saves a copy to share with other PCs, once the person approves at the desk. It
+            leaves out what was seen only once and anything that only matters on this PC. Importing a
+            profile is the person's to do, on the settings page."""
             return await authed(ctx, lambda token: d.svc.profile(token, d.lease_for(token), op, item))
 
         @mcp.tool()
@@ -414,12 +419,15 @@ class Daemon:
                 d.gw.protect_pid(int(body["pid"]))
             elif verb == "settings_link":
                 token = d.settings_sessions.new_link()
-                return JSONResponse({"url": f"http://127.0.0.1:{d.port_ref['port']}/settings?t={token}"})
+                nxt = str(body.get("next") or "")
+                tail = f"&next={quote(nxt, safe='')}" if NEXT_RE.fullmatch(nxt) else ""
+                return JSONResponse({"url": f"http://127.0.0.1:{d.port_ref['port']}/settings?t={token}{tail}"})
             else:
                 return JSONResponse({"error": f"unknown verb {verb}"}, status_code=404)
             return JSONResponse({"ok": True, "status": d.gw.status()})
 
-        settings_routes(mcp, d.port_ref, d.settings_sessions, d.gw.registry, str(default_home() / "logs"))
+        settings_routes(mcp, d.port_ref, d.settings_sessions, d.gw.registry, str(default_home() / "logs"),
+                        profiles=d.gw.profiles)
         return mcp
 
 
