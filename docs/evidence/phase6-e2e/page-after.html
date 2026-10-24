@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Overshoulder settings</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2064%2064%22%20role%3D%22img%22%20aria-label%3D%22Overshoulder%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22%23111827%22/%3E%3Cpath%20d%3D%22M0%200%20L0%2022%20L5.2%2016.9%20L8.6%2024.6%20L12.2%2023%20L8.9%2015.4%20L16%2015.4%20Z%22%20transform%3D%22translate%2817%2010%29%20scale%281.3%29%22%20fill%3D%22%233b82f6%22/%3E%3Cpath%20d%3D%22M0%200%20L0%2022%20L5.2%2016.9%20L8.6%2024.6%20L12.2%2023%20L8.9%2015.4%20L16%2015.4%20Z%22%20transform%3D%22translate%2828%2021%29%20scale%281.3%29%22%20fill%3D%22%23ffffff%22%20stroke%3D%22%23111827%22%20stroke-width%3D%221.4%22%20stroke-linejoin%3D%22round%22/%3E%3C/svg%3E">
+<style>
+  :root { --ink:#111827; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; --bg:#f8fafc; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 "Segoe UI",system-ui,sans-serif; color:var(--ink); background:var(--bg); }
+  main { max-width:720px; margin:40px auto; padding:0 20px; }
+  h1 { font-size:22px; margin:0 0 4px; display:flex; align-items:center; gap:12px; }
+  h1 .mark svg { display:block; width:34px; height:34px; }
+  .sub { color:var(--muted); margin:0 0 28px; }
+  section { background:#fff; border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin-bottom:18px; }
+  h2 { font-size:15px; margin:0 0 4px; }
+  .hint { color:var(--muted); font-size:13px; margin:0 0 14px; }
+  label.row { display:flex; gap:10px; align-items:flex-start; padding:6px 0; }
+  label.row input { margin-top:4px; }
+  .field { display:grid; grid-template-columns:220px 1fr; gap:12px; align-items:center; padding:6px 0; }
+  input[type=number], input[type=text], input[type=password] { width:100%; padding:7px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:9px 18px; font:inherit; font-weight:600; cursor:pointer; }
+  .saved { background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; padding:10px 14px; border-radius:8px; margin-bottom:18px; }
+  code { background:#f1f5f9; padding:1px 5px; border-radius:4px; }
+  ul.plain { margin:0; padding-left:18px; }
+  .secret { font-family:Consolas,monospace; font-size:13px; word-break:break-all; }
+  .result { background:#eff6ff; border:1px solid #bfdbfe; padding:10px 14px; border-radius:8px; margin-bottom:12px; }
+  table.profiles { width:100%; border-collapse:collapse; font-size:14px; margin-bottom:14px; }
+  table.profiles td { border-top:1px solid var(--line); padding:7px 6px; vertical-align:top; }
+  table.profiles form { display:inline; }
+  button.small { padding:4px 10px; font-weight:500; font-size:13px; }
+  button.quiet { background:#fff; color:var(--ink); border:1px solid var(--line); }
+  a.button { display:inline-block; padding:4px 10px; border:1px solid var(--line); border-radius:8px; color:var(--ink);
+    text-decoration:none; font-size:13px; }
+  .bad { background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:10px 14px; border-radius:8px; margin-bottom:12px; }
+  .tag { font-size:12px; color:#065f46; background:#ecfdf5; border-radius:999px; padding:1px 8px; white-space:nowrap; }
+  form.find { display:flex; gap:8px; margin-bottom:12px; }
+  form.find input { flex:1; }
+</style></head>
+<body><main>
+<h1><span class="mark" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Overshoulder"><rect width="64" height="64" rx="15" fill="#111827"/><path d="M0 0 L0 22 L5.2 16.9 L8.6 24.6 L12.2 23 L8.9 15.4 L16 15.4 Z" transform="translate(17 10) scale(1.3)" fill="#3b82f6"/><path d="M0 0 L0 22 L5.2 16.9 L8.6 24.6 L12.2 23 L8.9 15.4 L16 15.4 Z" transform="translate(28 21) scale(1.3)" fill="#ffffff" stroke="#111827" stroke-width="1.4" stroke-linejoin="round"/></svg></span>Overshoulder</h1>
+<p class="sub">Settings for this PC. Changes apply to the next action or wait an agent starts.</p>
+<div class="saved">Imported 8 items into the profile of Microsoft.WindowsCalculator_8wekyb3d8bbwe.</div>
+<form method="post" action="/settings">
+<input type="hidden" name="form_token" value="<form token>">
+<section>
+  <h2>Your mouse and keyboard</h2>
+  <p class="hint">Agents work on their window in the background first, so your cursor stays put and the app
+  you are using keeps the keyboard. Some apps only respond to a real mouse or keyboard. Choose when an
+  agent may use yours for those.</p>
+  <label class="row"><input type="radio" name="input_mode" value="never" checked><span><b>Never</b><br><span class="hint">Agents work only in the background. Anything that needs your mouse or keyboard is refused, and the agent has to ask you instead.</span></span></label>
+<label class="row"><input type="radio" name="input_mode" value="borrow" ><span><b>Only while I&#x27;m idle</b> (default)<br><span class="hint">An agent may borrow your mouse and keyboard after you have left them alone for the number of seconds below.</span></span></label>
+<label class="row"><input type="radio" name="input_mode" value="full" ><span><b>Full control</b><br><span class="hint">An agent may use your mouse and keyboard whenever it needs to. Moving the mouse or typing still pauses it.</span></span></label>
+  <div class="field"><label for="idle">Idle time before borrowing (seconds)</label>
+    <input id="idle" type="number" name="borrow_idle_s" min="1" max="120" value="5"></div>
+</section>
+<section>
+  <h2>Finding controls</h2>
+  <p class="hint">Some apps draw their own buttons, so Windows can't tell an agent what they are. Reading
+  the text on screen lets an agent find a button by its label. The text is read on this PC with the OCR
+  built into Windows, only in the window the agent has been given, and nothing is sent anywhere.</p>
+  <label class="row"><input type="checkbox" name="ocr_enabled" checked>
+    <span>Let agents read text on screen to find controls</span></label>
+  <p class="hint">An icon without text can be found by asking a vision model where it is, for example
+  "the gear icon". The model sees the agent's window.</p>
+  <label class="row"><input type="radio" name="vision_mode" value="off" checked><span><b>Off</b> (default)<br><span class="hint">Agents find controls only through Windows and, if allowed above, the text on screen.</span></span></label>
+<label class="row"><input type="radio" name="vision_mode" value="local" ><span><b>On this PC</b><br><span class="hint">A vision model in Ollama on this PC looks at the agent&#x27;s window. Nothing is sent anywhere. It takes about 13 GB of graphics memory while loaded and is unloaded after 5 minutes without use.</span></span></label>
+<label class="row"><input type="radio" name="vision_mode" value="cloud" ><span><b>A cloud model</b><br><span class="hint">Screenshots of the agent&#x27;s window are sent to the service below. Use only one you trust with what is on screen.</span></span></label>
+  <div class="field"><label for="vision_local_model">Model on this PC (Ollama)</label>
+    <input id="vision_local_model" type="text" name="vision_local_model" value="qwen3-vl:8b-instruct"></div>
+  <div class="field"><label for="vision_local_url">Ollama address</label>
+    <input id="vision_local_url" type="text" name="vision_local_url" value="http://127.0.0.1:11434"></div>
+  <div class="field"><label for="vision_cloud_url">Cloud address (OpenAI-compatible)</label>
+    <input id="vision_cloud_url" type="text" name="vision_cloud_url" value=""
+      placeholder="https://.../v1"></div>
+  <div class="field"><label for="vision_cloud_model">Cloud model</label>
+    <input id="vision_cloud_model" type="text" name="vision_cloud_model" value=""></div>
+  <div class="field"><label for="vision_cloud_key">Cloud API key</label>
+    <input id="vision_cloud_key" type="password" name="vision_cloud_key" value="" autocomplete="off"
+      placeholder="if the service needs one"></div>
+</section>
+<section>
+  <h2>App profiles</h2>
+  <p class="hint">Overshoulder keeps a profile of each app agents use: its windows and controls, which ways of
+  pressing and typing work in it, its shortcuts, and notes agents leave. The next agent starts from it and
+  works faster. A profile never holds window titles, what was typed or what a field showed, and it never
+  lets an agent do more than you allow.</p>
+  <label class="row"><input type="checkbox" name="learn_profiles" checked>
+    <span>Learn app profiles and use them</span></label>
+  <label class="row"><input type="checkbox" name="catalog_weekly_check" >
+    <span>Once a week, check the registry for newer revisions of profiles installed from it<br><span
+    class="hint">Off means Overshoulder only goes to the registry when you press Load under Find profiles.</span>
+    </span></label>
+</section>
+<section>
+  <h2>Tutorials</h2>
+  <p class="hint">Tutorials, GIFs, step pictures and annotated screenshots carry a small mark at the end of
+  their caption strip. Their files say they were made with Overshoulder in their metadata either way.</p>
+  <label class="row"><input type="checkbox" name="show_mark" checked>
+    <span>Show "Made with Overshoulder" on tutorials and annotated screenshots</span></label>
+</section>
+<section>
+  <h2>Automatic detection</h2>
+  <p class="hint">Lets an agent that is waiting on you notice when you have finished, without you typing anything.
+  Detection only reads window titles, on-screen controls and files. It never clicks or types.</p>
+  <label class="row"><input type="checkbox" name="waits_enabled" checked>
+    <span><b>Allow agents to wait for your actions</b></span></label>
+</section>
+<section>
+  <h2>What agents may watch for</h2>
+  <p class="hint">Untick anything you don't want agents to watch.</p>
+  <label class="row"><input type="checkbox" name="kind_window_appears" checked><span>A window opens (title or process)</span></label>
+<label class="row"><input type="checkbox" name="kind_window_closes" checked><span>A window closes</span></label>
+<label class="row"><input type="checkbox" name="kind_title_changes" checked><span>A window&#x27;s title changes, or matches a pattern</span></label>
+<label class="row"><input type="checkbox" name="kind_element_appears" checked><span>A button, field or text appears in a window</span></label>
+<label class="row"><input type="checkbox" name="kind_element_gone" checked><span>A button, field or text disappears from a window</span></label>
+<label class="row"><input type="checkbox" name="kind_text_contains" checked><span>A control in a window shows some text</span></label>
+<label class="row"><input type="checkbox" name="kind_file" checked><span>A file appears, changes or is deleted</span></label>
+</section>
+<section>
+  <h2>Limits</h2>
+  <div class="field"><label for="poll">Check every (milliseconds)</label>
+    <input id="poll" type="number" name="poll_interval_ms" min="100" max="10000" step="100" value="500"></div>
+  <div class="field"><label for="max">Longest wait (minutes)</label>
+    <input id="max" type="number" name="max_wait_minutes" min="1" max="1440" value="60"></div>
+  <div class="field"><label for="procs">Only watch these apps</label>
+    <input id="procs" type="text" name="wait_processes" placeholder="any app, or e.g. chrome.exe, notepad.exe" value=""></div>
+  <label class="row"><input type="checkbox" name="beep_on_detect" >
+    <span>Play a sound when an agent detects that you finished</span></label>
+</section>
+<section>
+  <h2>Approvals on your phone</h2>
+  <p class="hint">When an agent asks to do something consequential, a box on this PC asks you. You can be asked
+  on your phone at the same time: the first answer counts, and no answer in time is No. Your phone is told
+  what the agent wants to do, the program's name and when the question expires, and nothing else unless you
+  tick the boxes at the bottom. This PC only sends requests out; nothing on it listens for the phone.</p>
+  <label class="row"><input type="checkbox" name="ntfy_enabled" >
+    <span><b>Ask on my phone with ntfy</b><br><span class="hint">Install the ntfy app and subscribe to the topic
+    below on the same server. Anyone who knows the topic can read the questions, so keep it to yourself.</span></span></label>
+  <div class="field"><label for="ntfy_server">ntfy server</label>
+    <input id="ntfy_server" type="text" name="ntfy_server" value="https://ntfy.sh"></div>
+  <div class="field"><label>Topic to subscribe to</label><span class="secret">overshoulder-iM8HYI8o60bY6iaV9DXbIqKI</span></div>
+  <div class="field"><label for="ntfy_token">Access token (only if your server needs one)</label>
+    <input id="ntfy_token" type="password" name="ntfy_token" value="" autocomplete="off"></div>
+  <label class="row"><input type="checkbox" name="renew_topics">
+    <span>Make new topics (your phone has to subscribe again)</span></label>
+  <label class="row"><input type="checkbox" name="webhook_enabled" >
+    <span><b>Ask through a webhook</b><br><span class="hint">For your own server or another app. Questions and
+    answers are signed with the secret below; the README describes the format.</span></span></label>
+  <div class="field"><label for="webhook_url">Webhook URL</label>
+    <input id="webhook_url" type="text" name="webhook_url" value="" placeholder="https://..."></div>
+  <div class="field"><label for="webhook_poll_url">Answer URL (if not the same)</label>
+    <input id="webhook_poll_url" type="text" name="webhook_poll_url" value=""></div>
+  <div class="field"><label>Webhook secret</label><span class="secret">8jgI9ht0VzjVx0JPX-cHWR89bQBUEK4fwkyFMAyrAHE</span></div>
+  <div class="field"><label for="phone_timeout">Time to answer (seconds)</label>
+    <input id="phone_timeout" type="number" name="phone_timeout_s" min="10" max="600" value="60"></div>
+  <label class="row"><input type="checkbox" name="share_title" >
+    <span>Also send the window's title</span></label>
+  <label class="row"><input type="checkbox" name="share_screenshot" >
+    <span>Also send a screenshot of the window</span></label>
+</section>
+<p><button type="submit">Save</button></p>
+</form>
+<form method="post" action="/settings/phone-test">
+<input type="hidden" name="form_token" value="<form token>">
+<section>
+  <h2>Test the phone</h2>
+  <p class="hint">Sends a test question to the phone channels saved above and waits for your answer. The box on
+  this PC is not shown.</p>
+  
+  <button type="submit">Send a test question</button>
+</section>
+</form>
+<section>
+  <h2>Agents</h2>
+  <p class="hint">Manage with <code>overshoulder client add|remove NAME</code>; limit one with
+    <code>overshoulder client limit NAME --read-only --no-typing --deny-process chrome.exe</code>.</p>
+  <ul class="plain"><li>e2e-agent</li></ul>
+</section>
+<section>
+  <h2>Profiles on this PC</h2>
+  <p class="hint">Export saves a copy to share. It leaves out what only this PC needs and anything seen just
+  once. Importing someone else's profile adds what this PC's profile lacks; what this PC learned stays.</p>
+  <table class="profiles"><tr><td><b>Calculator</b><br><span class="hint"><code>Microsoft.WindowsCalculator_8wekyb3d8bbwe</code>, version 11.2607.0.0, revision 2, 17 items</span></td><td style="white-space:nowrap"><a class="button" href="/settings/profiles/export?id=Microsoft.WindowsCalculator_8wekyb3d8bbwe&amp;ft=<form token>">Export</a> <a class="button" href="/settings/profiles/publish?id=Microsoft.WindowsCalculator_8wekyb3d8bbwe&amp;ft=<form token>">Publish</a> <form method="post" action="/settings/profiles/remove" onsubmit="return confirm('Remove this profile? Its last revision is kept in its history folder.')"><input type="hidden" name="form_token" value="<form token>"><input type="hidden" name="id" value="Microsoft.WindowsCalculator_8wekyb3d8bbwe"><button class="small quiet" type="submit">Remove</button></form></td></tr></table>
+  <form method="post" action="/settings/profiles/import" enctype="multipart/form-data">
+    <input type="hidden" name="form_token" value="<form token>">
+    <input type="file" name="file" accept=".osp" required> <button class="small" type="submit">Import...</button>
+  </form>
+</section>
+<section id="find">
+  <h2>Find profiles</h2>
+  <p class="hint">Profiles people published on overshoulder.yepgent.com. Nothing is loaded until you ask. Preview downloads one profile and shows everything in it before anything is added.</p>
+  <p class="hint">Catalog built 2026-10-24, loaded 2026-10-24 21:03 UTC; its signature checks out. Apps with a profile
+  on this PC come first.</p>
+  <form class="find" method="get" action="/settings#find"><input type="text" name="q" value=""
+    placeholder="An app's name" aria-label="Search the catalog"><button class="small quiet" type="submit">Search</button></form>
+  <table class="profiles"><tr><td><b>Calculator</b> <span class="tag">on this PC</span> <span class="tag">installed</span><br><span class="hint">13 items, by @yepgent, revision 1</span></td><td style="white-space:nowrap"><form method="post" action="/settings/catalog/get"><input type="hidden" name="form_token" value="<form token>"><input type="hidden" name="path" value="apps/Microsoft.WindowsCalculator_8wekyb3d8bbwe/yepgent.osp"><button class="small" type="submit">Preview</button></form></td></tr><tr><td><b>Character Map</b><br><span class="hint">14 items, by @yepgent, revision 1</span></td><td style="white-space:nowrap"><form method="post" action="/settings/catalog/get"><input type="hidden" name="form_token" value="<form token>"><input type="hidden" name="path" value="apps/microsoft-corporation.charmap/yepgent.osp"><button class="small" type="submit">Preview</button></form></td></tr><tr><td><b>Notepad</b><br><span class="hint">10 items, by @yepgent, revision 1</span></td><td style="white-space:nowrap"><form method="post" action="/settings/catalog/get"><input type="hidden" name="form_token" value="<form token>"><input type="hidden" name="path" value="apps/Microsoft.WindowsNotepad_8wekyb3d8bbwe/yepgent.osp"><button class="small" type="submit">Preview</button></form></td></tr><tr><td><b>Paint</b><br><span class="hint">17 items, by @yepgent, revision 1</span></td><td style="white-space:nowrap"><form method="post" action="/settings/catalog/get"><input type="hidden" name="form_token" value="<form token>"><input type="hidden" name="path" value="apps/Microsoft.Paint_8wekyb3d8bbwe/yepgent.osp"><button class="small" type="submit">Preview</button></form></td></tr></table>
+  <form method="post" action="/settings/catalog/load"><input type="hidden" name="form_token" value="<form token>"><button class="small" type="submit">Load again</button></form>
+</section>
+<section>
+  <h2>Safety</h2>
+  <ul class="plain">
+    <li>Panic key: <b>Ctrl+Alt+P</b> stops the driving agent; resume with <code>overshoulder resume</code>.</li>
+    <li>While you use your mouse or keyboard, agents keep to background work, and anything that needs your
+      input waits until you have been idle. Touching them during such an action stops it.</li>
+    <li>Action log: <code>&lt;e2e home&gt;\logs</code></li>
+  </ul>
+</section>
+</main></body></html>

@@ -88,8 +88,8 @@ class Person:
     def page(self, path: str) -> str:
         return http("GET", self.base + path, cookie=self.cookie)[2]
 
-    def post(self, path: str, **fields: str) -> tuple[int, str]:
-        status, headers, _ = http("POST", self.base + path, urlencode({"form_token": self.ft, **fields}).encode(),
+    def post(self, route: str, **fields: str) -> tuple[int, str]:
+        status, headers, _ = http("POST", self.base + route, urlencode({"form_token": self.ft, **fields}).encode(),
                                   {"content-type": "application/x-www-form-urlencoded"}, self.cookie)
         return status, headers.get("location") or headers.get("Location") or ""
 

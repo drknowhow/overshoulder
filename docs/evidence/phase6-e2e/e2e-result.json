@@ -1,0 +1,89 @@
+{
+  "registry": "https://overshoulder.yepgent.com",
+  "load": {
+    "status": 303,
+    "redirect": "/settings?msg=loaded#find",
+    "loaded": true,
+    "profiles_listed": [
+      "apps/Microsoft.WindowsCalculator_8wekyb3d8bbwe/yepgent.osp",
+      "apps/microsoft-corporation.charmap/yepgent.osp",
+      "apps/Microsoft.WindowsNotepad_8wekyb3d8bbwe/yepgent.osp",
+      "apps/Microsoft.Paint_8wekyb3d8bbwe/yepgent.osp"
+    ]
+  },
+  "agent_a_brief": {
+    "rev": 0,
+    "note": "No profile for this app yet: one is learned as you work. profile(op=\"learn\") adds a look at its controls now.",
+    "shared": "A shared profile of this app is on the registry at https://overshoulder.yepgent.com, by @yepgent (13 items). The person can install it from Find profiles on the settings page; agents can't install profiles."
+  },
+  "install": {
+    "preview_status": 303,
+    "preview": "/settings/profiles/import",
+    "from_registry": true,
+    "notes_shown": 2,
+    "confirm_status": 303,
+    "redirect": "/settings?msg=imported&n=8",
+    "tagged_installed": true
+  },
+  "agent_b_brief": {
+    "rev": 2,
+    "lines": 16,
+    "has_shared_how_to": true,
+    "brief": "app Microsoft.WindowsCalculator_8wekyb3d8bbwe rev=2 ver=11.2607.0.0 \"Calculator\"\nview main window n=5\nway invoke@button.uia_invoke ok=5 fail=0 ms=393\nway select@listitem.uia_select ok=4 fail=0 src=imported ms=448\nctl togglepanebutton main Button aid=TogglePaneButton src=imported seen=4 ok=4 \"Open Navigation\"\nctl listitem main ListItem name=content src=imported seen=4 ok=4\nctl num1button main Button aid=num1Button src=imported seen=3 ok=3 \"One\"\nctl num3button main Button aid=num3Button src=imported seen=2 ok=2 \"Three\"\nctl num5button main Button aid=num5Button src=imported seen=2 ok=2 \"Five\"\nctl num7button main Button aid=num7Button seen=1 ok=1\nctl multiplybutton main Button aid=multiplyButton seen=1 ok=1\nctl num8button main Button aid=num8Button seen=1 ok=1\nctl equalbutton main Button aid=equalButton seen=1 ok=1\nctl clearbutton main Button aid=clearButton seen=1 ok=1\nquirk q-0ef521c0e0 n=1 src=imported \"Mode switch rebuilds the UI: refs from before (e.g. digits) go stale, so observe again. The nav pane closes itself after choosing a mode. Display is read via the name 'Display is N' on CalculatorResults. Buttons work with invoke in background.\"\nhow h-switch-to-scientific-mode n=1 src=imported used=2 \"switch to Scientific mode\" : invoke Open%20Navigation ; select Scientific%20Calculator"
+  },
+  "runs": [
+    {
+      "agent": "A",
+      "agent_seconds": 24.9,
+      "agent_exit_code": 0,
+      "turns": 11,
+      "cost_usd": 0.16961929999999997,
+      "tool_calls": 10,
+      "by_tool": {
+        "ToolSearch": 1,
+        "take_scope": 1,
+        "observe": 1,
+        "act": 5,
+        "read": 1,
+        "release_scope": 1
+      },
+      "failed_tries": 0,
+      "failures": [],
+      "expected": [
+        "56"
+      ],
+      "results_found": [
+        "56"
+      ],
+      "window_closed": true
+    },
+    {
+      "agent": "B",
+      "agent_seconds": 44.4,
+      "agent_exit_code": 0,
+      "turns": 27,
+      "cost_usd": 0.2657836,
+      "tool_calls": 26,
+      "by_tool": {
+        "ToolSearch": 1,
+        "take_scope": 1,
+        "observe": 2,
+        "act": 14,
+        "find": 5,
+        "read": 2,
+        "release_scope": 1
+      },
+      "failed_tries": 0,
+      "failures": [],
+      "expected": [
+        "1024",
+        "9"
+      ],
+      "results_found": [
+        "1024",
+        "9"
+      ],
+      "window_closed": true
+    }
+  ]
+}

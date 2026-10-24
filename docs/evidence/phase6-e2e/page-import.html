@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Import a profile - Overshoulder</title><link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%2064%2064%22%20role%3D%22img%22%20aria-label%3D%22Overshoulder%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22%23111827%22/%3E%3Cpath%20d%3D%22M0%200%20L0%2022%20L5.2%2016.9%20L8.6%2024.6%20L12.2%2023%20L8.9%2015.4%20L16%2015.4%20Z%22%20transform%3D%22translate%2817%2010%29%20scale%281.3%29%22%20fill%3D%22%233b82f6%22/%3E%3Cpath%20d%3D%22M0%200%20L0%2022%20L5.2%2016.9%20L8.6%2024.6%20L12.2%2023%20L8.9%2015.4%20L16%2015.4%20Z%22%20transform%3D%22translate%2828%2021%29%20scale%281.3%29%22%20fill%3D%22%23ffffff%22%20stroke%3D%22%23111827%22%20stroke-width%3D%221.4%22%20stroke-linejoin%3D%22round%22/%3E%3C/svg%3E">
+<style>
+  body { margin:0; font:15px/1.5 "Segoe UI",system-ui,sans-serif; color:#111827; background:#f8fafc; }
+  main { max-width:720px; margin:40px auto; padding:0 20px; }
+  section { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:20px 22px; margin-bottom:18px; }
+  .hint { color:#6b7280; font-size:13px; }
+  .bad { background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:10px 14px; border-radius:8px; }
+  .ok { background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; padding:10px 14px; border-radius:8px; }
+  .warn { background:#fffbeb; border:1px solid #fde68a; color:#92400e; padding:10px 14px; border-radius:8px; }
+  button { background:#2563eb; color:#fff; border:0; border-radius:8px; padding:9px 18px; font:inherit; font-weight:600; cursor:pointer; }
+  button.quiet { background:#fff; color:#111827; border:1px solid #e5e7eb; }
+  form { display:inline; } code { background:#f1f5f9; padding:1px 5px; border-radius:4px; overflow-wrap:anywhere; }
+  li { margin-bottom:6px; }
+  a.button { display:inline-block; background:#2563eb; color:#fff; text-decoration:none; border-radius:8px;
+    padding:9px 18px; font-weight:600; }
+  textarea { width:100%; box-sizing:border-box; font:12px/1.5 ui-monospace,Consolas,monospace; background:#f8fafc;
+    border:1px solid #e5e7eb; border-radius:8px; padding:10px; }
+  input[type=text] { font:inherit; padding:6px 8px; border:1px solid #d1d5db; border-radius:6px; }
+</style></head><body><main>
+<h1 style="font-size:22px">Import a profile</h1>
+<section>
+  <p class="ok">Reviewed on the registry, published by @yepgent in pull request #1 on 2026-10-24.</p>
+  <p><b>Calculator</b> <code>Microsoft.WindowsCalculator_8wekyb3d8bbwe</code>
+  11.2607.0.0</p>
+  <p>13 items: 8 controls, 1 how-to, 1 quirk, 1 windows, 2 methods that work. Made with Overshoulder/0.1.0.dev0.</p>
+  <p class="hint">This PC has a profile of this app (revision 1); what it has stays as it is. New items are marked as imported. They help agents find their way in the app and
+  never let an agent do more than you allow.</p>
+</section>
+<section><p><b>Notes written by other agents</b></p><p class="hint">Agents read these as information, never as instructions.</p><ul><li><b>quirk</b>: Mode switch rebuilds the UI: refs from before (e.g. digits) go stale, so observe again. The nav pane closes itself after choosing a mode. Display is read via the name &#x27;Display is N&#x27; on CalculatorResults. Buttons work with invoke in background.</li><li><b>how-to</b>: switch to Scientific mode<br><span class="hint">invoke Open Navigation ; select Scientific Calculator</span></li></ul></section>
+<form method="post" action="/settings/profiles/import/confirm"><input type="hidden" name="form_token" value="<form token>">
+<input type="hidden" name="p" value="seoyLCkcmRfCz5t_6H7qPPw1"><button type="submit">Import</button></form> <form method="post" action="/settings/profiles/import/cancel"><input type="hidden" name="form_token" value="<form token>"><input type="hidden" name="p" value="seoyLCkcmRfCz5t_6H7qPPw1"><button class="quiet" type="submit">Cancel</button></form>
+</main></body></html>
