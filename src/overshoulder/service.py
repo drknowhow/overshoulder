@@ -11,13 +11,14 @@ import threading
 import time
 from pathlib import Path
 
-from overshoulder import hints, learn, locate, notes, vision
+from overshoulder import hints, learn, locate, notes, share, vision
 from overshoulder import scope as sc
 from overshoulder.actions import Ladder
 from overshoulder.driver import capture, ocr, uia
 from overshoulder.driver import windows as w
 from overshoulder.driver.display import enable_dpi_awareness
 from overshoulder.driver.windows import Rect
+from overshoulder.gateway import policy
 from overshoulder.gateway.clients import default_home
 from overshoulder.gateway.core import Gateway, Target
 from overshoulder.gateway.errors import GatewayError, TargetStale
@@ -39,7 +40,7 @@ AREA_EPSILON = 0.002
 # from anywhere on disk are for a person at the CLI.
 RENDER_OPTIONS = ("pointer", "zoom", "keys", "gif", "narrate", "voice", "mlt")
 LAYER_OPS = ("list", "add", "edit", "remove")
-PROFILE_OPS = ("get", "learn", "add")
+PROFILE_OPS = ("get", "learn", "add", "export")
 ADDS_PER_LEASE = 30  # notes one session may add to profiles
 LOOK_NODES = 1500  # elements a look walks per window
 UNTRUSTED_NOTE = ("A profile is what earlier sessions learned about this app. Quoted text in it was written by "
@@ -210,7 +211,8 @@ class Service:
     def profile(self, token: str, lease_id: str, op: str = "get", item: dict | None = None) -> dict:
         """The scope's app profile. op="get" returns it; op="learn" looks at the scope without acting
         (its windows, the controls an agent acts on, and their shortcut keys) and adds what it saw;
-        op="add" adds the agent's own note, item (notes.add: a quirk, key, how-to or guide note)."""
+        op="add" adds the agent's own note, item (notes.add: a quirk, key, how-to or guide note);
+        op="export" asks the person, then saves a copy to share (share.export) in the exports folder."""
         if op not in PROFILE_OPS:
             raise ValueError(f"op must be one of {PROFILE_OPS}")
         if op == "add" and not isinstance(item, dict):
@@ -231,6 +233,8 @@ class Service:
                 raise GatewayError("the person has turned profile learning off on the settings page")
             if op == "add":
                 return self._add_note(lease_id, app, item)
+            if op == "export":
+                return self._export(scope, app)
             elements = []
             for root in uia.roots_for_window(scope.binding.hwnd):
                 view = learn.view_id(root == scope.binding.hwnd, w.class_name(root))
@@ -248,6 +252,26 @@ class Service:
 
         params = {"op": op, **({"kind": item.get("kind")} if op == "add" else {})}  # the note's text is not logged
         return self.gw.run(token, lease_id, f"profile_{op}", perform, read_only=True, params=params)["result"]
+
+    def _export(self, scope, app) -> dict:
+        """A scrubbed copy of the app's profile, saved once the person says yes at the desk (or phone)."""
+        prof = self.gw.profiles.load(app.id)
+        if prof is None:
+            raise ValueError("this app has no profile yet")
+        shared, report = share.export(prof)
+        if not shared.items:
+            raise ValueError("nothing in this profile has been seen often enough to share yet")
+        lease = self.gw.leases.active()
+        req = {"kind": "action", "client": lease.client if lease else "", "action": "profile_export",
+               "reason": f"save a copy of what agents learned about {app.name} to share: {report['kept']} items "
+                         "(its controls, the methods that work, shortcuts and notes). It holds no window titles, "
+                         "typed text or file names.",
+               "target": None, "scope": scope.describe()}
+        policy.require_approval(self.gw.approver, req)
+        path = self.gw.profiles.dir.parent / "exports" / f"{app.id}.osp"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(shared.dumps().encode("utf-8"))
+        return {"app": app.describe(), "path": str(path), **report, "approved_by": req.get("answered_by")}
 
     def _add_note(self, lease_id: str, app, item: dict) -> dict:
         lease = self.gw.leases.active()

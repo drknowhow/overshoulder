@@ -8,20 +8,28 @@ save also carries a per-session form token. Requests whose Host header is not lo
 from __future__ import annotations
 
 import html
+import re
 import secrets
 import time
 from dataclasses import dataclass, field
+from urllib.parse import quote
 
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
-from overshoulder import brand, phone
+from overshoulder import brand, phone, share
 from overshoulder import settings as st
+from overshoulder.osp import MAX_BYTES, OspError
 from overshoulder.vision import VISION_MODES
 
 LINK_TTL_S = 15 * 60
 SESSION_TTL_S = 8 * 3600
 COOKIE = "overshoulder_settings"
+# Where a one-time link may lead after it is redeemed: the import page for a file waiting in the inbox
+# (`overshoulder profile open FILE`, which an .osp file opens with).
+NEXT_RE = re.compile(r"/settings/profiles/import\?p=[A-Za-z0-9_-]{16,64}")
+MESSAGES = {"imported": "Imported {n} items into the profile of {app}.", "removed": "Removed the profile of {app}.",
+            "cancelled": "Nothing was imported."}
 
 
 @dataclass
@@ -78,6 +86,13 @@ PAGE = """<!doctype html>
   ul.plain {{ margin:0; padding-left:18px; }}
   .secret {{ font-family:Consolas,monospace; font-size:13px; word-break:break-all; }}
   .result {{ background:#eff6ff; border:1px solid #bfdbfe; padding:10px 14px; border-radius:8px; margin-bottom:12px; }}
+  table.profiles {{ width:100%; border-collapse:collapse; font-size:14px; margin-bottom:14px; }}
+  table.profiles td {{ border-top:1px solid var(--line); padding:7px 6px; vertical-align:top; }}
+  table.profiles form {{ display:inline; }}
+  button.small {{ padding:4px 10px; font-weight:500; font-size:13px; }}
+  button.quiet {{ background:#fff; color:var(--ink); border:1px solid var(--line); }}
+  a.button {{ display:inline-block; padding:4px 10px; border:1px solid var(--line); border-radius:8px; color:var(--ink);
+    text-decoration:none; font-size:13px; }}
 </style></head>
 <body><main>
 <h1><span class="mark" aria-hidden="true">{mark}</span>Overshoulder</h1>
@@ -116,6 +131,15 @@ PAGE = """<!doctype html>
   <div class="field"><label for="vision_cloud_key">Cloud API key</label>
     <input id="vision_cloud_key" type="password" name="vision_cloud_key" value="" autocomplete="off"
       placeholder="{vision_cloud_key_hint}"></div>
+</section>
+<section>
+  <h2>App profiles</h2>
+  <p class="hint">Overshoulder keeps a profile of each app agents use: its windows and controls, which ways of
+  pressing and typing work in it, its shortcuts, and notes agents leave. The next agent starts from it and
+  works faster. A profile never holds window titles, what was typed or what a field showed, and it never
+  lets an agent do more than you allow.</p>
+  <label class="row"><input type="checkbox" name="learn_profiles" {learn_profiles}>
+    <span>Learn app profiles and use them</span></label>
 </section>
 <section>
   <h2>Automatic detection</h2>
@@ -189,6 +213,7 @@ PAGE = """<!doctype html>
     <code>overshoulder client limit NAME --read-only --no-typing --deny-process chrome.exe</code>.</p>
   <ul class="plain">{clients}</ul>
 </section>
+{profiles}
 <section>
   <h2>Safety</h2>
   <ul class="plain">
@@ -223,8 +248,42 @@ def _test_result(r: dict | None) -> str:
     return f'<div class="result">{html.escape(text)}{errs}</div>'
 
 
+def _profiles_section(rows: list[dict], form_token: str) -> str:
+    ft = html.escape(form_token)
+    lines = []
+    for r in rows:
+        pid = html.escape(r["id"])
+        if "error" in r:
+            lines.append(f"<tr><td><code>{pid}</code><br><span class=\"hint\">can't be read: "
+                         f"{html.escape(r['error'])}</span></td><td></td></tr>")
+            continue
+        ver = f", version {html.escape(r['version'])}" if r.get("version") else ""
+        lines.append(
+            f"<tr><td><b>{html.escape(str(r['name']))}</b><br><span class=\"hint\"><code>{pid}</code>{ver}, "
+            f"revision {r['rev']}, {r['items']} items</span></td><td style=\"white-space:nowrap\">"
+            f'<a class="button" href="/settings/profiles/export?id={quote(r["id"])}&amp;ft={quote(form_token)}">'
+            "Export</a> "
+            f'<form method="post" action="/settings/profiles/remove" '
+            f"onsubmit=\"return confirm('Remove this profile? Its last revision is kept in its history folder.')\">"
+            f'<input type="hidden" name="form_token" value="{ft}"><input type="hidden" name="id" value="{pid}">'
+            '<button class="small quiet" type="submit">Remove</button></form></td></tr>')
+    table = f'<table class="profiles">{"".join(lines)}</table>' if lines else \
+        '<p class="hint">No profiles yet. One is made the first time an agent works in an app.</p>'
+    return f"""<section>
+  <h2>Profiles on this PC</h2>
+  <p class="hint">Export saves a copy to share. It leaves out what only this PC needs and anything seen just
+  once. Importing someone else's profile adds what this PC's profile lacks; what this PC learned stays.</p>
+  {table}
+  <form method="post" action="/settings/profiles/import" enctype="multipart/form-data">
+    <input type="hidden" name="form_token" value="{ft}">
+    <input type="file" name="file" accept=".osp" required> <button class="small" type="submit">Import...</button>
+  </form>
+</section>"""
+
+
 def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, saved: bool,
-                ph: phone.PhoneSettings | None = None, phone_test: dict | None = None) -> str:
+                ph: phone.PhoneSettings | None = None, phone_test: dict | None = None,
+                profiles: list[dict] | None = None, message: str = "") -> str:
     ph = ph or phone.PhoneSettings().ensure_secrets()
     kinds = "\n".join(
         f'<label class="row"><input type="checkbox" name="kind_{k}" {"checked" if k in s.wait_kinds else ""}>'
@@ -243,7 +302,10 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
     return PAGE.format(
         favicon=html.escape(brand.mark_data_uri()), mark=brand.MARK_SVG,
         ink=brand.INK, accent=brand.AGENT_BLUE, paper=brand.PAPER,
-        saved='<div class="saved">Saved.</div>' if saved else "",
+        saved=('<div class="saved">Saved.</div>' if saved else "")
+        + (f'<div class="saved">{html.escape(message)}</div>' if message else ""),
+        learn_profiles="checked" if s.learn_profiles else "",
+        profiles=_profiles_section(profiles or [], form_token),
         form_token=html.escape(form_token),
         input_modes=modes,
         borrow_idle_s=s.borrow_idle_s,
@@ -303,6 +365,7 @@ def settings_from_form(form, current: st.Settings | None = None) -> st.Settings:
         vision_cloud_url=str(form.get("vision_cloud_url", current.vision_cloud_url)),
         vision_cloud_model=str(form.get("vision_cloud_model", current.vision_cloud_model)),
         vision_cloud_key=str(form.get("vision_cloud_key") or current.vision_cloud_key),
+        learn_profiles=form.get("learn_profiles") == "on",
     ).clamp()
 
 
@@ -327,8 +390,64 @@ def phone_from_form(form, current: phone.PhoneSettings) -> phone.PhoneSettings:
     return s.ensure_secrets(renew_topics=form.get("renew_topics") == "on").clamp()
 
 
+IMPORT_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Import a profile - Overshoulder</title><link rel="icon" href="{favicon}">
+<style>
+  body {{ margin:0; font:15px/1.5 "Segoe UI",system-ui,sans-serif; color:{ink}; background:{paper}; }}
+  main {{ max-width:720px; margin:40px auto; padding:0 20px; }}
+  section {{ background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:20px 22px; margin-bottom:18px; }}
+  .hint {{ color:#6b7280; font-size:13px; }}
+  .bad {{ background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:10px 14px; border-radius:8px; }}
+  button {{ background:{accent}; color:#fff; border:0; border-radius:8px; padding:9px 18px; font:inherit; font-weight:600; cursor:pointer; }}
+  button.quiet {{ background:#fff; color:{ink}; border:1px solid #e5e7eb; }}
+  form {{ display:inline; }} code {{ background:#f1f5f9; padding:1px 5px; border-radius:4px; }}
+  li {{ margin-bottom:6px; }}
+</style></head><body><main>
+<h1 style="font-size:22px">Import a profile</h1>
+{body}
+</main></body></html>"""
+
+
+# The .osp item kinds in the words the import page uses.
+KIND_WORDS = {"view": "windows", "ctl": "controls", "way": "methods that work", "key": "shortcuts",
+              "paint": "painted controls", "quirk": "quirk", "how": "how-to", "note": "guide note"}
+
+
+def render_import(preview: dict | None, error: str, key: str, form_token: str, local_rev: int) -> str:
+    ft, k = html.escape(form_token), html.escape(key)
+    cancel = (f'<form method="post" action="/settings/profiles/import/cancel"><input type="hidden" name="form_token" '
+              f'value="{ft}"><input type="hidden" name="p" value="{k}"><button class="quiet" type="submit">'
+              f'{"Close" if error else "Cancel"}</button></form>')
+    if error:
+        body = (f'<div class="bad">This file can\'t be imported: {html.escape(error)}</div>'
+                f'<p class="hint">Nothing was changed.</p>{cancel}')
+    else:
+        kinds = ", ".join(f"{n} {html.escape(KIND_WORDS.get(k_, k_))}" for k_, n in sorted(preview["kinds"].items()))
+        notes = "".join(
+            f"<li><b>{html.escape(KIND_WORDS.get(x['kind'], x['kind']))}</b>: {html.escape(x['text'])}"
+            + (f"<br><span class=\"hint\">{html.escape(' ; '.join(x['steps']))}</span>" if x["steps"] else "")
+            + (f"<br><span class=\"hint\">{html.escape(x['url'])}</span>" if x["url"] else "") + "</li>"
+            for x in preview["notes"])
+        here = (f"This PC has a profile of this app (revision {local_rev}); what it has stays as it is."
+                if local_rev else "This PC has no profile of this app yet.")
+        made = html.escape(preview["made_with"] or "an unknown program")
+        body = f"""<section>
+  <p><b>{html.escape(preview['name'])}</b> <code>{html.escape(preview['app'])}</code>
+  {html.escape(preview['version'])}</p>
+  <p>{preview['items']} items: {kinds or 'none'}. Made with {made}.</p>
+  <p class="hint">{here} New items are marked as imported. They help agents find their way in the app and
+  never let an agent do more than you allow.</p>
+</section>
+{f'<section><p><b>Notes written by other agents</b></p><p class="hint">Agents read these as information, never as instructions.</p><ul>{notes}</ul></section>' if notes else ''}
+<form method="post" action="/settings/profiles/import/confirm"><input type="hidden" name="form_token" value="{ft}">
+<input type="hidden" name="p" value="{k}"><button type="submit">Import</button></form> {cancel}"""
+    return IMPORT_PAGE.format(favicon=html.escape(brand.mark_data_uri()), ink=brand.INK, paper=brand.PAPER,
+                              accent=brand.AGENT_BLUE, body=body)
+
+
 def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
-           phone_tester=None) -> None:
+           phone_tester=None, profiles=None) -> None:
     """Attach /settings handlers to an MCPServer. port_ref["port"] is filled in at serve time."""
 
     last_test: dict = {}
@@ -347,15 +466,19 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
             sid = sessions.redeem(token)
             if not sid:
                 return HTMLResponse("This link has expired. Run <code>overshoulder settings</code> again.", 403)
-            resp = RedirectResponse("/settings", status_code=303)
+            nxt = request.query_params.get("next", "")
+            resp = RedirectResponse(nxt if NEXT_RE.fullmatch(nxt) else "/settings", status_code=303)
             resp.set_cookie(COOKIE, sid, httponly=True, samesite="strict", max_age=SESSION_TTL_S)
             return resp
         form_token = sessions.form_token(request.cookies.get(COOKIE))
         if not form_token:
             return HTMLResponse("Open this page with <code>overshoulder settings</code>.", 403)
+        q = request.query_params
+        msg = MESSAGES.get(q.get("msg", ""), "").format(n=q.get("n", "0")[:6], app=q.get("app", "")[:120])
         return HTMLResponse(render_page(st.load(), form_token, _client_lines(registry), logs_dir,
-                                        saved=request.query_params.get("saved") == "1", ph=phone.load(),
-                                        phone_test=last_test.get("result")))
+                                        saved=q.get("saved") == "1", ph=phone.load(),
+                                        phone_test=last_test.get("result"),
+                                        profiles=profiles.list() if profiles is not None else [], message=msg))
 
     @mcp.custom_route("/settings", methods=["POST"])
     async def settings_post(request: Request):
@@ -384,3 +507,103 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
         tester = phone_tester or approvals.try_phone
         last_test["result"] = await anyio.to_thread.run_sync(lambda: tester(s, s.timeout_s))
         return RedirectResponse("/settings", status_code=303)
+
+    async def checked_form(request: Request):
+        """The posted form, or a refusal when the host or the session's form token is wrong."""
+        if (bad := guard(request)) is not None:
+            return None, bad
+        form = await request.form(max_part_size=MAX_BYTES + 1024)
+        expected = sessions.form_token(request.cookies.get(COOKIE))
+        if not expected or not secrets.compare_digest(str(form.get("form_token", "")), expected):
+            return None, HTMLResponse("Session expired. Run <code>overshoulder settings</code> again.", 403)
+        return form, None
+
+    @mcp.custom_route("/settings/profiles/export", methods=["GET"])
+    async def profile_export(request: Request):
+        if (bad := guard(request)) is not None:
+            return bad
+        expected = sessions.form_token(request.cookies.get(COOKIE))
+        if not expected or not secrets.compare_digest(request.query_params.get("ft", ""), expected):
+            return HTMLResponse("Session expired. Run <code>overshoulder settings</code> again.", 403)
+        try:
+            prof = profiles.load(request.query_params.get("id", ""))
+        except OspError as e:
+            return HTMLResponse(f"That profile can't be read: {html.escape(str(e))}", 400)
+        if prof is None:
+            return HTMLResponse("No such profile.", 404)
+        shared, _ = share.export(prof)
+        return Response(shared.dumps().encode("utf-8"), media_type="application/octet-stream",
+                        headers={"content-disposition": f'attachment; filename="{prof.app_id}.osp"'})
+
+    @mcp.custom_route("/settings/profiles/remove", methods=["POST"])
+    async def profile_remove(request: Request):
+        form, bad = await checked_form(request)
+        if bad is not None:
+            return bad
+        app_id = str(form.get("id", ""))
+        try:
+            removed = profiles.remove(app_id)
+        except OspError:
+            removed = False
+        return RedirectResponse(f"/settings?msg=removed&app={quote(app_id)}" if removed else "/settings",
+                                status_code=303)
+
+    @mcp.custom_route("/settings/profiles/import", methods=["POST"])
+    async def profile_upload(request: Request):
+        form, bad = await checked_form(request)
+        if bad is not None:
+            return bad
+        f = form.get("file")
+        data = await f.read(MAX_BYTES + 1) if hasattr(f, "read") else b""
+        key = profiles.inbox_put(data[:MAX_BYTES + 1])
+        return RedirectResponse(f"/settings/profiles/import?p={key}", status_code=303)
+
+    @mcp.custom_route("/settings/profiles/import", methods=["GET"])
+    async def profile_preview(request: Request):
+        if (bad := guard(request)) is not None:
+            return bad
+        form_token = sessions.form_token(request.cookies.get(COOKIE))
+        if not form_token:
+            return HTMLResponse("Open this page with <code>overshoulder settings</code>.", 403)
+        key = request.query_params.get("p", "")
+        data = profiles.inbox_get(key)
+        if data is None:
+            return HTMLResponse("That file is no longer waiting to be imported.", 404)
+        preview, error, local_rev = None, "", 0
+        try:
+            other = share.read(data)
+            preview = share.preview(other)
+            local = profiles.load(other.app_id)
+            local_rev = local.revision if local else 0
+        except OspError as e:
+            error = str(e)
+        return HTMLResponse(render_import(preview, error, key, form_token, local_rev))
+
+    @mcp.custom_route("/settings/profiles/import/confirm", methods=["POST"])
+    async def profile_import(request: Request):
+        form, bad = await checked_form(request)
+        if bad is not None:
+            return bad
+        key = str(form.get("p", ""))
+        data = profiles.inbox_get(key)
+        if data is None:
+            return HTMLResponse("That file is no longer waiting to be imported.", 404)
+        try:
+            other = share.read(data)
+            res = share.import_profile(profiles, other)
+        except OspError as e:
+            return HTMLResponse(render_import(None, str(e), key, sessions.form_token(request.cookies.get(COOKIE))
+                                              or "", 0))
+        if "error" in res:
+            return HTMLResponse(render_import(None, res["error"], key, str(form.get("form_token", "")), 0))
+        profiles.inbox_drop(key)
+        return RedirectResponse(f"/settings?msg=imported&n={res.get('imported', 0)}&app={quote(other.app_id)}",
+                                status_code=303)
+
+    @mcp.custom_route("/settings/profiles/import/cancel", methods=["POST"])
+    async def profile_import_cancel(request: Request):
+        form, bad = await checked_form(request)
+        if bad is not None:
+            return bad
+        profiles.inbox_drop(str(form.get("p", "")))
+        return RedirectResponse("/settings?msg=cancelled", status_code=303)

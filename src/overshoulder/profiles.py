@@ -7,7 +7,10 @@ mode; a profile only helps an agent find its way around an app it has already be
 from __future__ import annotations
 
 import os
+import re
+import secrets
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -16,6 +19,8 @@ from overshoulder.appid import ID_RE, AppIdentity
 from overshoulder.osp import Item, OspError, Profile, enc, loads
 
 KEEP_REVS = 20  # rev items in a profile, and old files in its history folder
+INBOX_TTL_S = 24 * 3600  # a file waiting for the person to look at it before importing
+_INBOX_ID = re.compile(r"[A-Za-z0-9_-]{16,64}")
 
 
 def now() -> str:
@@ -91,6 +96,37 @@ class ProfileStore:
         old = sorted(hist.glob("rev-*.osp"), key=lambda f: int(f.stem[4:]) if f.stem[4:].isdigit() else -1)
         for f in old[:max(0, len(old) - KEEP_REVS)]:
             f.unlink(missing_ok=True)
+
+    def remove(self, app_id: str) -> bool:
+        """Take an app's profile off this PC. Its last revision stays in its history folder."""
+        with self._lock:
+            p = self.path(app_id)
+            if not p.exists():
+                return False
+            hist = self.dir / "history" / app_id
+            hist.mkdir(parents=True, exist_ok=True)
+            os.replace(p, hist / f"removed-{time.strftime('%Y%m%d-%H%M%S')}.osp")
+            return True
+
+    # A file someone wants to import waits in the inbox until the person has looked at it.
+
+    def inbox_put(self, data: bytes) -> str:
+        box = self.dir / "inbox"
+        box.mkdir(parents=True, exist_ok=True)
+        for old in box.glob("*.osp"):
+            if time.time() - old.stat().st_mtime > INBOX_TTL_S:
+                old.unlink(missing_ok=True)
+        key = secrets.token_urlsafe(18)
+        (box / f"{key}.osp").write_bytes(data)
+        return key
+
+    def inbox_get(self, key: str) -> bytes | None:
+        f = self.dir / "inbox" / f"{key}.osp"
+        return f.read_bytes() if _INBOX_ID.fullmatch(key or "") and f.exists() else None
+
+    def inbox_drop(self, key: str) -> None:
+        if _INBOX_ID.fullmatch(key or ""):
+            (self.dir / "inbox" / f"{key}.osp").unlink(missing_ok=True)
 
     def history(self, app_id: str) -> list[int]:
         hist = self.dir / "history" / self.path(app_id).stem
