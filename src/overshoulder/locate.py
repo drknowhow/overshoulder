@@ -5,6 +5,9 @@ the text was, relative to the scope's top-left corner, and the pixels it covered
 those pixels are compared with the scope's pixels now: if the text there changed or the window's
 content moved, the ref is stale and has to be found again, the way an element ref goes stale when its
 element is gone. A text ref takes mouse actions only: click, double_click, right_click and drag.
+
+Vision refs (v1, v2...) are boxes a vision model drew around a described control (vision.py). They are
+kept and checked the same way; their name is the description the agent gave.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ PAD = 2
 SETTLED_SHARE = 0.001
 SETTLE_TRIES = 4
 SETTLE_S = 0.05
-_REF = re.compile(r"t\d+")
+_REF = re.compile(r"[tv]\d+")
 
 
 def is_found_ref(ref: str | None) -> bool:
@@ -42,7 +45,7 @@ def is_found_ref(ref: str | None) -> bool:
 @dataclass
 class Found:
     ref: str
-    text: str
+    text: str  # the words read, or for a vision ref the description
     rel: Rect  # the box, relative to the scope's top-left corner when it was read
     hwnd: int | None  # the window the box is in
     pixels: Image.Image  # the padded box's pixels when it was read
@@ -50,7 +53,8 @@ class Found:
 
     def describe(self, origin: Rect) -> dict:
         r = self.rel
-        return {"ref": self.ref, "name": self.text, "text": self.text, "source": self.source,
+        return {"ref": self.ref, "name": self.text, "source": self.source,
+                "text" if self.source == "ocr" else "description": self.text,
                 "rect": [origin.left + r.left, origin.top + r.top, origin.left + r.right, origin.top + r.bottom]}
 
 
@@ -71,7 +75,8 @@ class FoundCache:
         with self._lock:
             if len(self._by_ref) >= self.limit:
                 self._by_ref.pop(next(iter(self._by_ref)))
-            f = Found(f"t{next(self._ids)}", text, rel, hwnd, padded(img, rel), source)
+            prefix = "v" if source == "vision" else "t"
+            f = Found(f"{prefix}{next(self._ids)}", text, rel, hwnd, padded(img, rel), source)
             self._by_ref[f.ref] = f
             return f
 

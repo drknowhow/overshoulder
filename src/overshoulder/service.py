@@ -11,7 +11,7 @@ import threading
 import time
 from pathlib import Path
 
-from overshoulder import locate
+from overshoulder import locate, vision
 from overshoulder import scope as sc
 from overshoulder.actions import Ladder
 from overshoulder.driver import capture, ocr, uia
@@ -39,7 +39,8 @@ class Service:
         enable_dpi_awareness()
         self.gw = gateway or Gateway()
         self.cache = uia.ElementCache()
-        self.found = locate.FoundCache()  # t-refs: text read off the scope's pixels
+        self.found = locate.FoundCache()  # t-refs and v-refs: found on the scope's pixels
+        self.locator_for = vision.locator_for  # settings -> vision.Locator; tests swap in a fake model
         self._cache_lease: str | None = None
         self.shots_dir = shots_dir or default_home() / "shots"
         self.recordings_dir = self.shots_dir.parent / "recordings"
@@ -118,13 +119,16 @@ class Service:
 
     def find(self, token: str, lease_id: str, name: str | None = None, name_re: str | None = None,
              control_type: str | None = None, auto_id: str | None = None,
-             max_nodes: int = 2000, text: str | None = None) -> list[dict]:
+             max_nodes: int = 2000, text: str | None = None, describe: str | None = None) -> list[dict]:
         """Elements by name, name regex, control type and/or automation id. text= instead reads the
         scope's pixels with OCR for those words, for apps that paint their own controls; its hits are
         t-refs with source "ocr". A find by name alone that UI Automation has no match for also looks
-        for the name on screen that way."""
+        for the name on screen that way. describe= asks the vision model chosen on the settings page
+        where the described control is ("the gear icon"); its hit is a v-ref with source "vision"."""
         def perform(_t, p):
             scope = self._scope(lease_id)
+            if describe is not None:
+                return self._locate(scope, describe)
             if text is not None:
                 return self._read_text(scope, text)
             roots = uia.roots_for_window(scope.binding.hwnd) if scope.kind == "window" else \
@@ -139,11 +143,11 @@ class Service:
 
         return self.gw.run(token, lease_id, "find", perform, read_only=True,
                            params={"name": name, "name_re": name_re, "control_type": control_type,
-                                   "auto_id": auto_id, "text": text})["result"]
+                                   "auto_id": auto_id, "text": text, "describe": describe})["result"]
 
     def read(self, token: str, lease_id: str, ref: str) -> dict:
         if locate.is_found_ref(ref):
-            raise ValueError(f"{ref} is text found on screen, not a control; find(text=...) again to see "
+            raise ValueError(f"{ref} was found by how the screen looks, not a control; find it again to see "
                              "what is there now")
         target = self._element_target(ref)
         return self.gw.run(token, lease_id, "read_value",
@@ -306,7 +310,7 @@ class Service:
             raise ValueError(f"method must be one of {METHODS}")
         for r in (ref, to_ref):
             if locate.is_found_ref(r) and action not in locate.MOUSE_ACTIONS:
-                raise ValueError(f"{r} is text found on screen; it takes "
+                raise ValueError(f"{r} was found by how the screen looks; it takes "
                                  f"{', '.join(sorted(locate.MOUSE_ACTIONS))}. To type there, click it first, "
                                  "then type without a ref")
         target = self._element_target(ref) if ref else (
@@ -374,7 +378,7 @@ class Service:
                         **({"expect_failed": ["the scope's window closed"]} if expect else {})}
             pixels = capture.changed_fraction(before["img"], after) if before["img"] and after else 0.0
             verdict = {"ok": True, "changed": pixels > CHANGE_EPSILON, "pixels_changed": round(pixels, 5), **ran}
-            el_ref = None if locate.is_found_ref(ref) else ref  # a t-ref has no element to read back
+            el_ref = None if locate.is_found_ref(ref) else ref  # a t- or v-ref has no element to read back
             if action == "drag" and el_ref and t is not None and t.rect is not None:
                 state = uia.element_state(self.cache.get(el_ref))
                 verdict["moved"] = state is None or state["rect"] != t.rect  # gone counts: it may have been dropped in
@@ -411,7 +415,7 @@ class Service:
         return Target(**{**t.__dict__, "revalidate": fresh})
 
     def _found_target(self, ref: str) -> Target:
-        """A t-ref as a target, checked against the scope's pixels now (locate.still_there)."""
+        """A t- or v-ref as a target, checked against the scope's pixels now (locate.still_there)."""
         f = self.found.get(ref)
         if f is None:
             raise GatewayError(f"unknown ref {ref!r}; find it first")
@@ -423,10 +427,12 @@ class Service:
                 raise TargetStale(f"{ref} was found under a scope that has ended; find it again")
             img, origin = locate.scope_pixels(scope)
             if not locate.still_there(f, img):
-                raise TargetStale(f"the text {f.text!r} at {ref} has changed or moved; find it again")
+                what = f"the text {f.text!r}" if f.source == "ocr" else f"what looked like {f.text!r}"
+                raise TargetStale(f"{what} at {ref} has changed or moved; find it again")
             r = f.rel
-            return Target("text", rect=Rect(origin.left + r.left, origin.top + r.top, origin.left + r.right,
-                                            origin.top + r.bottom), name=f.text, hwnd=f.hwnd, ref=ref)
+            return Target("text" if f.source == "ocr" else "vision",
+                          rect=Rect(origin.left + r.left, origin.top + r.top, origin.left + r.right,
+                                    origin.top + r.bottom), name=f.text, hwnd=f.hwnd, ref=ref)
 
         return Target(**{**fresh().__dict__, "revalidate": fresh})
 
@@ -447,6 +453,22 @@ class Service:
         hits = ocr.merged(passes) if query is None else ocr.find(passes, query)
         return [self.found.add(ph.text, ph.box, locate.window_of(scope, origin, ph.box), img).describe(origin)
                 for ph in hits]
+
+    def _locate(self, scope, description: str) -> list[dict]:
+        """Where the vision model sees the described control, as a v-ref, or [] if it says it isn't there."""
+        settings = self.gw.settings_source()
+        if (why := vision.unavailable(settings)) is not None:
+            raise GatewayError(why)
+        img, origin = locate.scope_pixels(scope)
+        locator = self.locator_for(settings)
+        try:
+            box = locator.locate(img, description)
+        except vision.VisionError as e:
+            raise GatewayError(f"the vision model ({locator.name}) could not be asked: {e}") from e
+        if box is None:
+            return []
+        f = self.found.add(description, box, locate.window_of(scope, origin, box), img, source="vision")
+        return [{**f.describe(origin), "model": locator.name}]
 
     @staticmethod
     def _snap(scope):

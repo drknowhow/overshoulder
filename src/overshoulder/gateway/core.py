@@ -46,7 +46,7 @@ MOUSE_ACTIONS = frozenset({"click", "double_click", "right_click", "drag"})
 @dataclass(frozen=True)
 class Target:
     """What an action is aimed at: a UI element (rect + identity) or a bare point."""
-    kind: str  # "element" | "point"
+    kind: str  # "element" | "point" | "text" (an OCR t-ref) | "vision" (a v-ref)
     rect: Rect | None = None
     x: int | None = None
     y: int | None = None
@@ -461,9 +461,10 @@ class Gateway:
                     under = self.checks.element_in_scope_at(scope, *named.point())
                     name = (under or {}).get("name", "")
                 reason = policy.approval_reason(action, name, params, focused_type=focused_type)
-                if reason is None and named is not None and named.kind == "point" \
+                if reason is None and named is not None and named.kind in ("point", "vision") \
                         and action in policy.POINTED_ACTIONS and getattr(self.settings_source(), "ocr_enabled", True):
-                    # UI Automation names nothing consequential there; a drawn button's label may.
+                    # UI Automation names nothing consequential there, and a vision box may not be what it
+                    # was described as; a drawn button's label shows what the click lands on.
                     try:
                         label = self.checks.label_at(scope, *named.point())
                     except Exception:  # fail closed: a click that can't be checked is asked about

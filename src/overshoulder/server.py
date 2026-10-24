@@ -42,8 +42,9 @@ INSTRUCTIONS = """Overshoulder lets you see and operate desktop apps on this Win
 2. observe() returns the scope's UI elements with refs (e1, e2...). find() filters them. Apps that draw
    their own buttons (games, canvases, some older apps) show no elements for them: find(text="Save")
    reads the screen with OCR and returns t-refs (t1, t2...) with source "ocr", and observe(text=true)
-   lists all the text it reads. A t-ref takes click, double_click, right_click and drag, and goes stale
-   when the text under it changes.
+   lists all the text it reads. For an icon with no text, find(describe="the gear icon") asks a vision
+   model, if the person has turned one on, and returns a v-ref (v1...) with source "vision". t- and
+   v-refs take click, double_click, right_click and drag, and go stale when the pixels under them change.
 3. act(action, ref=... | x=..,y=..) runs one action and verifies it. Prefer refs and invoke/set_value
    over coordinates. Actions: """ + ", ".join(ACTIONS) + """. A drag also takes the drop point:
    to_ref or to_x/to_y.
@@ -211,13 +212,15 @@ class Daemon:
         @mcp.tool()
         async def find(ctx: Context, name: str | None = None, name_re: str | None = None,
                        control_type: str | None = None, auto_id: str | None = None,
-                       text: str | None = None) -> dict:
+                       text: str | None = None, describe: str | None = None) -> dict:
             """Find elements in scope by exact name, name regex, control type and/or automation id.
             text="Save" instead reads the screen with OCR and returns where those words are as t-refs
             (source "ocr"), for buttons an app draws itself. A find by name alone that matches no element
-            looks for the name on screen the same way."""
+            looks for the name on screen the same way. describe="the gear icon" asks a vision model where
+            that is and returns a v-ref (source "vision"), or nothing if it sees none; it works only when
+            the person has turned a vision model on, and can take a minute while a local model loads."""
             return await authed(ctx, lambda token: {"elements": d.svc.find(
-                token, d.lease_for(token), name, name_re, control_type, auto_id, text=text)})
+                token, d.lease_for(token), name, name_re, control_type, auto_id, text=text, describe=describe)})
 
         @mcp.tool()
         async def read(ctx: Context, ref: str) -> dict:

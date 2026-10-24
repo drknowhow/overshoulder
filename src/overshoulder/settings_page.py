@@ -17,6 +17,7 @@ from starlette.responses import HTMLResponse, RedirectResponse, Response
 
 from overshoulder import brand, phone
 from overshoulder import settings as st
+from overshoulder.vision import VISION_MODES
 
 LINK_TTL_S = 15 * 60
 SESSION_TTL_S = 8 * 3600
@@ -100,6 +101,21 @@ PAGE = """<!doctype html>
   built into Windows, only in the window the agent has been given, and nothing is sent anywhere.</p>
   <label class="row"><input type="checkbox" name="ocr_enabled" {ocr_enabled}>
     <span>Let agents read text on screen to find controls</span></label>
+  <p class="hint">An icon without text can be found by asking a vision model where it is, for example
+  "the gear icon". The model sees the agent's window.</p>
+  {vision_modes}
+  <div class="field"><label for="vision_local_model">Model on this PC (Ollama)</label>
+    <input id="vision_local_model" type="text" name="vision_local_model" value="{vision_local_model}"></div>
+  <div class="field"><label for="vision_local_url">Ollama address</label>
+    <input id="vision_local_url" type="text" name="vision_local_url" value="{vision_local_url}"></div>
+  <div class="field"><label for="vision_cloud_url">Cloud address (OpenAI-compatible)</label>
+    <input id="vision_cloud_url" type="text" name="vision_cloud_url" value="{vision_cloud_url}"
+      placeholder="https://.../v1"></div>
+  <div class="field"><label for="vision_cloud_model">Cloud model</label>
+    <input id="vision_cloud_model" type="text" name="vision_cloud_model" value="{vision_cloud_model}"></div>
+  <div class="field"><label for="vision_cloud_key">Cloud API key</label>
+    <input id="vision_cloud_key" type="password" name="vision_cloud_key" value="" autocomplete="off"
+      placeholder="{vision_cloud_key_hint}"></div>
 </section>
 <section>
   <h2>Automatic detection</h2>
@@ -219,6 +235,11 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
         f'{" (default)" if m == st.DEFAULT_INPUT_MODE else ""}<br>'
         f'<span class="hint">{html.escape(desc)}</span></span></label>'
         for m, (label, desc) in st.INPUT_MODES.items())
+    vision_modes = "\n".join(
+        f'<label class="row"><input type="radio" name="vision_mode" value="{m}" '
+        f'{"checked" if m == s.vision_mode else ""}><span><b>{html.escape(label)}</b>'
+        f'{" (default)" if m == "off" else ""}<br><span class="hint">{html.escape(desc)}</span></span></label>'
+        for m, (label, desc) in VISION_MODES.items())
     return PAGE.format(
         favicon=html.escape(brand.mark_data_uri()), mark=brand.MARK_SVG,
         ink=brand.INK, accent=brand.AGENT_BLUE, paper=brand.PAPER,
@@ -227,6 +248,12 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
         input_modes=modes,
         borrow_idle_s=s.borrow_idle_s,
         ocr_enabled="checked" if s.ocr_enabled else "",
+        vision_modes=vision_modes,
+        vision_local_model=html.escape(s.vision_local_model),
+        vision_local_url=html.escape(s.vision_local_url),
+        vision_cloud_url=html.escape(s.vision_cloud_url),
+        vision_cloud_model=html.escape(s.vision_cloud_model),
+        vision_cloud_key_hint="saved; leave empty to keep it" if s.vision_cloud_key else "if the service needs one",
         waits_enabled="checked" if s.waits_enabled else "",
         kinds=kinds,
         poll_interval_ms=s.poll_interval_ms,
@@ -249,7 +276,11 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
         phone_test=_test_result(phone_test))
 
 
-def settings_from_form(form) -> st.Settings:
+def settings_from_form(form, current: st.Settings | None = None) -> st.Settings:
+    """The settings the form asks for. A saved API key is kept when its field is left empty, since the page
+    never shows it."""
+    current = current or st.Settings()
+
     def num(name: str, default: int) -> int:
         try:
             return int(form.get(name, default))
@@ -266,6 +297,12 @@ def settings_from_form(form) -> st.Settings:
         input_mode=str(form.get("input_mode", st.DEFAULT_INPUT_MODE)),
         borrow_idle_s=num("borrow_idle_s", 5),
         ocr_enabled=form.get("ocr_enabled") == "on",
+        vision_mode=str(form.get("vision_mode", current.vision_mode)),
+        vision_local_url=str(form.get("vision_local_url", current.vision_local_url)),
+        vision_local_model=str(form.get("vision_local_model", current.vision_local_model)),
+        vision_cloud_url=str(form.get("vision_cloud_url", current.vision_cloud_url)),
+        vision_cloud_model=str(form.get("vision_cloud_model", current.vision_cloud_model)),
+        vision_cloud_key=str(form.get("vision_cloud_key") or current.vision_cloud_key),
     ).clamp()
 
 
@@ -328,7 +365,7 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
         expected = sessions.form_token(request.cookies.get(COOKIE))
         if not expected or not secrets.compare_digest(str(form.get("form_token", "")), expected):
             return HTMLResponse("Session expired. Run <code>overshoulder settings</code> again.", 403)
-        st.save(settings_from_form(form))
+        st.save(settings_from_form(form, st.load_or_default()))
         phone.save(phone_from_form(form, phone.load()))
         return RedirectResponse("/settings?saved=1", status_code=303)
 

@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 from overshoulder.gateway.clients import default_home
+from overshoulder.vision import DEFAULT_LOCAL_MODEL, DEFAULT_LOCAL_URL, VISION_MODES
 
 WAIT_KINDS = {
     "window_appears": "A window opens (title or process)",
@@ -43,6 +44,13 @@ class Settings:
     borrow_idle_s: int = 5
     # Agents may read text on screen with Windows OCR to find controls UI Automation can't see.
     ocr_enabled: bool = True
+    # Agents may ask a vision model where a described control is (vision.py): "off", "local" or "cloud".
+    vision_mode: str = "off"
+    vision_local_url: str = DEFAULT_LOCAL_URL
+    vision_local_model: str = DEFAULT_LOCAL_MODEL
+    vision_cloud_url: str = ""
+    vision_cloud_model: str = ""
+    vision_cloud_key: str = field(default="", repr=False)
 
     def clamp(self) -> Settings:
         self.poll_interval_ms = max(100, min(int(self.poll_interval_ms), 10_000))
@@ -52,6 +60,12 @@ class Settings:
         if self.input_mode not in INPUT_MODES:
             self.input_mode = DEFAULT_INPUT_MODE
         self.borrow_idle_s = max(1, min(int(self.borrow_idle_s), 120))
+        if self.vision_mode not in VISION_MODES:
+            self.vision_mode = "off"
+        self.vision_local_url = self.vision_local_url.strip() or DEFAULT_LOCAL_URL
+        self.vision_local_model = self.vision_local_model.strip() or DEFAULT_LOCAL_MODEL
+        self.vision_cloud_url = self.vision_cloud_url.strip()
+        self.vision_cloud_model = self.vision_cloud_model.strip()
         return self
 
 
