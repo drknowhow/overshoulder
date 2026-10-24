@@ -233,7 +233,8 @@ class Daemon:
             toggle, select, set_value (value=), type (text=), hotkey (combo="ctrl+s"), focus. Target by
             ref from observe/find, or x/y screen pixels inside the scope. drag goes from the target to
             to_ref or to_x/to_y, both inside the scope; dropping onto something named like Delete or
-            Recycle Bin needs the person's approval, and verify.moved says whether a ref'd item moved.
+            Recycle Bin needs the person's approval, and verify.moved says whether a ref'd item moved. A
+            click at x/y is checked against the text on screen there too, so x/y on a drawn Delete asks.
             expect: {"changed": true} | {"text_contains": "..."} | {"element": {"name": "...", "control_type": "..."}}.
             method: "auto" (default; works on the window in the background and uses the person's mouse or
             keyboard only as a last resort), "background" (never), "input" (real input). The result's

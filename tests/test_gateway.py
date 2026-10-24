@@ -61,6 +61,7 @@ def ok_checks(**over):
                 window_at_point=lambda s, x, y: 0x10, element_at_point=lambda x, y: None,
                 focused_element=lambda: dict(DOC_FOCUS), pid_of=lambda h: 1,
                 scope_focus=lambda s: dict(DOC_FOCUS), element_in_scope_at=lambda s, x, y: None,
+                label_at=lambda s, x, y: "",
                 root_of=lambda h: h, is_password_window=lambda h: False, person_idle_s=lambda: 999.0,
                 foreground=lambda: PERSON_WINDOW, bring_forward=lambda h: True,
                 desk_state=lambda: ((7, 8), PERSON_WINDOW),

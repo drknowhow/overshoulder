@@ -124,6 +124,42 @@ def window_of(scope, origin: Rect, rel: Rect) -> int | None:
     return w.window_at(cx, cy) or None
 
 
+# label_at reads this much of the scope around a point (screen pixels), and takes the nearest phrase
+# that lies within LABEL_REACH line heights of the point across and LABEL_REACH_DOWN up or down: a
+# painted button's label sits in its middle with a margin around it.
+LABEL_REGION = (640, 240)
+LABEL_REACH = 4.0
+LABEL_REACH_DOWN = 1.5
+
+
+def label_at(scope, x: int, y: int) -> str:
+    """The text a click at (x, y) would land on or beside, read with OCR, or "" if there is none."""
+    from overshoulder.driver import ocr
+
+    if not ocr.available():
+        return ""
+    img, origin = scope_pixels(scope)
+    px, py = x - origin.left, y - origin.top
+    half_w, half_h = LABEL_REGION[0] // 2, LABEL_REGION[1] // 2
+    left, top = max(px - half_w, 0), max(py - half_h, 0)
+    right, bottom = min(px + half_w, img.width), min(py + half_h, img.height)
+    if right <= left or bottom <= top:
+        return ""
+    return nearest_label(ocr.merged(ocr.scan(img.crop((left, top, right, bottom)))), px - left, py - top)
+
+
+def nearest_label(phrases, x: int, y: int) -> str:
+    """The phrase nearest (x, y), measured in its own line heights, if within reach."""
+    best, best_d = "", 1.0
+    for ph in phrases:
+        b, h = ph.box, max(ph.box.height, 1)
+        dx = max(b.left - x, 0, x - b.right) / (LABEL_REACH * h)
+        dy = max(b.top - y, 0, y - b.bottom) / (LABEL_REACH_DOWN * h)
+        if max(dx, dy) <= best_d:
+            best, best_d = ph.text, max(dx, dy)
+    return best
+
+
 def still_there(f: Found, img: Image.Image) -> bool:
     now = padded(img, f.rel)
     return now.size == f.pixels.size and capture.changed_fraction(now, f.pixels) <= STALE_SHARE

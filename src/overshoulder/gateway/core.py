@@ -110,6 +110,11 @@ def _element_in_scope_at(scope, x: int, y: int) -> dict | None:
     return uia.element_in_window_at(binding.hwnd, x, y)
 
 
+def _label_at(scope, x: int, y: int) -> str:
+    from overshoulder import locate  # imported late: locate imports this package's limits module
+    return locate.label_at(scope, x, y)
+
+
 def _foreground_checked(scope, not_elevated: Callable[[int], None]) -> int:
     fg = sc.require_foreground_in_scope(scope)
     not_elevated(w.pid_of(fg))
@@ -172,6 +177,9 @@ class Checks:
     # Background-aware probes: the scope's own focus and the scope's own element under a point.
     scope_focus: Callable[[Any], dict | None] = _scope_focus
     element_in_scope_at: Callable[[Any, int, int], dict | None] = _element_in_scope_at
+    # The text on screen a click at a point lands on or beside ("" for none), read with OCR, for apps
+    # whose drawn buttons UI Automation can't name.
+    label_at: Callable[[Any, int, int], str] = _label_at
     root_of: Callable[[int], int] = lambda h: __import__(
         "overshoulder.driver.background", fromlist=["root_of"]).root_of(h)
     is_password_window: Callable[[int], bool] = lambda h: __import__(
@@ -453,6 +461,15 @@ class Gateway:
                     under = self.checks.element_in_scope_at(scope, *named.point())
                     name = (under or {}).get("name", "")
                 reason = policy.approval_reason(action, name, params, focused_type=focused_type)
+                if reason is None and named is not None and named.kind == "point" \
+                        and action in policy.POINTED_ACTIONS and getattr(self.settings_source(), "ocr_enabled", True):
+                    # UI Automation names nothing consequential there; a drawn button's label may.
+                    try:
+                        label = self.checks.label_at(scope, *named.point())
+                    except Exception:  # fail closed: a click that can't be checked is asked about
+                        label, reason = "", f"{action} at {named.point()}, where the text could not be read"
+                    if label:
+                        reason = policy.approval_reason(action, label, params, focused_type=focused_type)
                 if reason:
                     req = {"kind": "action", "client": client.name, "action": action, "reason": reason,
                            "target": named.describe() if named else None, "scope": scope_desc,
