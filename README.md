@@ -342,8 +342,9 @@ Overshoulder POSTs `{"type": "overshoulder.approval.closed", "id": "<id>", "outc
 the recording's folder (`%LOCALAPPDATA%\Overshoulder\recordings\<stamp>-<name>`):
 
 - `tutorial.mp4`: the agent's pointer gliding to each target, click ripples, numbered highlights and
-  a caption strip, with the idle time between steps cut. The camera zooms in on small targets and
-  back out. Hotkeys show as keycaps, and typed text appears as a caption while it is typed.
+  a caption strip, with the idle time between steps cut. The camera zooms in on small controls and
+  holds still while the next steps stay in view; strokes on a canvas (x/y targets) are drawn without
+  it moving. Hotkeys show as keycaps, and typed text appears as a caption while it is typed.
 - `tutorial.gif`, 640 px wide, for a README or a chat.
 - `step-NN.png` for each step (always the whole frame), `steps.md` and `steps.json`.
 - With narration: a voice track in the MP4, plus `narration.wav` and `narration.srt`. Each line starts

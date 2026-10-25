@@ -494,7 +494,7 @@ class Service:
             elif action == "toggle":
                 out = ladder.pattern("uia_toggle", lambda: {"toggle": uia.toggle(_need(el, action))})
             elif action == "select":
-                out = ladder.pattern("uia_select", lambda: uia.select(_need(el, action)))
+                out = ladder.select(_need(el, action))
             elif action == "set_value":
                 out = ladder.set_value(_need(el, action), value or "")
             elif action == "focus":

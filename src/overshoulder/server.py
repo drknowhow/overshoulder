@@ -271,7 +271,10 @@ class Daemon:
                       value: str | None = None, expect: dict | None = None, method: str = "auto",
                       to_ref: str | None = None, to_x: int | None = None, to_y: int | None = None) -> dict:
             """Run one action and verify it. action: click, double_click, right_click, drag, invoke,
-            toggle, select, set_value (value=), type (text=), hotkey (combo="ctrl+s"), focus. Target by
+            toggle, select, set_value (value=; a number sets a slider or spinner), type (text=), hotkey
+            (combo="ctrl+s"), focus. invoke falls back to Toggle, then Select, for a control that has no
+            Invoke; a control with none of the patterns an action needs is refused with
+            pattern_unsupported, which names the action to use instead. Target by
             ref from observe/find, or x/y screen pixels inside the scope. drag goes from the target to
             to_ref or to_x/to_y, both inside the scope; dropping onto something named like Delete or
             Recycle Bin needs the person's approval, and verify.moved says whether a ref'd item moved. A

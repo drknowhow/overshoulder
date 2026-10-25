@@ -202,22 +202,36 @@ def _wrapper(el: Element):
     return UIAWrapper(el.info)
 
 
+# These go through the pattern interfaces, not the control-type wrapper's methods: a wrapper picked for
+# the control type (a ListItem, say) may not have the method, while a missing pattern always raises
+# NoPatternInterfaceError, which the ladder turns into a refusal.
 def invoke(el: Element) -> None:
-    _wrapper(el).invoke()
+    _wrapper(el).iface_invoke.Invoke()
 
 
 def toggle(el: Element) -> str:
-    wr = _wrapper(el)
-    wr.toggle()
-    return str(wr.get_toggle_state())
+    iface = _wrapper(el).iface_toggle
+    iface.Toggle()
+    return str(iface.CurrentToggleState)
 
 
 def select(el: Element) -> None:
-    _wrapper(el).select()
+    _wrapper(el).iface_selection_item.Select()
 
 
 def set_value(el: Element, value: str) -> None:
     _wrapper(el).iface_value.SetValue(value)
+
+
+def set_range_value(el: Element, value: float) -> float:
+    """Set a slider's or spinner's number through RangeValue and return what it reads back. A number
+    outside its range raises ValueError naming the range."""
+    rv = _wrapper(el).iface_range_value
+    lo, hi = rv.CurrentMinimum, rv.CurrentMaximum
+    if not lo <= value <= hi:
+        raise ValueError(f"{value:g} is outside this control's range, {lo:g} to {hi:g}")
+    rv.SetValue(value)
+    return rv.CurrentValue
 
 
 def focus(el: Element) -> None:
@@ -249,11 +263,16 @@ def read(el: Element) -> dict:
         pass
     if "value" not in out:
         try:
+            out["value"] = wr.iface_range_value.CurrentValue  # a slider or spinner: a number
+        except Exception:
+            pass
+    if "value" not in out:
+        try:
             out["text"] = wr.iface_text.DocumentRange.GetText(-1)
         except Exception:
             pass
     try:
-        out["toggle"] = str(wr.get_toggle_state())
+        out["toggle"] = str(wr.iface_toggle.CurrentToggleState)
     except Exception:
         pass
     return out

@@ -4,10 +4,13 @@ import pytest
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows-only driver")
 
+from pywinauto.uia_defines import NoPatternInterfaceError  # noqa: E402
+
 from overshoulder import actions as A  # noqa: E402
 from overshoulder.driver import background as bg  # noqa: E402
 from overshoulder.driver.windows import Rect  # noqa: E402
 from overshoulder.gateway.core import Target  # noqa: E402
+from overshoulder.gateway.errors import PatternUnsupported  # noqa: E402
 
 
 class FakeScope:
@@ -129,6 +132,70 @@ def test_pressable_element_uses_uia_patterns_first(env, monkeypatch):
     target = Target("element", rect=Rect(0, 0, 10, 10), control_type="Button", name="OK")
     out = A.Ladder(FakeScope(), p, "background").press(object(), target).to_dict()
     assert out["method"] == "uia_invoke" and calls == ["uia_invoke"]
+
+
+def _no_pattern(*a, **k):
+    raise NoPatternInterfaceError()
+
+
+def test_invoke_falls_back_to_toggle_and_select_then_refuses(env, monkeypatch):
+    calls, p = env
+    monkeypatch.setattr(A.uia, "invoke", _no_pattern)
+    monkeypatch.setattr(A.uia, "toggle", calls.hook("uia_toggle", "1"))
+    out = A.Ladder(FakeScope(), p, "background").invoke(object()).to_dict()
+    assert out["method"] == "uia_toggle"
+    assert [a["method"] for a in out["attempts"]] == ["uia_invoke", "uia_toggle"]
+    monkeypatch.setattr(A.uia, "toggle", _no_pattern)
+    monkeypatch.setattr(A.uia, "select", _no_pattern)
+    with pytest.raises(PatternUnsupported, match="use click"):
+        A.Ladder(FakeScope(), p, "auto").invoke(object())
+    assert "real_click" not in calls  # invoke never reaches for the mouse
+
+
+def test_select_falls_back_to_invoke(env, monkeypatch):
+    calls, p = env
+    monkeypatch.setattr(A.uia, "select", _no_pattern)
+    monkeypatch.setattr(A.uia, "invoke", calls.hook("uia_invoke"))
+    assert A.Ladder(FakeScope(), p, "background").select(object()).to_dict()["method"] == "uia_invoke"
+
+
+def test_a_missing_pattern_is_refused_with_a_code_not_raised_raw(env):
+    calls, p = env
+    with pytest.raises(PatternUnsupported) as e:
+        A.Ladder(FakeScope(), p, "background").pattern("uia_toggle", _no_pattern)
+    assert e.value.code == "pattern_unsupported" and "Toggle" in str(e.value)
+
+
+def test_patterns_go_through_the_interface_so_a_missing_one_is_refused(env, monkeypatch):
+    calls, p = env
+
+    class ListItem:  # like pywinauto's ListItemWrapper: no toggle() method, and no Toggle pattern
+        @property
+        def iface_toggle(self):
+            raise NoPatternInterfaceError()
+
+    monkeypatch.setattr(A.uia, "_wrapper", lambda el: ListItem())
+    with pytest.raises(PatternUnsupported):
+        A.Ladder(FakeScope(), p, "background").pattern("uia_toggle", lambda: A.uia.toggle(object()))
+
+
+def test_set_value_sets_a_slider_through_range_value(env, monkeypatch):
+    calls, p = env
+    monkeypatch.setattr(A.bg, "is_edit_class", lambda h: False)
+    monkeypatch.setattr(A.uia, "set_value", _no_pattern)
+    got = []
+    monkeypatch.setattr(A.uia, "set_range_value", lambda el, v: got.append(v))
+    out = A.Ladder(FakeScope(), p, "background").set_value(object(), "12").to_dict()
+    assert out["method"] == "uia_range_value" and got == [12.0]
+    with pytest.raises(A.NeedsRealInput):  # not a number: no rung takes it
+        A.Ladder(FakeScope(), p, "background").set_value(object(), "large")
+
+    def out_of_range(el, v):
+        raise ValueError("99 is outside this control's range, 1 to 30")
+
+    monkeypatch.setattr(A.uia, "set_range_value", out_of_range)
+    with pytest.raises(ValueError, match="1 to 30"):
+        A.Ladder(FakeScope(), p, "background").set_value(object(), "99")
 
 
 def test_typing_posts_chars_to_the_scopes_focus_window(env, monkeypatch):

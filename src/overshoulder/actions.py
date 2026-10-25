@@ -2,11 +2,17 @@
 
 Rungs, per action (docs/SPIKE-phase2.md has the measurements behind them):
   press a control   BM_CLICK for a Win32 button -> UIA Invoke/Toggle/Select -> posted click -> real click
+  invoke            BM_CLICK for a Win32 button -> UIA Invoke -> Toggle -> Select (Paint's tool buttons
+                    only toggle); never the mouse, so a control with none of them is refused
+  select            UIA SelectionItem -> Invoke (Paint's colour swatches are list items that only invoke)
   click a point     posted click (one retry for Chromium, which can swallow the first) -> real click
   type              EM_REPLACESEL for edit controls (one message, so nothing arrives out of order) ->
                     WM_CHAR posted to the scope's input window -> real typing
                     (Chromium/Electron windows in the background go straight to real typing)
-  set a value       WM_SETTEXT for a Win32 edit -> UIA ValuePattern
+  set a value       WM_SETTEXT for a Win32 edit -> UIA ValuePattern -> UIA RangeValue for a number
+                    (sliders and spinners)
+A control without the UI Automation pattern an action needs is refused with pattern_unsupported,
+naming the action to use instead.
   (UI Automation on Win32 controls was seen to bring the app forward for a moment, as on Character Map,
   so a native control gets its own window message first.)
   hotkey            keys posted with modifiers in the target thread's key state -> (real, only if asked)
@@ -43,7 +49,7 @@ from overshoulder.driver import capture, uia
 from overshoulder.driver import input as inp
 from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
-from overshoulder.gateway.errors import NeedsRealInput, TypingMismatch
+from overshoulder.gateway.errors import NeedsRealInput, PatternUnsupported, TypingMismatch
 
 METHODS = ("auto", "background", "input")
 PRESSABLE = {"button", "menuitem", "hyperlink", "splitbutton", "checkbox", "radiobutton", "tabitem", "listitem",
@@ -54,6 +60,11 @@ REGION = 90  # half-size of the area checked for a visible change around a poste
 # make "auto" type the text a second time with real keys.
 LANDED_WAIT_S = 2.0
 MISMATCH = "mismatch"  # read-back: the field changed, but does not hold the typed text
+PATTERNS = {"uia_invoke": "invoke", "uia_toggle": "toggle", "uia_select": "select"}  # rung -> uia function
+# What to use instead when a control lacks the patterns an action tries.
+INSTEAD = {"invoke": "use click, which can also click its centre", "select": "use click",
+           "toggle": "use click or invoke", "focus": "use click"}
+PASS_THROUGH = ("lease_revoked", "paused", "needs_real_input")  # refusals a failed rung must not swallow
 
 
 @dataclass
@@ -174,8 +185,38 @@ class Ladder:
         self._attempt("button_message", True)
         return self._done("button_message")
 
+    def _rungs(self, el, rungs: list[str]) -> Outcome | None:
+        """Try a Win32 button message and UIA patterns in turn; None if the control took none of them."""
+        for name in self._ordered(rungs):
+            if name == "button_message":
+                if (done := self._button_message(el)) is not None:
+                    return done
+                continue
+            fn = getattr(uia, PATTERNS[name])  # looked up per call, so a patched uia function is used
+            try:
+                self.p["abort"]()
+                self._guarded(lambda fn=fn: fn(el))
+                self._attempt(name, True)
+                return self._done(name)
+            except Exception as e:  # pattern not supported: next rung
+                if getattr(e, "code", None) in PASS_THROUGH:
+                    raise
+                self._attempt(name, False, type(e).__name__)
+        return None
+
     def invoke(self, el) -> Outcome:
-        return self._button_message(el) or self.pattern("uia_invoke", lambda: uia.invoke(el))
+        done = self._rungs(el, ["button_message", "uia_invoke", "uia_toggle", "uia_select"])
+        if done is None:
+            raise PatternUnsupported(f"this control takes none of Invoke, Toggle or Select through UI "
+                                     f"Automation; {INSTEAD['invoke']}")
+        return done
+
+    def select(self, el) -> Outcome:
+        done = self._rungs(el, ["uia_select", "uia_invoke"])
+        if done is None:
+            raise PatternUnsupported(f"this control takes neither SelectionItem nor Invoke through UI "
+                                     f"Automation; {INSTEAD['select']}")
+        return done
 
     def press(self, el, target, button: str = "left", count: int = 1) -> Outcome:
         """click / double_click / right_click."""
@@ -187,21 +228,8 @@ class Ladder:
                 rungs.append("button_message")
             if el is not None and kind in PRESSABLE:
                 rungs += ["uia_invoke", "uia_toggle", "uia_select"]
-        patterns = {"uia_invoke": uia.invoke, "uia_toggle": uia.toggle, "uia_select": uia.select}
-        for name in self._ordered(rungs):
-            if name == "button_message":
-                if (done := self._button_message(el)) is not None:
-                    return done
-                continue
-            try:
-                self.p["abort"]()
-                self._guarded(lambda fn=patterns[name]: fn(el))
-                self._attempt(name, True)
-                return self._done(name)
-            except Exception as e:  # pattern not supported: next rung
-                if getattr(e, "code", None) in ("lease_revoked", "paused", "needs_real_input"):
-                    raise
-                self._attempt(name, False, type(e).__name__)
+        if rungs and (done := self._rungs(el, rungs)) is not None:
+            return done
         x, y = target.point()
         if self.method != "input":
             top = self.top_at(x, y)
@@ -351,7 +379,8 @@ class Ladder:
     def set_value(self, el, value: str) -> Outcome:
         native = self._native(el)
         edit = bool(native) and bg.is_edit_class(native)
-        for name in self._ordered(["set_text_message", "uia_value"] if edit else ["uia_value"]):
+        rungs = ["set_text_message", "uia_value"] if edit else ["uia_value", "uia_range_value"]
+        for name in self._ordered(rungs):
             if name == "set_text_message":
                 self.p["background_target"](native, typing=True)
                 try:
@@ -361,12 +390,21 @@ class Ladder:
                 except bg.BackgroundUnsupported as e:
                     self._attempt(name, False, str(e))
                 continue
+            setter, arg = uia.set_value, value
+            if name == "uia_range_value":  # a slider or spinner takes a number
+                try:
+                    setter, arg = uia.set_range_value, float(value)
+                except ValueError:
+                    self._attempt(name, False, "not a number")
+                    continue
             try:
-                self._guarded(lambda: uia.set_value(el, value))
+                self._guarded(lambda f=setter, a=arg: f(el, a))
                 self._attempt(name, True)
                 return self._done(name)
+            except ValueError:
+                raise  # outside the control's range: the message names the range
             except Exception as e:
-                if getattr(e, "code", None) in ("lease_revoked", "paused", "needs_real_input"):
+                if getattr(e, "code", None) in PASS_THROUGH:
                     raise
                 self._attempt(name, False, type(e).__name__)
         raise NeedsRealInput("this control takes no value through UI Automation or edit messages; "
@@ -394,8 +432,17 @@ class Ladder:
         return self._done("real_keys", background=False)
 
     def pattern(self, name: str, fn) -> Outcome:
-        """invoke / toggle / select / focus through UI Automation, with the foreground guard."""
-        result = self._guarded(fn)
+        """toggle / focus through UI Automation, with the foreground guard. A control without the
+        pattern is refused with pattern_unsupported."""
+        try:
+            result = self._guarded(fn)
+        except Exception as e:
+            if getattr(e, "code", None) is not None or type(e).__name__ != "NoPatternInterfaceError":
+                raise
+            self._attempt(name, False, type(e).__name__)
+            action = name.removeprefix("uia_")
+            raise PatternUnsupported(f"this control has no {action.capitalize()} pattern in UI Automation; "
+                                     f"{INSTEAD.get(action, 'use click')}") from e
         self._attempt(name, True)
         out = self._done(name)
         if result is not None:

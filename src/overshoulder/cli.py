@@ -409,7 +409,7 @@ def main(argv: list[str] | None = None) -> int:
     rr.add_argument("--pointer", default="agent", choices=["agent", "real", "none"],
                     help="draw the agent's pointer (default), the recorded real cursor, or none")
     rr.add_argument("--zoom", default="auto", choices=["auto", "off"],
-                    help="zoom in on each step's target (default) or never")
+                    help="zoom in on small controls and hold still between nearby steps (default), or never")
     rr.add_argument("--no-keys", action="store_true", help="do not show keystrokes and typed text")
     rr.add_argument("--no-gif", action="store_true", help="do not write tutorial.gif")
     rr.add_argument("--mlt", action="store_true",

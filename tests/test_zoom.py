@@ -20,6 +20,10 @@ def _click(t, rect):
     return _row("click", t, target={"kind": "element", "name": "B", "rect": list(rect)})
 
 
+def _stroke(t, x, y, tx, ty):
+    return _row("drag", t, target={"kind": "point", "x": x, "y": y}, to={"kind": "point", "x": tx, "y": ty})
+
+
 def _width(crop):
     return crop[2] - crop[0]
 
@@ -99,6 +103,39 @@ def test_annotations_are_drawn_after_the_zoom_at_their_normal_size():
     assert out.getpixel((400, 257)) != (255, 255, 255)
     border = [out.getpixel((400, y)) != (255, 255, 255) for y in range(246, 272)]
     assert 3 <= sum(border) <= 5  # a 4 px outline, not one scaled up to 8 px
+
+
+def test_strokes_on_a_canvas_never_move_the_camera():
+    rows = [_stroke(1.0 + 3 * i, 100 + 40 * i, 300, 140 + 40 * i, 320) for i in range(6)]
+    assert Z.plan(R.build_steps(rows, 0.0), SIZE) == []
+
+
+def test_one_click_on_a_control_between_strokes_does_not_zoom_in_and_out():
+    rows = [_stroke(1.0, 100, 300, 300, 400), _stroke(4.0, 300, 400, 500, 300), _click(7.0, (20, 20, 40, 40)),
+            _stroke(10.0, 500, 300, 700, 400)]
+    assert Z.plan(R.build_steps(rows, 0.0), SIZE) == []
+
+
+def test_steps_far_apart_on_the_clock_but_close_in_the_video_do_not_open_out():
+    steps = R.build_steps([_click(1.0, (100, 100, 120, 120)), _click(9.0, (600, 400, 620, 420))], 0.0)
+    keys = Z.plan(steps, SIZE, seen=R.seen_time(steps, 12.0, [], tight=True))
+    assert all(Z.camera_at(t / 10, keys, SIZE, (0, 0)) is not None for t in range(10, 91))
+    assert Z.camera_at(6.0, Z.plan(steps, SIZE), SIZE, (0, 0)) is None  # real-time pacing: a pause to sit through
+
+
+def test_the_camera_holds_while_the_next_target_is_in_view_and_comes_back_after_a_short_visit():
+    rows = [_click(1.0, (100, 100, 120, 120)), _click(2.0, (130, 100, 150, 120)), _click(3.0, (600, 450, 620, 470)),
+            _click(4.0, (110, 130, 130, 150))]
+    shots = Z.shots(R.build_steps(rows, 0.0), SIZE)
+    assert [len(s.steps) for s in shots] == [2, 1, 1]
+    assert shots[2].view == shots[0].view
+
+
+def test_seen_time_counts_only_what_the_video_keeps():
+    steps = R.build_steps([_click(1.0, (100, 100, 120, 120)), _click(9.0, (600, 400, 620, 420))], 0.0)
+    assert R.seen_time(steps, 12.0, [], tight=True)(3.2, 9.0) == pytest.approx(1.5)
+    assert R.seen_time(steps, 12.0, [], tight=False)(3.2, 9.0) == pytest.approx(5.8)
+    assert R.seen_time(steps, 12.0, [(8.0, 8.5)], tight=True)(3.2, 9.0) == pytest.approx(1.0)
 
 
 def test_render_rejects_an_unknown_zoom(tmp_path):

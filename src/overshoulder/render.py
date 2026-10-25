@@ -1,8 +1,9 @@
 """Turn a clean recording + action timeline into a tutorial: MP4, per-step PNGs and steps.md.
 
 Everything is drawn here, after the fact, from the recording's tracks: a pointer, click ripples,
-numbered step badges, a highlight around each target, and a caption bar. The video also zooms in on
-each step's target and back out (zoom.py). The recording itself never contains overlays, so a
+numbered step badges, a highlight around each target, and a caption bar. The video also zooms in
+where the work happens and holds still through a run of nearby steps (zoom.py). The recording itself
+never contains overlays, so a
 tutorial can be re-rendered with different styling or edits. With mlt=True the same pass also writes
 a Shotcut project of the edit (shotcut.py). What it makes carries the "Made with Overshoulder" mark
 (mark.py).
@@ -345,13 +346,40 @@ def keep_frame(t: float, steps: list[Step], last_t: float) -> bool:
     return any(s.start - PAD_BEFORE <= t <= s.end + PAD_AFTER for s in steps)
 
 
+def seen_time(steps: list[Step], last_t: float, cuts: list[tuple[float, float]], tight: bool) -> zm.Seen:
+    """seen(a, b): how many seconds of source time a..b the video shows, after tight timing (the spans
+    keep_frame keeps) and the layer's cuts. The camera judges "close" by this, not by the clock."""
+    if tight:
+        spans = sorted([(0.0, EDGE_S), (last_t - EDGE_S, last_t),
+                        *((s.start - PAD_BEFORE, s.end + PAD_AFTER) for s in steps)])
+    else:
+        spans = [(float("-inf"), float("inf"))]
+    kept: list[list[float]] = []
+    for a, b in spans:
+        if kept and a <= kept[-1][1]:
+            kept[-1][1] = max(kept[-1][1], b)
+        else:
+            kept.append([a, b])
+
+    def seen(a: float, b: float) -> float:
+        total = 0.0
+        for lo, hi in kept:
+            x, y = max(a, lo), min(b, hi)
+            if y > x:
+                total += max(0.0, y - x - sum(max(0.0, min(y, c1) - max(x, c0)) for c0, c1 in cuts))
+        return total
+
+    return seen
+
+
 def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | None = None,
            tight: bool = True, pointer: str = "agent", zoom: str = "auto", keys: bool = True,
            gif: bool = True, narrate: bool = False, voice: str | None = None, engine: nr.Engine | None = None,
            outside_audio: bool = False, mlt: bool = False) -> dict:
     """tight=True cuts the idle time between steps; tight=False keeps real-time pacing. pointer: "agent"
-    (the agent's own track), "real" (the recorded cursor) or "none". zoom: "auto" closes in on each
-    step's target in the video (stills always show the whole frame), "off" never zooms. keys: show
+    (the agent's own track), "real" (the recorded cursor) or "none". zoom: "auto" closes in where the
+    steps happen and holds still through a run of nearby steps (stills always show the whole frame),
+    "off" never zooms. keys: show
     hotkeys as keycaps and typed text as it is typed. gif: also write tutorial.gif.
 
     narrate: speak each step (narrate.py) from the moment its caption appears, hold the video on the
@@ -434,7 +462,8 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
         if s.to is not None:  # a drag's view shows where it drops as well as where it starts
             half = zm.POINT_BOX / 2
             extra.setdefault(s.id, []).append((s.to[0] - half, s.to[1] - half, s.to[0] + half, s.to[1] + half))
-    camera = zm.plan(steps, (width, height), extra) if zoom == "auto" else []
+    seen = seen_time(steps, last_t, cuts, tight)
+    camera = zm.plan(steps, (width, height), extra, seen) if zoom == "auto" else []
 
     def pointer_for(fr: dict, t: float):
         if pointer == "agent":

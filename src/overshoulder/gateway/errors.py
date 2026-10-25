@@ -95,6 +95,12 @@ class NeedsRealInput(GatewayError):
     code = "needs_real_input"
 
 
+class PatternUnsupported(GatewayError):
+    """The control offers none of the UI Automation patterns this action can use (its attempts say
+    which were tried). The message says which action to use instead."""
+    code = "pattern_unsupported"
+
+
 class TypingMismatch(GatewayError):
     """Typing reached the field, but it does not read back as the typed text (characters lost or out of
     order). Nothing is retyped, because part of it arrived."""
