@@ -11,6 +11,7 @@ image as <name>.annotations.json. The layer is a list of items:
   redact     rect, style?                 blur (default), pixelate or solid; applied to every output
   step       step, caption?, hidden?, narration?, audio?   edits one step of the tutorial
   cut        t0, t1                       drops that part of the recording (and the steps in it)
+  speed      t0, t1 | step, factor?       plays that part, or that step, factor times faster (speed.py)
   crop       rect                         crops every output to rect (one per layer)
 
 Coordinates are pixels of the clean recording (video.mp4) or of the original image, whatever crop
@@ -31,14 +32,15 @@ from overshoulder import brand
 
 VERSION = 1
 DRAWN = ("box", "arrow", "text", "badge", "spotlight")
-KINDS = DRAWN + ("redact", "step", "cut", "crop")
+KINDS = DRAWN + ("redact", "step", "cut", "speed", "crop")
 STYLES = ("blur", "pixelate", "solid")
 DEFAULT_COLOR = brand.AGENT_BLUE
 REQUIRED = {"box": ("rect",), "arrow": ("tail", "head"), "text": ("at", "text"), "badge": ("at",),
             "spotlight": ("rect",), "redact": ("rect",), "step": ("step",), "cut": ("t0", "t1"),
-            "crop": ("rect",)}
+            "speed": (), "crop": ("rect",)}
 ALLOWED = {"id", "kind", "note", "step", "t0", "t1", "rect", "tail", "head", "at", "text", "size", "color",
-           "width", "style", "caption", "hidden", "narration", "audio"}
+           "width", "style", "caption", "hidden", "narration", "audio", "factor"}
+MAX_FACTOR = 16  # a speed item plays at most this many times faster
 
 
 class LayerError(ValueError):
@@ -78,6 +80,10 @@ def validate(item: dict) -> dict:
             raise LayerError(f"{k} must be seconds from the recording start")
     if "t0" in out and "t1" in out and out["t1"] <= out["t0"]:
         raise LayerError("t1 must be after t0")
+    if kind == "speed" and "step" not in out and ("t0" not in out or "t1" not in out):
+        raise LayerError("speed needs t0 and t1, or step")
+    if "factor" in out and not (type(out["factor"]) is int and 1 <= out["factor"] <= MAX_FACTOR):
+        raise LayerError(f"factor must be a whole number from 1 (normal speed) to {MAX_FACTOR}")
     if "step" in out and not (isinstance(out["step"], int) and out["step"] >= 1):
         raise LayerError("step must be a step id from steps.json (1, 2, ...)")
     if "color" in out:

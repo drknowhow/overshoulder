@@ -2,8 +2,8 @@
 
 Everything is drawn here, after the fact, from the recording's tracks: a pointer, click ripples,
 numbered step badges, a highlight around each target, and a caption bar. The video also zooms in
-where the work happens and holds still through a run of nearby steps (zoom.py). The recording itself
-never contains overlays, so a
+where the work happens and holds still through a run of nearby steps (zoom.py), and plays the routine
+part of a run of alike steps faster (speed.py). The recording itself never contains overlays, so a
 tutorial can be re-rendered with different styling or edits. With mlt=True the same pass also writes
 a Shotcut project of the edit (shotcut.py). What it makes carries the "Made with Overshoulder" mark
 (mark.py).
@@ -30,6 +30,7 @@ from overshoulder import keys as kc
 from overshoulder import layer as lay
 from overshoulder import narrate as nr
 from overshoulder import shotcut as sc
+from overshoulder import speed as sp
 from overshoulder import zoom as zm
 
 ACCENT = (37, 99, 235)  # badge / highlight
@@ -41,6 +42,7 @@ STEP_ACTIONS = {"click", "double_click", "right_click", "drag", "invoke", "toggl
 PRESS_ACTIONS = {"click", "double_click", "right_click", "drag", "invoke", "toggle", "select"}
 POINTERS = ("agent", "real", "none")
 ZOOMS = ("auto", "off")
+SPEEDS = ("auto", "off")
 LEAD_S, HOLD_S, RIPPLE_S = 0.5, 2.2, 0.6
 GLIDE_S = 0.5  # the agent's pointer moves to a step's target over this long, ending at the step
 DRAG_S = 0.6  # a drag carries the pointer from its start to its drop point over this long (about as long as it took)
@@ -228,16 +230,18 @@ def _fit(d: ImageDraw.ImageDraw, text: str, max_w: float, size: int) -> tuple[st
 
 def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[int, int] | None,
              steps: list[Step], fonts: dict, view: zm.Crop | None = None, keys: bool = True,
-             items: list[dict] | None = None, parts: dict | None = None) -> Image.Image:
+             items: list[dict] | None = None, parts: dict | None = None, fast: sp.Span | None = None) -> Image.Image:
     """Draw every annotation active at time t onto a frame whose top-left is `origin` on screen.
 
     view: a crop of the frame (frame pixels) to scale up to full size before drawing, so the zoom
     magnifies the app but not the annotations. keys: draw keystroke captions. items: layer items
     showing now, in screen pixels (layer.active); redactions are applied to the pixels before the
-    zoom, so no output can show what they cover. Returns the frame with a caption strip of STRIP
-    pixels added underneath, the mark at its right end. parts: filled with the frame's two layers for
-    the Shotcut export, "clean" (redacted, not zoomed) and "overlay" (RGBA: the annotations, then the
-    opaque strip without the mark, which has a track of its own).
+    zoom, so no output can show what they cover. fast: the span playing faster now (speed.py): the
+    strip gets a fast-forward chip and, when the span has one, its label in place of the caption.
+    Returns the frame with a caption strip of STRIP pixels added underneath, the mark at its right
+    end. parts: filled with the frame's two layers for the Shotcut export, "clean" (redacted, not
+    zoomed) and "overlay" (RGBA: the annotations, then the opaque strip without the mark, which has a
+    track of its own).
     """
     ox, oy = origin
     items = items or []
@@ -296,11 +300,12 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
     out = Image.new("RGB", (base.width, base.height + STRIP), CAPTION_BG[:3])
     out.paste(framed, (0, 0))
     room = base.width - mark.footprint(base.width)  # the caption is centred in the strip left of the mark
-    if active:
-        s = active[-1]
-        sd = ImageDraw.Draw(out)
-        text, font = _fit(sd, f"{s.n}. {s.caption}", room - 32, 26)
-        sd.text((room / 2, base.height + STRIP / 2), text, font=font, fill=(255, 255, 255), anchor="mm")
+    sd = ImageDraw.Draw(out)
+    left = _fast_chip(sd, 16, base.height + STRIP / 2, fast.factor, fonts["badge"]) + 8 if fast else 0
+    caption = fast.label if fast and fast.label else f"{active[-1].n}. {active[-1].caption}" if active else None
+    if caption:
+        text, font = _fit(sd, caption, room - left - 32, 26)
+        sd.text(((left + room) / 2, base.height + STRIP / 2), text, font=font, fill=(255, 255, 255), anchor="mm")
     if parts is not None:
         over = Image.new("RGBA", out.size, (0, 0, 0, 0))
         over.paste(layer, (0, 0))
@@ -308,6 +313,17 @@ def annotate(img: Image.Image, t: float, origin: tuple[int, int], cursor: tuple[
         parts.update(clean=clean, overlay=over)
     mark.draw(out, (0, base.height, out.width, out.height))
     return out
+
+
+def _fast_chip(d: ImageDraw.ImageDraw, x: float, cy: float, factor: int, font: ImageFont.ImageFont) -> float:
+    """A fast-forward pill ("▶▶ 4×") at x in the caption strip; returns its right edge."""
+    text = f"{factor}×"
+    right = x + 46 + d.textlength(text, font=font) + 14
+    d.rounded_rectangle((x, cy - 17, right, cy + 17), radius=17, fill=ACCENT)
+    for ox in (14, 26):
+        d.polygon([(x + ox, cy - 8), (x + ox, cy + 8), (x + ox + 11, cy)], fill=(255, 255, 255))
+    d.text((x + 46, cy), text, font=font, fill=(255, 255, 255), anchor="lm")
+    return right
 
 
 def _ripple(d: ImageDraw.ImageDraw, p: tuple[float, float], k: float) -> None:
@@ -346,9 +362,11 @@ def keep_frame(t: float, steps: list[Step], last_t: float) -> bool:
     return any(s.start - PAD_BEFORE <= t <= s.end + PAD_AFTER for s in steps)
 
 
-def seen_time(steps: list[Step], last_t: float, cuts: list[tuple[float, float]], tight: bool) -> zm.Seen:
-    """seen(a, b): how many seconds of source time a..b the video shows, after tight timing (the spans
-    keep_frame keeps) and the layer's cuts. The camera judges "close" by this, not by the clock."""
+def seen_time(steps: list[Step], last_t: float, cuts: list[tuple[float, float]], tight: bool,
+              fast: list[sp.Span] | None = None) -> zm.Seen:
+    """seen(a, b): how many seconds the video takes to show source time a..b, after tight timing (the
+    spans keep_frame keeps), the layer's cuts and the parts that play faster. The camera judges "close"
+    by this, not by the clock."""
     if tight:
         spans = sorted([(0.0, EDGE_S), (last_t - EDGE_S, last_t),
                         *((s.start - PAD_BEFORE, s.end + PAD_AFTER) for s in steps)])
@@ -366,7 +384,8 @@ def seen_time(steps: list[Step], last_t: float, cuts: list[tuple[float, float]],
         for lo, hi in kept:
             x, y = max(a, lo), min(b, hi)
             if y > x:
-                total += max(0.0, y - x - sum(max(0.0, min(y, c1) - max(x, c0)) for c0, c1 in cuts))
+                total += max(0.0, y - x - sum(max(0.0, min(y, c1) - max(x, c0)) for c0, c1 in cuts)
+                             - sp.saved(x, y, fast or []))
         return total
 
     return seen
@@ -375,11 +394,12 @@ def seen_time(steps: list[Step], last_t: float, cuts: list[tuple[float, float]],
 def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | None = None,
            tight: bool = True, pointer: str = "agent", zoom: str = "auto", keys: bool = True,
            gif: bool = True, narrate: bool = False, voice: str | None = None, engine: nr.Engine | None = None,
-           outside_audio: bool = False, mlt: bool = False) -> dict:
+           outside_audio: bool = False, mlt: bool = False, speed: str = "auto") -> dict:
     """tight=True cuts the idle time between steps; tight=False keeps real-time pacing. pointer: "agent"
     (the agent's own track), "real" (the recorded cursor) or "none". zoom: "auto" closes in where the
     steps happen and holds still through a run of nearby steps (stills always show the whole frame),
-    "off" never zooms. keys: show
+    "off" never zooms. speed: "auto" plays the routine part of a run of alike steps faster, "off" does
+    not; the layer's speed items apply either way (speed.py). keys: show
     hotkeys as keycaps and typed text as it is typed. gif: also write tutorial.gif.
 
     narrate: speak each step (narrate.py) from the moment its caption appears, hold the video on the
@@ -394,6 +414,8 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
         raise ValueError(f"pointer must be one of {POINTERS}")
     if zoom not in ZOOMS:
         raise ValueError(f"zoom must be one of {ZOOMS}")
+    if speed not in SPEEDS:
+        raise ValueError(f"speed must be one of {SPEEDS}")
     rec = Path(rec_dir)
     out = Path(out_dir or rec / "tutorial")
     out.mkdir(parents=True, exist_ok=True)
@@ -462,7 +484,12 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
         if s.to is not None:  # a drag's view shows where it drops as well as where it starts
             half = zm.POINT_BOX / 2
             extra.setdefault(s.id, []).append((s.to[0] - half, s.to[1] - half, s.to[0] + half, s.to[1] + half))
-    seen = seen_time(steps, last_t, cuts, tight)
+    # A step the layer singles out, or one that speaks, always plays at normal speed.
+    edits = layer.step_edits()
+    pinned = {sid for sid, e in edits.items() if {"caption", "narration", "audio"} & set(e)}
+    pinned |= {x["step"] for x in drawn if "step" in x and x["kind"] != "redact"} | set(lines)
+    fast = sp.plan(steps, layer.items(), speed == "auto", pinned)
+    seen = seen_time(steps, last_t, cuts, tight, fast)
     camera = zm.plan(steps, (width, height), extra, seen) if zoom == "auto" else []
 
     def pointer_for(fr: dict, t: float):
@@ -479,7 +506,7 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     placed: list[tuple[float, bytes]] = []
     hold: tuple[float, float] | None = None  # (source time to hold at, output time its line ends)
     last = b""  # the last frame written, repeated while a line finishes
-    i = written = held = 0
+    i = written = held = skipped = 0
 
     def freeze(until: float) -> None:
         nonlocal written, held
@@ -525,18 +552,22 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
             origin = (frame_origin[0] + cl, frame_origin[1] + ct)
             items = lay.active(drawn, t, windows, frame_origin)
             parts = {} if timeline is not None else None
-            if (not tight or keep_frame(t, steps, last_t)) and not lay.in_cut(t, cuts):
+            visible = (not tight or keep_frame(t, steps, last_t)) and not lay.in_cut(t, cuts)
+            if visible and not sp.keep(i, t, fast):
+                skipped += 1  # a part that plays faster shows every factor-th frame
+            elif visible:
                 speak_before(t)
                 view = zm.camera_at(t, camera, (width, height), origin)
+                span = sp.span_at(t, fast)
                 framed = annotate(img, t, origin, pointer_for(fr, t), steps, fonts, view=view, keys=keys,
-                                  items=items, parts=parts)
+                                  items=items, parts=parts, fast=span)
                 last = framed.tobytes()
                 enc.stdin.write(last)
                 if timeline is not None:
                     last_src, last_rect = i, sc.zoom_rect(view, (width, height), full_h)
                     last_over = parts["overlay"].tobytes()
                     enc_over.stdin.write(last_over)
-                    timeline.frame(i, last_rect)
+                    timeline.frame(i, last_rect, span.factor if span else 1)
                     for s in steps:
                         if s.id not in marked and t >= s.t:
                             timeline.marker(written, f"{s.n}. {s.caption}")
@@ -583,10 +614,14 @@ def render(rec_dir: Path, actions: list[dict] | None = None, out_dir: Path | Non
     (out / "steps.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     shown = {s.id: s for s in steps}
     (out / "steps.json").write_text(json.dumps(
-        [_step_record(s, shown.get(s.id), track, saved) for s in all_steps], indent=1), encoding="utf-8")
+        [_step_record(s, shown.get(s.id), track, saved, fast) for s in all_steps], indent=1), encoding="utf-8")
     result = {"video": str(out / "tutorial.mp4"), "frames": written, "source_frames": i, "steps": len(steps),
               "images": len(saved), "seconds": round(written / fps, 1), "markdown": str(out / "steps.md"),
               "steps_json": str(out / "steps.json"), "annotations": len(layer.items())}
+    if fast:
+        result.update(faster=[{"t0": round(f.t0, 2), "t1": round(f.t1, 2), "factor": f.factor,
+                               "from": "auto" if f.auto else "layer"} for f in fast],
+                      faster_saved_s=round(skipped / fps, 1))
     if cues:
         nr.write_track(out / "narration.wav", placed, written / fps)
         nr.write_srt(out / "narration.srt", cues)
@@ -659,13 +694,15 @@ def _frame_at(track: list[dict], t: float) -> dict:
     return min(track, key=lambda f: abs(f["t"] - t)) if track else {"bounds": [0, 0, 0, 0]}
 
 
-def _step_record(s: Step, shown: Step | None, track: list[dict], saved: dict[int, str]) -> dict:
+def _step_record(s: Step, shown: Step | None, track: list[dict], saved: dict[int, str],
+                 fast: list[sp.Span] | None = None) -> dict:
     """One step as steps.json lists it, with its target in clean-frame pixels (the layer's
-    coordinates) so annotations can be placed against it."""
+    coordinates) so annotations can be placed against it, and its speed when it plays faster."""
+    factor = sp.factor_at(s.t, fast or []) if shown else 1
     ox, oy = _frame_at(track, s.t)["bounds"][:2]
     return {"id": s.id, "n": shown.n if shown else None, "t": s.t, "action": s.action,
             "caption": shown.caption if shown else s.caption, "hidden": shown is None,
             "rect": [s.rect[0] - ox, s.rect[1] - oy, s.rect[2] - ox, s.rect[3] - oy] if s.rect else None,
             "point": [s.point[0] - ox, s.point[1] - oy] if s.point else None,
             **({"to": [s.to[0] - ox, s.to[1] - oy]} if s.to else {}),
-            "still": saved.get(shown.n) if shown else None}
+            "still": saved.get(shown.n) if shown else None, **({"speed": factor} if factor > 1 else {})}

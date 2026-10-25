@@ -82,6 +82,7 @@ def _item_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--show", dest="hidden", action="store_const", const=False)
     p.add_argument("--narration")
     p.add_argument("--audio")
+    p.add_argument("--factor", type=int, help="speed: how many times faster (1 keeps normal speed)")
     p.add_argument("--note")
     p.add_argument("--json", dest="raw", help="fields as a JSON object, merged over the flags")
 
@@ -94,7 +95,7 @@ def _annotate(a) -> int:
     target = Path(a.target)
     layer = Layer.for_recording(target) if target.is_dir() else Layer.for_image(target)
     fields = ("rect", "at", "tail", "head", "text", "size", "color", "width", "style", "step", "t0", "t1",
-              "caption", "hidden", "narration", "audio", "note")
+              "caption", "hidden", "narration", "audio", "factor", "note")
     try:
         if a.acmd == "list":
             print(json.dumps(layer.items(), indent=2))
@@ -410,6 +411,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="draw the agent's pointer (default), the recorded real cursor, or none")
     rr.add_argument("--zoom", default="auto", choices=["auto", "off"],
                     help="zoom in on small controls and hold still between nearby steps (default), or never")
+    rr.add_argument("--speed", default="auto", choices=["auto", "off"],
+                    help="play the routine part of a run of alike steps faster (default), or never; "
+                         "the layer's speed items apply either way")
     rr.add_argument("--no-keys", action="store_true", help="do not show keystrokes and typed text")
     rr.add_argument("--no-gif", action="store_true", help="do not write tutorial.gif")
     rr.add_argument("--mlt", action="store_true",
@@ -527,7 +531,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             out = render(target, pointer=a.pointer, zoom=a.zoom, keys=not a.no_keys, gif=not a.no_gif,
                          narrate=a.narrate or bool(a.tts_cmd), voice=a.voice,
-                         engine=nr.command(a.tts_cmd) if a.tts_cmd else None, outside_audio=True, mlt=a.mlt)
+                         engine=nr.command(a.tts_cmd) if a.tts_cmd else None, outside_audio=True, mlt=a.mlt,
+                         speed=a.speed)
         except nr.NarrationError as e:
             print(json.dumps({"error": str(e)}), file=sys.stderr)
             return 2

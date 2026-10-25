@@ -3,7 +3,8 @@
 The project holds the parts render() puts together, so a melt render of it matches tutorial.mp4:
 
 - V1 "Recording": clips of edit/clean.mp4, the recording with its crop and redactions applied but no
-  zoom and no annotations, cut where the tutorial cuts, and stills (edit/hold-NN.png) where it holds
+  zoom and no annotations, cut where the tutorial cuts, sped up (a timewarp clip) where it plays
+  faster, and stills (edit/hold-NN.png) where it holds
   a step until its narration ends. Each clip carries a Size, Position & Rotate filter that follows the
   zoom, with a keyframe on every frame while the camera moves.
 - V2 "Annotations": edit/overlay.mov, everything drawn on top (pointer, highlights, badges, keycaps,
@@ -36,6 +37,7 @@ class Segment:
     length: int = 0
     rects: list[Rect] = field(default_factory=list)  # one per frame
     image: str = ""  # hold: the still, relative to the project
+    speed: int = 1  # clip: it shows every speed-th source frame from `first` (speed.py)
 
 
 class Timeline:
@@ -47,14 +49,15 @@ class Timeline:
         self.markers: list[tuple[int, str]] = []
         self.frames = 0
 
-    def frame(self, src: int, rect: Rect) -> None:
-        """The next output frame shows source frame `src`."""
+    def frame(self, src: int, rect: Rect, speed: int = 1) -> None:
+        """The next output frame shows source frame `src`, which plays `speed` times faster (src is then a
+        multiple of speed)."""
         s = self.segments[-1] if self.segments else None
-        if s is not None and s.kind == "clip" and s.first + s.length == src:
+        if s is not None and s.kind == "clip" and s.speed == speed and s.first + s.length * speed == src:
             s.length += 1
             s.rects.append(rect)
         else:
-            self.segments.append(Segment("clip", src, 1, [rect]))
+            self.segments.append(Segment("clip", src, 1, [rect], speed=speed))
         self.frames += 1
 
     def held(self, src: int, rect: Rect) -> Segment | None:
@@ -160,7 +163,15 @@ def write(path: Path, *, size: tuple[int, int], fps: int, timeline: Timeline, cl
 
     entries = []
     for i, s in enumerate(timeline.segments):
-        if s.kind == "clip":
+        if s.kind == "clip" and s.speed > 1:
+            # Like Shotcut's speed control: a timewarp producer over the whole file, counted in sped-up
+            # frames, so source frame `first` is its frame first / speed.
+            k, n = s.speed, -(-clean_frames // s.speed)
+            first, last = s.first // k, s.first // k + s.length - 1
+            p = _producer(mlt, f"clip{i}", f"{k}:{edit}/clean.mp4", "timewarp", n, 0, n - 1, "clean.mp4")
+            _props(p, {"warp_speed": k, "warp_resource": f"{edit}/clean.mp4", "warp_pitch": 0,
+                       "shotcut:producer": "avformat-novalidate", "seekable": 1})
+        elif s.kind == "clip":
             first, last = s.first, s.first + s.length - 1
             p = _producer(mlt, f"clip{i}", f"{edit}/clean.mp4", "avformat-novalidate", clean_frames, 0,
                           clean_frames - 1, "clean.mp4")

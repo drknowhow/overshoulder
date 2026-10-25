@@ -38,7 +38,7 @@ AREA_POINT = (120, 60)
 AREA_EPSILON = 0.002
 # What an agent may choose when it renders. Not engine or outside_audio: another TTS program and audio
 # from anywhere on disk are for a person at the CLI.
-RENDER_OPTIONS = ("pointer", "zoom", "keys", "gif", "narrate", "voice", "mlt")
+RENDER_OPTIONS = ("pointer", "zoom", "speed", "keys", "gif", "narrate", "voice", "mlt")
 LAYER_OPS = ("list", "add", "edit", "remove")
 PROFILE_OPS = ("get", "learn", "add", "export")
 ADDS_PER_LEASE = 30  # notes one session may add to profiles

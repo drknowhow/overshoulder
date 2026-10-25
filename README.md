@@ -344,7 +344,10 @@ the recording's folder (`%LOCALAPPDATA%\Overshoulder\recordings\<stamp>-<name>`)
 - `tutorial.mp4`: the agent's pointer gliding to each target, click ripples, numbered highlights and
   a caption strip, with the idle time between steps cut. The camera zooms in on small controls and
   holds still while the next steps stay in view; strokes on a canvas (x/y targets) are drawn without
-  it moving. Hotkeys show as keycaps, and typed text appears as a caption while it is typed.
+  it moving. A run of four or more alike steps (strokes on a canvas, one button clicked again and
+  again) plays its first step, or its first two the first time, at normal speed and the rest four
+  times faster, under a fast-forward chip; `speed="off"` turns that off. Hotkeys show as keycaps, and
+  typed text appears as a caption while it is typed.
 - `tutorial.gif`, 640 px wide, for a README or a chat.
 - `step-NN.png` for each step (always the whole frame), `steps.md` and `steps.json`.
 - With narration: a voice track in the MP4, plus `narration.wav` and `narration.srt`. Each line starts
@@ -373,6 +376,7 @@ which the agent or you can edit before rendering again:
 | `redact` | `rect`, `style`? | `blur` (default), `pixelate` or `solid`, in every output |
 | `step` | `step`, `caption`?, `hidden`?, `narration`?, `audio`? | Edits one step: its caption, whether it shows, what it says |
 | `cut` | `t0`, `t1` | Drops that part of the recording and the steps in it |
+| `speed` | `t0`, `t1` or `step`, `factor`? | Plays that part, or that step, `factor` times faster (default 4); `factor` 1 keeps normal speed where the automatic speed-up would play it faster |
 | `crop` | `rect` | Crops every output |
 
 Coordinates are pixels of the recorded frame, the same pixels `steps.json` uses for each step's
@@ -395,7 +399,7 @@ the scope. From the command line:
 overshoulder annotate <dir> list
 overshoulder annotate <dir> add arrow --step 4 --tail 507,145 --head 387,55
 overshoulder annotate <dir> add step --step 3 --narration "Press Control S to save."
-overshoulder render <dir> --narrate --voice Zira     # also: --zoom off, --no-keys, --no-gif, --pointer real, --mlt
+overshoulder render <dir> --narrate --voice Zira     # also: --zoom off, --speed off, --no-keys, --no-gif, --pointer real, --mlt
 overshoulder render <dir> --tts-cmd "piper -m en.onnx -f {out} < {text_file}"
 overshoulder voices
 ```

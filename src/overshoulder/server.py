@@ -300,10 +300,12 @@ class Daemon:
         @mcp.tool()
         async def record_stop(ctx: Context, render: bool = True, zoom: str = "auto", keys: bool = True,
                               gif: bool = True, narrate: bool = False, voice: str | None = None,
-                              mlt: bool = False) -> dict:
+                              mlt: bool = False, speed: str = "auto") -> dict:
             """Stop recording. With render=true, also returns a tutorial: an MP4 with a pointer, click
             ripples, numbered step callouts, captions, a zoom onto each step's target (zoom="off" to
-            stop it) and keystroke captions (keys), one PNG per step, steps.md, steps.json and
+            stop it), a run of alike steps (strokes on a canvas, one button clicked again and again)
+            played faster after its first step (speed="off" to stop it; annotate's speed items pick
+            parts yourself) and keystroke captions (keys), one PNG per step, steps.md, steps.json and
             tutorial.gif (gif). narrate=true speaks each step with the Windows voice (voice: part of a
             voice's name, e.g. "Zira"); the video waits for each line. mlt=true also writes
             tutorial.mlt, a Shotcut project of the same edit a person can open and finish. Rendering runs
@@ -312,7 +314,7 @@ class Daemon:
             if render and not failed(out) and out.get("frames"):
                 out["tutorial"] = await offline(ctx, lambda token: d.svc.render_recording(
                     token, out["recording"], zoom=zoom, keys=keys, gif=gif, narrate=narrate, voice=voice,
-                    mlt=mlt))
+                    mlt=mlt, speed=speed))
             return out
 
         @mcp.tool()
@@ -331,25 +333,29 @@ class Daemon:
             a null value removes a field) or "remove" (id=).
             Item kinds: box {rect, text?, color?}, arrow {tail, head}, text {at, text, size?},
             badge {at, text?}, spotlight {rect}, redact {rect, style: blur|pixelate|solid},
-            step {step, caption?, hidden?, narration?, audio?}, cut {t0, t1}, crop {rect}.
+            step {step, caption?, hidden?, narration?, audio?}, cut {t0, t1},
+            speed {t0, t1 | step, factor?}, crop {rect}.
             Positions are pixels of the recorded frame: rect [left, top, right, bottom], points [x, y].
             Show an item during one step (step: an id from list's steps), between t0 and t1 seconds of
             the recording, or, with neither, the whole time. A step item changes that step: a new
             caption, hidden=true to drop it, narration text to speak instead of the caption ("" for
-            silence), or audio: a sound file inside the recording directory."""
+            silence), or audio: a sound file inside the recording directory. A speed item plays that
+            part of the recording, or that step, factor times faster (a whole number, default 4); factor
+            1 keeps it at normal speed where render's automatic speed-up would play it faster."""
             return await offline(ctx, lambda token: d.svc.annotate(token, recording, op, item, id, changes))
 
         @mcp.tool()
         async def render(ctx: Context, recording: str, zoom: str = "auto", keys: bool = True, gif: bool = True,
                          narrate: bool = False, voice: str | None = None, pointer: str = "agent",
-                         mlt: bool = False) -> dict:
+                         mlt: bool = False, speed: str = "auto") -> dict:
             """Render one of your stopped recordings again, with its annotation layer: after annotate(), or
-            to change zoom, keys, gif, narration or the Shotcut project (mlt; see record_stop). pointer:
+            to change zoom, speed, keys, gif, narration or the Shotcut project (mlt; see record_stop).
+            The result lists the parts that played faster ("faster") and the seconds that saved. pointer:
             "agent" (your pointer, gliding to each step), "real" (the recorded cursor) or "none". Needs no
             scope."""
             return await offline(ctx, lambda token: d.svc.render_recording(
                 token, recording, zoom=zoom, keys=keys, gif=gif, narrate=narrate, voice=voice, pointer=pointer,
-                mlt=mlt))
+                mlt=mlt, speed=speed))
 
         @mcp.tool()
         async def screenshot(ctx: Context) -> list:
