@@ -110,6 +110,11 @@ class Ladder:
                               "person_active": guard.result.person_active}
         return result
 
+    def _gate(self) -> None:
+        """The gateway's checks again, right before a driver call that changes something (Gateway._gate).
+        Without a gateway (unit tests of the ladder alone) the stop check stands in for it."""
+        (self.p.get("gate") or self.p["abort"])()
+
     def _owns(self, hwnd: int) -> bool:
         try:
             return self.scope.owns_window(hwnd)
@@ -177,7 +182,7 @@ class Ladder:
             return None
         try:
             self.p["background_target"](native)
-            self.p["abort"]()
+            self._gate()
             self._guarded(lambda: bg.click_button(native))
         except bg.BackgroundUnsupported as e:
             self._attempt("button_message", False, str(e))
@@ -194,7 +199,7 @@ class Ladder:
                 continue
             fn = getattr(uia, PATTERNS[name])  # looked up per call, so a patched uia function is used
             try:
-                self.p["abort"]()
+                self._gate()
                 self._guarded(lambda fn=fn: fn(el))
                 self._attempt(name, True)
                 return self._done(name)
@@ -238,7 +243,7 @@ class Ladder:
                 self.p["background_target"](child)
                 region = Rect(x - REGION, y - REGION, x + REGION, y + REGION)
                 for attempt in (1, 2):
-                    self.p["abort"]()
+                    self._gate()
                     before = capture.window_image(top, region)
                     self._guarded(lambda: bg.post_click(top, x, y, button, count))
                     time.sleep(0.25)
@@ -257,6 +262,7 @@ class Ladder:
                 self._no_background_left(str(e))
         with self.p["borrow"]() as b:
             b.check()
+            self._gate()
             inp.click(x, y, button=button, count=count)
         self._borrowed(b, "real_click")
         return self._done("real_click", background=False)
@@ -277,7 +283,7 @@ class Ladder:
                     self.p["background_target"](bg.deepest_child_at(top, x1, y1))
                     region = Rect(min(x0, x1) - REGION, min(y0, y1) - REGION, max(x0, x1) + REGION,
                                   max(y0, y1) + REGION)
-                    self.p["abort"]()
+                    self._gate()
                     before = capture.window_image(top, region)
                     self._guarded(lambda: bg.post_drag(top, x0, y0, x1, y1, abort=self.p["abort"]))
                     time.sleep(0.25)
@@ -294,6 +300,7 @@ class Ladder:
                     self._no_background_left(str(e))
         with self.p["borrow"]() as b:
             b.check()
+            self._gate()
             inp.drag(x0, y0, x1, y1, abort=b.abort)
         self._borrowed(b, "real_drag")
         return self._done("real_drag", background=False)
@@ -310,6 +317,7 @@ class Ladder:
             else:
                 # The field must hold focus inside its window, or the keys would land in another field.
                 try:
+                    self._gate()
                     self._guarded(lambda: uia.focus(el))
                     time.sleep(0.15)
                 except NeedsRealInput:
@@ -342,6 +350,7 @@ class Ladder:
         why = "the app did not accept posted characters"
         for name in self._ordered(["replace_selection", "posted_chars"] if one_message else ["posted_chars"]):
             try:
+                self._gate()
                 self._guarded(sends[name])
             except bg.BackgroundUnsupported as e:
                 self._attempt(name, False, str(e))
@@ -372,6 +381,7 @@ class Ladder:
                 uia.focus(el)
                 time.sleep(0.15)
             fg = b.check()
+            self._gate()
             inp.type_text(fg, text, abort=b.abort)
         self._borrowed(b, "real_typing")
         return self._done("real_typing", background=False)
@@ -384,6 +394,7 @@ class Ladder:
             if name == "set_text_message":
                 self.p["background_target"](native, typing=True)
                 try:
+                    self._gate()
                     self._guarded(lambda: bg.set_text(native, value))
                     self._attempt(name, True)
                     return self._done(name)
@@ -398,6 +409,7 @@ class Ladder:
                     self._attempt(name, False, "not a number")
                     continue
             try:
+                self._gate()
                 self._guarded(lambda f=setter, a=arg: f(el, a))
                 self._attempt(name, True)
                 return self._done(name)
@@ -417,7 +429,7 @@ class Ladder:
             hwnd = self.focus_window(top)
             try:
                 self.p["background_target"](hwnd)
-                self.p["abort"]()
+                self._gate()
                 self._guarded(lambda: bg.post_hotkey(hwnd, combo))
                 self._attempt("posted_keys", True)
                 self.out.note = "posted to the app's own thread; if nothing happened, retry with method='input'"
@@ -427,6 +439,7 @@ class Ladder:
                 self._no_background_left(str(e))
         with self.p["borrow"]() as b:
             fg = b.check()
+            self._gate()
             inp.hotkey(fg, combo)
         self._borrowed(b, "real_keys")
         return self._done("real_keys", background=False)
@@ -434,6 +447,7 @@ class Ladder:
     def pattern(self, name: str, fn) -> Outcome:
         """toggle / focus through UI Automation, with the foreground guard. A control without the
         pattern is refused with pattern_unsupported."""
+        self._gate()
         try:
             result = self._guarded(fn)
         except Exception as e:

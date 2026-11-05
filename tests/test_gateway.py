@@ -928,3 +928,97 @@ def test_real_typing_at_a_target_checks_where_focus_landed(gw):
         g.run(token, lease_id, "type", perform, target=Target("element", rect=Rect(10, 10, 30, 30)),
               params={"text": "x"})
     assert typed == []
+
+
+# -- Overshoulder's own windows through UI Automation, and the gate ------------------------------
+
+ELEMENT = Target("element", rect=Rect(10, 10, 30, 30), name="OK", control_type="Button")
+
+
+@pytest.mark.parametrize("action", ["invoke", "select", "toggle", "focus", "set_value", "click"])
+def test_a_control_in_overshoulders_own_process_is_refused_for_every_action(gw, action):
+    g, token, lease_id, _ = gw
+    g.protect_pid(77)
+    ran = []
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, action, lambda t, p: ran.append(1), target=Target(**{**ELEMENT.__dict__, "pid": 77}),
+              params={"value": "x"})
+    assert ran == []
+
+
+def test_a_control_in_a_window_of_overshoulder_is_refused(tmp_path):
+    scope = FakeScope(owned=(0x10, 0x77))
+    g = gateway_for_tests(tmp_path, checks=ok_checks(pid_of=lambda h: 77 if h == 0x77 else 1),
+                          scope_factory=lambda spec: scope)
+    token = g.registry.add("agent-a", window="allow")
+    lease_id = g.acquire(token, "window:16")["lease_id"]
+    g.protect_pid(77)
+    ran = []
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "invoke", lambda t, p: ran.append(1),
+              target=Target(**{**ELEMENT.__dict__, "hwnd": 0x77}))
+    assert ran == []
+
+
+def test_a_window_scope_on_overshoulder_itself_is_refused(tmp_path):
+    import types
+    scope = FakeScope()
+    scope.binding = types.SimpleNamespace(hwnd=0x10, pid=77)
+    g = gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda spec: scope, protected_pids={77})
+    token = g.registry.add("agent-a", window="allow")
+    with pytest.raises(E.Denied):
+        g.acquire(token, "window:16")
+
+
+def _gate_after(change):
+    """A perform that lets the world change, then asks the gate, then would mutate."""
+    done = []
+
+    def perform(t, p):
+        change()
+        p["gate"]()
+        done.append("mutated")
+
+    return perform, done
+
+
+def test_the_gate_stops_an_action_after_a_panic(gw):
+    g, token, lease_id, _ = gw
+    perform, done = _gate_after(lambda: g.panic("test"))
+    with pytest.raises(E.GatewayError):
+        g.run(token, lease_id, "invoke", perform, target=ELEMENT)
+    assert done == []
+
+
+def test_the_gate_stops_an_action_when_the_token_is_removed(gw):
+    g, token, lease_id, _ = gw
+    perform, done = _gate_after(lambda: g.registry.remove("agent-a"))
+    with pytest.raises(E.Unauthorized):
+        g.run(token, lease_id, "invoke", perform, target=ELEMENT)
+    assert done == []
+
+
+def test_the_gate_applies_a_limit_the_person_adds_mid_action(gw):
+    g, token, lease_id, _ = gw
+    perform, done = _gate_after(lambda: g.registry.set_limits("agent-a", read_only=True))
+    with pytest.raises(E.Narrowed):
+        g.run(token, lease_id, "invoke", perform, target=ELEMENT)
+    assert done == []
+
+
+def test_the_gate_stops_an_action_when_the_scope_window_closes(gw):
+    g, token, lease_id, scope = gw
+
+    def close():
+        scope.alive = False
+
+    perform, done = _gate_after(close)
+    with pytest.raises(sc.ScopeStale):
+        g.run(token, lease_id, "invoke", perform, target=ELEMENT)
+    assert done == []
+
+
+def test_the_gate_lets_an_unchanged_action_through(gw):
+    g, token, lease_id, _ = gw
+    perform, done = _gate_after(lambda: None)
+    assert g.run(token, lease_id, "invoke", perform, target=ELEMENT)["ok"] and done == ["mutated"]

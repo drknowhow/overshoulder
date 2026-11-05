@@ -504,6 +504,7 @@ class Service:
                     raise ValueError("activate needs a window scope")
                 with p["borrow"]() as b:  # keeps the window in front, so only input mode "full" allows it
                     b.check()
+                    ladder._gate()
                     uia.activate(scope.binding.hwnd)
                 out = ladder._done("activate", background=False)
             elif action == "drag":

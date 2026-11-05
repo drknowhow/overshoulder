@@ -35,6 +35,7 @@ from overshoulder.gateway.errors import (
     Paused,
     PersonActive,
     TargetStale,
+    Unauthorized,
     VerifyFailed,
 )
 from overshoulder.gateway.lease import DEFAULT_TTL_S, HUMAN_PAUSE, LeaseManager
@@ -329,6 +330,8 @@ class Gateway:
             lim = self.lease_limits(client.name, session)
             binding = getattr(inner, "binding", None)
             if binding is not None:
+                if binding.pid in self.protected_pids:
+                    raise Denied("that window belongs to Overshoulder itself; agents never drive it")
                 for proc in [*self.checks.window_processes(binding.hwnd), self.checks.pid_process(binding.pid)]:
                     lim.check_process(proc, "that window")
             scope = NarrowedScope(inner, lambda n=client.name, s=session: self.lease_limits(n, s),
@@ -552,6 +555,8 @@ class Gateway:
                 x, y = shown.point()
                 self.pointer = {"x": x, "y": y, "action": action, "client": client.name, "at": time.time()}
             params["abort"] = lambda: self._check_background(lease_id, client.name, scope)
+            params["gate"] = lambda: self._gate(token, lease_id, client.name, scope, action, read_only,
+                                                 [t for t in (target, to_target) if t is not None])
             # perform MUST wrap any use of the person's mouse/keyboard (SendInput) in borrow():
             #   with params["borrow"]() as b: fg = b.check(); <SendInput, calling b.abort() between keys>
             # and call background_target(hwnd) before posting to or messaging any window.
@@ -660,6 +665,25 @@ class Gateway:
         self.leases.check(lease_id, client, human_ok=True)
         if self.leases.paused_reason() == HUMAN_PAUSE and self._scope_in_front(scope):
             raise Paused("the person is working in this window, so the agent stopped")
+
+    def _gate(self, token: str, lease_id: str, client_name: str, scope, action: str, read_only: bool,
+              targets: list[Target]) -> None:
+        """Every check that can change while an action runs, made again right before a driver call that
+        changes something (perform calls params["gate"]): a panic, revoke or pause; the client's token;
+        the person's limits as they are now; the scope and the desktop; Overshoulder's own windows. A call
+        already handed to Windows cannot be taken back; this narrows the window, it does not close it."""
+        self._check_background(lease_id, client_name, scope)
+        if self.registry.authenticate(token).name != client_name:
+            raise Unauthorized("the client's token changed while the action ran")
+        lim = self.lease_limits(client_name, self.leases.check(lease_id, client_name, human_ok=True)
+                                .meta.get("session_limits", Limits()))
+        if not read_only:
+            lim.check_action(action)
+        for t in targets:
+            self._check_target_processes(lim, scope, t)
+            self._require_unprotected_target(t)
+        scope.check_alive()
+        self.checks.desktop()
 
     def _scope_in_front(self, scope) -> bool:
         fg = self.checks.foreground()
@@ -784,6 +808,14 @@ class Gateway:
         if hwnd and self.checks.pid_of(hwnd) in self.protected_pids:
             raise Denied("that window belongs to Overshoulder itself; agents never drive it")
 
+    def _require_unprotected_target(self, target: Target) -> None:
+        """The target's own process and its window's, so UI Automation patterns are covered as well as
+        input and window messages."""
+        if target.pid and target.pid in self.protected_pids:
+            raise Denied("that control belongs to Overshoulder itself; agents never drive it")
+        if target.hwnd:
+            self._require_unprotected(self.checks.root_of(target.hwnd) or target.hwnd)
+
     def protect_pid(self, pid: int) -> None:
         self.protected_pids.add(pid)
 
@@ -797,6 +829,7 @@ class Gateway:
             target = replace(fresh, revalidate=target.revalidate)
         if target.hwnd and not scope.owns_window(target.hwnd):
             raise sc.OutOfScope(f"target window {target.hwnd:#x} is not in scope")
+        self._require_unprotected_target(target)
         if target.kind == "element" and (target.rect is None or target.rect.empty) and action in MOUSE_ACTIONS:
             raise sc.OutOfScope("the element has no visible area to click; use invoke, select or type instead")
         if target.kind == "element" and (target.rect is None or target.rect.empty):
