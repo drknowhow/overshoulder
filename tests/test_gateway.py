@@ -851,3 +851,80 @@ def test_status_shows_where_the_agent_last_acted_while_it_holds_the_scope(gw):
     assert (g.status()["pointer"]["x"], g.status()["pointer"]["y"]) == (5, 6)  # keys do not move it
     g.release(token, lease_id)
     assert g.status()["pointer"] is None
+
+
+# -- password fields reached through keys --------------------------------------------------------
+
+PW_FOCUS = {**DOC_FOCUS, "type": "Edit", "password": True}
+
+
+@pytest.mark.parametrize("combo", ["ctrl+v", "shift+insert", "ctrl+c", "ctrl+x", "a", "shift+a", "space",
+                                   "ctrl+alt+q", "alt+num6"])
+def test_a_hotkey_that_moves_text_is_refused_on_a_focused_password_field(gw, combo):
+    g, token, lease_id, _ = gw
+    g.checks.scope_focus = lambda s: dict(PW_FOCUS)
+    ran = []
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "hotkey", lambda t, p: ran.append(1), params={"combo": combo})
+    assert ran == []
+
+
+@pytest.mark.parametrize("combo", ["tab", "shift+tab", "escape", "ctrl+a", "f5", "alt+f"])
+def test_keys_that_move_no_text_still_work_in_a_password_field(gw, combo):
+    g, token, lease_id, _ = gw
+    g.checks.scope_focus = lambda s: dict(PW_FOCUS)
+    assert g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": combo})["ok"]
+
+
+def test_a_paste_is_refused_when_the_focused_field_cannot_be_checked(gw):
+    g, token, lease_id, _ = gw
+    for unknown in (None, {**DOC_FOCUS, "password": None}):
+        g.checks.scope_focus = lambda s, u=unknown: u
+        with pytest.raises(E.Denied):
+            g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "ctrl+v"})
+
+
+def test_a_hotkey_with_a_ref_is_judged_by_the_focused_field_not_the_ref(gw):
+    g, token, lease_id, _ = gw
+    g.checks.scope_focus = lambda s: dict(PW_FOCUS)
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "hotkey", lambda t, p: None, target=Target("element", rect=Rect(10, 10, 30, 30)),
+              params={"combo": "ctrl+v"})
+    g.checks.scope_focus = lambda s: dict(DOC_FOCUS)
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "hotkey", lambda t, p: None,
+              target=Target("element", rect=Rect(10, 10, 30, 30), is_password=True), params={"combo": "ctrl+v"})
+
+
+def test_a_paste_into_a_single_line_field_needs_approval(gw):
+    g, token, lease_id, _ = gw
+    g.checks.scope_focus = lambda s: {**DOC_FOCUS, "type": "Edit"}
+    with pytest.raises(E.ApprovalDenied):
+        g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "ctrl+v"})
+    g.checks.scope_focus = lambda s: dict(DOC_FOCUS)
+    assert g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "ctrl+v"})["ok"]
+
+
+@pytest.mark.parametrize("target", [None, Target("element", rect=Rect(10, 10, 30, 30))])
+def test_text_with_a_tab_is_refused_before_anything_is_typed(gw, target):
+    g, token, lease_id, _ = gw
+    ran = []
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "type", lambda t, p: ran.append(1), target=target, params={"text": "alice\tsecret"})
+    assert ran == []
+
+
+def test_real_typing_at_a_target_checks_where_focus_landed(gw):
+    g, token, lease_id, _ = gw
+    g.checks.focused_element = lambda: dict(PW_FOCUS)  # focusing the target put focus in a password box
+    typed = []
+
+    def perform(t, p):
+        with p["borrow"]() as b:
+            b.check()
+            typed.append("x")
+
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "type", perform, target=Target("element", rect=Rect(10, 10, 30, 30)),
+              params={"text": "x"})
+    assert typed == []

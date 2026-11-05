@@ -503,13 +503,20 @@ class Gateway:
             if not read_only:
                 if action == "hotkey":
                     policy.require_hotkey_allowed(str(params.get("combo", "")))
-                if action in KEYBOARD_ACTIONS and target is None:
+                policy.require_no_tab_in_text(action, params)
+                # A hotkey goes to whatever has focus even when a ref was given, so its focus is always read.
+                if action in KEYBOARD_ACTIONS and (target is None or action == "hotkey"):
                     # The scope's own focus, which is where background keys go.
                     focus_info = self.checks.scope_focus(scope)
                     if focus_info and focus_info.get("pid"):
                         lim.check_process(self.checks.pid_process(focus_info["pid"]), "the focused control")
+                    focused_pw = None if focus_info is None else focus_info["password"]
                     if action == "type":
-                        policy.require_not_password("type", None if focus_info is None else focus_info["password"])
+                        policy.require_not_password("type", focused_pw)
+                    else:
+                        if target is not None and target.is_password:
+                            focused_pw = True
+                        policy.require_hotkey_not_into_password(str(params.get("combo", "")), focused_pw)
                 focused_type = target.control_type if target is not None else (focus_info or {}).get("type", "")
                 named = to_target if to_target is not None else target  # a drag is judged by where it drops
                 name = named.name if named else ""
@@ -751,7 +758,9 @@ class Gateway:
         if action in KEYBOARD_ACTIONS:
             fg = self.checks.foreground_in_scope(scope)
             self._require_unprotected(fg)
-            if action == "type" and target is None:
+            # Checked with or without a target: by now the target has been focused, and focus may have
+            # landed somewhere else.
+            if action == "type":
                 focused = self.checks.focused_element()
                 policy.require_not_password("type", None if focused is None else focused["password"])
         for t in (target, to_target):
