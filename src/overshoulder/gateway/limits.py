@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
-from overshoulder.gateway.errors import Narrowed
+from overshoulder.gateway.errors import GatewayError, Narrowed
 
 TYPING_ACTIONS = frozenset({"type", "set_value", "hotkey"})
 LIMIT_KEYS = ("read_only", "no_typing", "deny_processes")
@@ -175,11 +175,15 @@ class NarrowedScope:
 
     def __init__(self, inner, source: Callable[[], LeaseLimits],
                  window_processes: Callable[[int], list[str]] | None = None,
-                 visible_windows: Callable[[], list[tuple[int, Rect]]] | None = None):
+                 visible_windows: Callable[[], list[tuple[int, Rect]]] | None = None,
+                 password_fields: Callable[[int], list[Rect] | None] | None = None,
+                 window_roots: Callable[[int], list[int]] | None = None):
         self.inner = inner
         self.source = source
         self._window_processes = window_processes or PROCESS_NAMES.of_window
         self._visible_windows = visible_windows or w.visible_windows
+        self._password_fields = password_fields or _uia_password_rects
+        self._window_roots = window_roots or _uia_roots
 
     def __getattr__(self, name):
         return getattr(self.inner, name)
@@ -215,10 +219,57 @@ class NarrowedScope:
             return []
         return [r for h, r in self._visible_windows() if not r.empty and self.denied_window(h, deny)]
 
+    def secret_rects(self) -> list[Rect]:
+        """Screen rects of every password field a capture of this scope could show: the fields in the
+        window scope's windows, or in every window on the scope's screen area. A window whose tree can't
+        be read is blacked out whole; for a window scope's own window that would hide everything, so
+        the capture is refused instead."""
+        binding = getattr(self.inner, "binding", None)
+        if binding is not None:
+            roots = [(h, None) for h in self._window_roots(binding.hwnd)]
+        else:
+            area = self.inner.bounds()
+            roots = [(h, r) for h, r in self._visible_windows() if not r.empty and not r.intersect(area).empty]
+        out: list[Rect] = []
+        for h, frame in roots:
+            found = self._password_fields(h)
+            if found is not None:
+                out.extend(found)
+            elif binding is not None and h == binding.hwnd:
+                raise CaptureRefused("could not check the window for password fields, so it is not captured")
+            else:
+                out.append(frame if frame is not None else w.frame_bounds(h))
+        return out
+
+
+class CaptureRefused(GatewayError):
+    """A capture that might show a password field and can't be checked."""
+
+
+def _uia_password_rects(hwnd: int) -> list[Rect] | None:
+    from overshoulder.driver import uia
+    return uia.password_rects(hwnd)
+
+
+def _uia_roots(hwnd: int) -> list[int]:
+    from overshoulder.driver import uia
+    return uia.roots_for_window(hwnd)
+
 
 def hidden_rects(scope) -> list[Rect]:
     fn = getattr(scope, "hidden_rects", None)
     return fn() if fn else []
+
+
+def capture_rects(scope) -> list[Rect]:
+    """What every capture of a scope paints black: password fields, and on a screen capture the windows of
+    denied programs too. (A window scope's capture is the window's own pixels, so other windows never
+    show in it.) Raises CaptureRefused when a window scope's password fields can't be checked."""
+    fn = getattr(scope, "secret_rects", None)
+    secrets = fn() if fn else []
+    if getattr(scope, "binding", None) is not None:
+        return secrets
+    return hidden_rects(scope) + secrets
 
 
 def black_out(img, origin: Rect, rects: list[Rect]):

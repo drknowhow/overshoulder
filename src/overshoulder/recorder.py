@@ -30,7 +30,11 @@ from pathlib import Path
 from overshoulder.driver import display
 from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
-from overshoulder.gateway.limits import black_out, hidden_rects
+from overshoulder.gateway.limits import black_out, capture_rects
+
+# How often a recording looks again for password fields and denied windows to black out. Reading them
+# takes too long to do for every frame; a field that moves shows unhidden for at most this long.
+HIDE_REFRESH_S = 0.3
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
@@ -146,8 +150,19 @@ class Recording:
         self._proc: subprocess.Popen | None = None
         self.frames = 0
         self.error: str | None = None
+        self._hide: list[Rect] = []
+        self._hide_error: str | None = None
+
+    def _refresh_hidden(self) -> None:
+        while not self._stop.wait(HIDE_REFRESH_S):
+            try:
+                self._hide = capture_rects(self.scope)
+            except Exception as e:  # can't tell where password fields are: stop rather than show them
+                self._hide_error = f"stopped: {e}"
+                return
 
     def start(self) -> None:
+        self._hide = capture_rects(self.scope)  # refuses the recording if password fields can't be checked
         self.dir.mkdir(parents=True, exist_ok=True)
         b = self.scope.bounds()
         self.size = (b.width // 2 * 2, b.height // 2 * 2)
@@ -162,6 +177,7 @@ class Recording:
             stdin=subprocess.PIPE, creationflags=NO_WINDOW)
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+        threading.Thread(target=self._refresh_hidden, daemon=True, name="overshoulder-record-hide").start()
 
     def _loop(self) -> None:
         import mss
@@ -180,6 +196,9 @@ class Recording:
             while not self._stop.is_set():
                 if not self.alive():
                     self.error = "lease ended"
+                    break
+                if self._hide_error:
+                    self.error = self._hide_error
                     break
                 due = t0 + i * period
                 now = time.time()
@@ -206,7 +225,11 @@ class Recording:
         if got is None:
             return False
         raw, outer = got
-        data, width, height = crop_bgra(raw, outer, inner.intersect(outer))
+        shown = inner.intersect(outer)
+        data, width, height = crop_bgra(raw, outer, shown)
+        if self._hide:
+            img = Image.frombuffer("RGBA", (width, height), data, "raw", "BGRA", 0, 1).copy()
+            data = black_out(img, shown, self._hide).tobytes("raw", "BGRA")
         if (width, height) != self.size:
             img = Image.frombuffer("RGBA", (width, height), data, "raw", "BGRA", 0, 1)
             canvas = Image.new("RGBA", self.size, (0, 0, 0, 255))
@@ -218,7 +241,7 @@ class Recording:
         """The monitor rect, with denied programs' windows painted black (gateway.limits)."""
         o = self._origin
         shot = grabber.grab({"left": o.left, "top": o.top, "width": o.width, "height": o.height})
-        rects = hidden_rects(self.scope)
+        rects = self._hide
         if not rects:
             return self._feed(shot.rgb)
         from PIL import Image

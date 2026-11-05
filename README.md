@@ -257,6 +257,35 @@ refusal is logged.
   tutorial captions).
 - **Recordings and screenshots stay in scope.** For a window scope, both capture that window's own
   pixels, even when something covers it, so your other windows never reach the agent.
+- **Password fields are painted black** in every picture: screenshots, recordings, the text OCR reads,
+  what goes to the vision model, approval pictures and the screenshot sent to your phone. A window
+  scope whose controls can't be read for password fields is not captured at all; on a screen scope
+  such a window is painted black whole. Recordings look for fields again every 0.3 s, so a field that
+  moves can show for that long.
+- **Clients made before window scopes asked by default.** A client that got `window="allow"` from the
+  old default asks again before window scopes. `overshoulder client list` marks it; to give it back on
+  purpose, keeping the token:
+
+  ```bash
+  overshoulder client grant claude-code --window allow
+  ```
+
+### What this does not protect against
+
+The gateway guards one path to the desktop: its MCP tools. An agent that also has a shell running as
+you, as Claude Code or Codex do, has others. It can read Overshoulder's files, edit the settings while
+the gateway is stopped, end the watchdog, or send input without the gateway. The checks above don't
+stop that. To keep such an agent out, run it in a separate WSL distro with Windows interop and drive
+mounting turned off (`[interop] enabled=false` and `[automount] enabled=false` in its `/etc/wsl.conf`),
+under a user without `sudo`, and give it only its client token. Then start the gateway with:
+
+```powershell
+overshoulder serve --listen-wsl
+```
+
+The gateway then also listens on the WSL network adapter, and serves only `/mcp` there; the settings
+page and the operator routes stay on `127.0.0.1`. Windows Firewall has to allow the gateway's port
+from the WSL adapter. WSL distros share one network, so give an agent in another distro no token.
 
 ## Working beside you
 
@@ -312,6 +341,15 @@ overshoulder wait --json '{"kind": "element_appears", "title_re": "Setup", "name
 Detection only reads window titles, on-screen controls and files. `overshoulder settings` opens a
 local page where you switch it on or off, choose what agents may watch, limit it to particular apps,
 and set how often it checks and how long it may wait.
+
+File waits take local paths only: a network path such as `\\server\share` would make Windows sign in
+to that server as you. Overshoulder's own data folder is off limits. To keep a client's file waits
+to some folders:
+
+```powershell
+overshoulder client limit claude-code --wait-folder "C:\Users\me\Downloads"
+overshoulder client limit claude-code --any-wait-folder   # lift it
+```
 
 ## Approvals on your phone
 
@@ -481,7 +519,7 @@ writes `tutorial-2.mlt` with its media in `edit-2/`.
   wrong boxes alike. A cold local model takes about 30 s to load. The cloud option was tested against a
   stand-in server only, not a real provider.
 - Screen-scope recordings use desktop capture, so anything on that screen is recorded, except the
-  windows of programs the session is denied.
+  windows of programs the session is denied and password fields.
 - A redaction is a fixed rectangle of the recorded frame. If the control it covers scrolls or moves
   inside the window, the redaction stays where the control was.
 - Narration uses the voices System.Speech can see (`overshoulder voices` lists them; an English

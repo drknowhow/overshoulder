@@ -425,7 +425,8 @@ class Daemon:
                     paused = d.gw.leases.paused_reason()
                     if paused and paused != HUMAN_PAUSE:
                         raise WaitError(f"agents are paused ({paused}), so the wait stopped")
-                    return st.load_or_default(), d.gw.hidden_for(client.name).deny_processes
+                    return (st.load_or_default(), d.gw.hidden_for(client.name).deny_processes,
+                            d.gw.registry.wait_roots_for(d.gw.registry.get(client.name)))
 
                 try:
                     # locked per look, not per wait

@@ -32,6 +32,36 @@ class WaitError(ValueError):
     code = "wait_refused"
 
 
+def _norm(path: str) -> str:
+    import os
+    return os.path.normcase(os.path.abspath(path))
+
+
+def _under(path: str, root: str) -> bool:
+    import os
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def checked_file(raw, roots: tuple[str, ...] | list[str] | None = None) -> Path:
+    """The path a file wait may watch. Refused: network paths (looking at \\\\server\\share makes Windows sign
+    in to that server with the person's account), relative paths, Overshoulder's own data folder, and,
+    when the person limited this client's file waits to some folders (roots), anything outside them.
+    `..` is folded before the checks; symbolic links are not followed."""
+    s = str(raw or "")
+    if s.startswith(("\\\\", "//", "\\/", "/\\")):
+        raise WaitError("file waits watch local paths only, not network paths")
+    p = Path(s)
+    if not p.drive or not p.is_absolute():
+        raise WaitError(f"file waits need a full path with a drive letter, got {s!r}")
+    full = _norm(s)
+    from overshoulder.gateway.clients import default_home
+    if _under(full, _norm(str(default_home()))):
+        raise WaitError("file waits may not watch Overshoulder's own data folder")
+    if roots and not any(_under(full, _norm(r)) for r in roots):
+        raise WaitError(f"the person limited this client's file waits to {', '.join(roots)}")
+    return Path(full)
+
+
 @dataclass
 class Fired:
     index: int
@@ -72,13 +102,15 @@ def _elements(win_hwnd: int, cond: dict):
 
 
 class Waiter:
-    def __init__(self, conditions: list[dict], settings: Settings, hidden: frozenset[str] = frozenset()):
+    def __init__(self, conditions: list[dict], settings: Settings, hidden: frozenset[str] = frozenset(),
+                 file_roots: tuple[str, ...] | None = None):
         """hidden: programs (lower-case image names) the waiting client may not see; their windows
-        never match."""
+        never match. file_roots: the folders the person allows this client's file waits in (None: any
+        local folder but Overshoulder's own)."""
         if not conditions:
             raise WaitError("give at least one condition")
         self.conditions = conditions
-        self.refresh(settings, hidden)
+        self.refresh(settings, hidden, file_roots)
         self.state: list[dict] = []
         for c in conditions:
             kind = c.get("kind")
@@ -89,9 +121,10 @@ class Waiter:
                 raise WaitError(f"{kind} needs title_re, hwnd or process to pick the window")
             self.state.append(self._baseline(c))
 
-    def refresh(self, settings: Settings, hidden: frozenset[str] = frozenset()) -> None:
-        """Apply the person's settings and the client's hidden programs as they are now; raises WaitError
-        if they no longer allow this wait."""
+    def refresh(self, settings: Settings, hidden: frozenset[str] = frozenset(),
+                file_roots: tuple[str, ...] | None = None) -> None:
+        """Apply the person's settings, the client's hidden programs and its file wait folders as they are
+        now; raises WaitError if they no longer allow this wait."""
         if not settings.waits_enabled:
             raise WaitError("detection is switched off on the settings page")
         for c in self.conditions:
@@ -100,6 +133,8 @@ class Waiter:
                 raise WaitError(f"unknown condition kind {kind!r}; one of {sorted(WAIT_KINDS)}")
             if kind not in settings.wait_kinds:
                 raise WaitError(f"{kind} waits are switched off on the settings page")
+            if kind == "file":
+                c["_path"] = checked_file(c.get("path"), file_roots)
         self.settings = settings
         self.hidden = frozenset(hidden)
 
@@ -114,7 +149,7 @@ class Waiter:
                 raise WaitError(f"no window matches {c}; it has to exist when the wait starts")
             return {"hwnds": {i.hwnd for i in wins}, "titles": {i.hwnd: i.title for i in wins}}
         if kind == "file":
-            p = Path(c["path"])
+            p = c["_path"]
             return {"exists": p.exists(), "mtime": p.stat().st_mtime if p.exists() else None}
         return {}
 
@@ -146,7 +181,7 @@ class Waiter:
                     return f"title changed: {before!r} -> {now!r}"
             return None
         if kind == "file":
-            p = Path(c["path"])
+            p = c["_path"]
             event = c.get("event", "exists")
             if event == "exists" and p.exists() and not st["exists"]:
                 return f"file appeared: {p}"
@@ -180,19 +215,21 @@ class Waiter:
 
 def wait(conditions: list[dict], settings: Settings, timeout_s: float | None = None,
          on_poll=None, lock=None, hidden: frozenset[str] = frozenset(),
-         authorize: Callable[[], tuple[Settings, frozenset[str]]] | None = None) -> dict:
+         authorize: Callable[[], tuple] | None = None) -> dict:
     """Block until a condition holds or the timeout passes. Returns {"fired": bool, ...}.
 
     lock: held around each look at the desktop (UI Automation is not safe from many threads at once)
     and released while sleeping, so a long wait does not hold up other callers.
-    authorize: called before the first look and every later one; returns the settings and hidden
-    programs that apply now, or raises to end the wait (a removed token, a panic). The timeout stays
-    the one from the settings the wait started with."""
+    authorize: called before the first look and every later one; returns the settings, hidden programs
+    and (optionally) the client's file wait folders that apply now, or raises to end the wait (a removed
+    token, a panic). The timeout stays the one from the settings the wait started with."""
     lock = lock or contextlib.nullcontext()
+    roots = None
     with lock:
         if authorize is not None:
-            settings, hidden = authorize()
-        waiter = Waiter(conditions, settings, hidden)
+            settings, hidden, *rest = authorize()
+            roots = rest[0] if rest else None
+        waiter = Waiter(conditions, settings, hidden, roots)
     limit = settings.max_wait_minutes * 60
     timeout_s = limit if timeout_s is None else min(float(timeout_s), limit)
     t0 = time.monotonic()
