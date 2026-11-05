@@ -167,12 +167,12 @@ def test_find_describe_returns_a_v_ref_in_screen_pixels(svc):  # noqa: F811
     assert model.asked == [((200, 100), "the gear icon")]
 
 
-# The svc fixture's OCR reads "Save", "Delete" and "Status" from any image, the box's included.
+# The svc fixture's OCR reads "Open", "Delete" and "Status" from any image, the box's included.
 
 def test_text_read_in_the_box_confirms_it_and_a_click_goes_ahead(svc):  # noqa: F811
     s, token, lease, _, pressed = _make(svc)
-    [hit] = s.find(token, lease, describe='the "Save" button')
-    assert hit["confirmed"] and hit["confirmed_by"] == "it shows the text 'Save'"
+    [hit] = s.find(token, lease, describe='the "Open" button')
+    assert hit["confirmed"] and hit["confirmed_by"] == "it shows the text 'Open'"
     assert s.act(token, lease, "click", ref=hit["ref"])["ok"] and pressed == [(265, 85)]
 
 
@@ -438,7 +438,7 @@ def _profiled(svc, monkeypatch, model):  # noqa: F811
     return s, token, pixels
 
 
-def _describe(s, token, words='the "Save" button'):
+def _describe(s, token, words='the "Open" button'):
     lease = s.acquire(token, "window:16")["lease_id"]
     try:
         return s.find(token, lease, describe=words)
@@ -455,9 +455,9 @@ def test_a_second_describe_of_a_confirmed_box_skips_the_model(svc, monkeypatch):
     [again] = _describe(s, token)
     assert len(model.asked) == 1, "the model was asked again"
     assert again["via"] == "profile" and again["rect"] == first["rect"]
-    assert again["confirmed_by"] == "it shows the text 'Save'"  # confirmed by the screen now, not the file
+    assert again["confirmed_by"] == "it shows the text 'Open'"  # confirmed by the screen now, not the file
     item = s.gw.profiles.load(APP).of_kind("paint")[0]
-    assert item.num("hit") == 1 and item.text == 'the "Save" button'
+    assert item.num("hit") == 1 and item.text == 'the "Open" button'
 
 
 def test_an_unconfirmed_box_is_not_kept(svc, monkeypatch):  # noqa: F811

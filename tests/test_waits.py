@@ -103,3 +103,41 @@ def test_settings_form_parsing():
                             "max_wait_minutes": "abc", "wait_processes": "notepad.exe; chrome.exe"})
     assert s.waits_enabled and s.wait_kinds == ["file"] and s.poll_interval_ms == 250
     assert s.max_wait_minutes == 60 and s.wait_processes == ["chrome.exe", "notepad.exe"]
+
+
+# -- authority is read again before every look ---------------------------------------------------
+
+def test_a_wait_ends_when_authority_is_withdrawn_after_the_first_poll(tmp_path):
+    calls = []
+
+    def authorize():
+        calls.append(1)
+        if len(calls) > 2:
+            raise W.WaitError("the client's token changed during the wait")
+        return fast(), frozenset()
+
+    with pytest.raises(W.WaitError, match="token"):
+        W.wait([{"kind": "file", "path": str(tmp_path / "never")}], fast(), timeout_s=5, authorize=authorize)
+    assert len(calls) == 3
+
+
+def test_switching_detection_off_mid_wait_ends_it(tmp_path):
+    now = [fast()]
+    threading.Timer(0.25, lambda: now.__setitem__(0, st.Settings(poll_interval_ms=100, waits_enabled=False))).start()
+    with pytest.raises(W.WaitError, match="switched off"):
+        W.wait([{"kind": "file", "path": str(tmp_path / "never")}], fast(), timeout_s=5,
+               authorize=lambda: (now[0], frozenset()))
+
+
+def test_a_program_hidden_mid_wait_never_fires_it(monkeypatch):
+    shown = [[_win(1, "Bank", "bank.exe")], [_win(1, "Bank", "bank.exe"), _win(2, "Bank", "bank.exe")]]
+    monkeypatch.setattr(W, "_windows", lambda: shown.pop(0) if len(shown) > 1 else shown[0])
+    hidden = [frozenset()]
+
+    def authorize():
+        out = (fast(), hidden[0])
+        hidden[0] = frozenset({"bank.exe"})  # the person denies the program after the first look
+        return out
+
+    out = W.wait([{"kind": "window_appears", "title_re": "Bank"}], fast(), timeout_s=0.5, authorize=authorize)
+    assert not out["fired"]

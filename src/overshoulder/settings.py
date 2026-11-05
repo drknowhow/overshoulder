@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
 from overshoulder.gateway.clients import default_home
@@ -66,7 +66,7 @@ class Settings:
         self.wait_kinds = [k for k in self.wait_kinds if k in WAIT_KINDS]
         self.wait_processes = sorted({p.strip().lower() for p in self.wait_processes if p.strip()})
         if self.input_mode not in INPUT_MODES:
-            self.input_mode = DEFAULT_INPUT_MODE
+            self.input_mode = "never"  # an unknown mode never grants more than the person chose
         self.borrow_idle_s = max(1, min(int(self.borrow_idle_s), 120))
         if self.vision_mode not in VISION_MODES:
             self.vision_mode = "off"
@@ -90,13 +90,39 @@ def load(path: Path | None = None) -> Settings:
     return Settings(**{k: v for k, v in raw.items() if k in known}).clamp()
 
 
+# The last settings read from each file, so a file that breaks later keeps the person's own policy, and
+# why each file could not be read, for status().
+_last_good: dict[Path, Settings] = {}
+_problems: dict[Path, str] = {}
+
+
+def restrictive() -> Settings:
+    """What applies when a settings file exists but can't be read and nothing was read from it before."""
+    return Settings(input_mode="never", waits_enabled=False, vision_mode="off")
+
+
 def load_or_default(path: Path | None = None) -> Settings:
-    """load(), but a missing or unreadable file gives the defaults: the gateway reads this before every
-    real-input action, and a hand-edited file must not break driving."""
+    """load(), never raising. A missing file gives the defaults (a new install). A file that exists but
+    can't be read gives the last settings read from it, else restrictive(), so damage never grants more
+    than the person chose; problem() says what is wrong until the file reads again."""
+    p = path or settings_path()
     try:
-        return load(path)
-    except (OSError, ValueError, TypeError):
-        return Settings()
+        s = load(p)
+    except (OSError, ValueError, TypeError) as e:
+        kept = _last_good.get(p)
+        _problems[p] = (f"{p} could not be read ({type(e).__name__}); using "
+                        + ("the last settings read from it" if kept else "restrictive settings (no real input, "
+                           "no waits, no vision)") + " until it is fixed or saved again")
+        return replace(kept) if kept else restrictive()
+    _problems.pop(p, None)
+    if p.exists():
+        _last_good[p] = replace(s)
+    return s
+
+
+def problem(path: Path | None = None) -> str:
+    """Why the settings file could not be read at the last load_or_default, or ""."""
+    return _problems.get(path or settings_path(), "")
 
 
 def save(s: Settings, path: Path | None = None) -> Path:

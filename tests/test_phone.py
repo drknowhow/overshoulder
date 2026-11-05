@@ -519,3 +519,18 @@ def test_the_settings_page_shows_the_topic_and_a_test_result():
     assert "Approvals on your phone" in page and ph.ntfy_topic in page
     assert 'name="ntfy_enabled" checked' in page and "Allowed on ntfy after 3.2 s." in page
     assert ph.answer_key not in page  # the answer key is never shown
+
+
+def test_the_page_hides_secrets_until_opened_and_a_blank_token_keeps_the_saved_one():
+    from dataclasses import replace
+
+    from overshoulder import settings as st
+    cur = replace(phone.PhoneSettings().ensure_secrets(), ntfy_token="tk_live_SECRET123")
+    page = settings_page.render_page(st.Settings(), "ft", [], "", False, ph=cur)
+    assert "tk_live_SECRET123" not in page
+    for secret in (cur.webhook_secret, cur.ntfy_topic):
+        at = page.index(secret)
+        assert page.rfind("<details>", 0, at) > page.rfind("</details>", 0, at)  # inside a closed <details>
+    assert settings_page.phone_from_form({"ntfy_token": ""}, cur).ntfy_token == "tk_live_SECRET123"
+    assert settings_page.phone_from_form({"ntfy_token": "new"}, cur).ntfy_token == "new"
+    assert settings_page.phone_from_form({"ntfy_token": "", "clear_ntfy_token": "on"}, cur).ntfy_token == ""

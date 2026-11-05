@@ -21,6 +21,7 @@ import contextlib
 import json
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -74,26 +75,33 @@ class Waiter:
     def __init__(self, conditions: list[dict], settings: Settings, hidden: frozenset[str] = frozenset()):
         """hidden: programs (lower-case image names) the waiting client may not see; their windows
         never match."""
-        self.hidden = frozenset(hidden)
-        if not settings.waits_enabled:
-            raise WaitError("detection is switched off on the settings page")
         if not conditions:
             raise WaitError("give at least one condition")
-        self.settings = settings
         self.conditions = conditions
+        self.refresh(settings, hidden)
         self.state: list[dict] = []
         for c in conditions:
             kind = c.get("kind")
-            if kind not in WAIT_KINDS:
-                raise WaitError(f"unknown condition kind {kind!r}; one of {sorted(WAIT_KINDS)}")
-            if kind not in settings.wait_kinds:
-                raise WaitError(f"{kind} waits are switched off on the settings page")
             if kind == "file" and not c.get("path"):
                 raise WaitError("file waits need a path")
             if kind in ("window_closes", "title_changes", "element_appears", "element_gone",
                         "text_contains") and not (c.get("title_re") or c.get("hwnd") or c.get("process")):
                 raise WaitError(f"{kind} needs title_re, hwnd or process to pick the window")
             self.state.append(self._baseline(c))
+
+    def refresh(self, settings: Settings, hidden: frozenset[str] = frozenset()) -> None:
+        """Apply the person's settings and the client's hidden programs as they are now; raises WaitError
+        if they no longer allow this wait."""
+        if not settings.waits_enabled:
+            raise WaitError("detection is switched off on the settings page")
+        for c in self.conditions:
+            kind = c.get("kind")
+            if kind not in WAIT_KINDS:
+                raise WaitError(f"unknown condition kind {kind!r}; one of {sorted(WAIT_KINDS)}")
+            if kind not in settings.wait_kinds:
+                raise WaitError(f"{kind} waits are switched off on the settings page")
+        self.settings = settings
+        self.hidden = frozenset(hidden)
 
     def _baseline(self, c: dict) -> dict:
         kind = c["kind"]
@@ -171,13 +179,19 @@ class Waiter:
 
 
 def wait(conditions: list[dict], settings: Settings, timeout_s: float | None = None,
-         on_poll=None, lock=None, hidden: frozenset[str] = frozenset()) -> dict:
+         on_poll=None, lock=None, hidden: frozenset[str] = frozenset(),
+         authorize: Callable[[], tuple[Settings, frozenset[str]]] | None = None) -> dict:
     """Block until a condition holds or the timeout passes. Returns {"fired": bool, ...}.
 
     lock: held around each look at the desktop (UI Automation is not safe from many threads at once)
-    and released while sleeping, so a long wait does not hold up other callers."""
+    and released while sleeping, so a long wait does not hold up other callers.
+    authorize: called before the first look and every later one; returns the settings and hidden
+    programs that apply now, or raises to end the wait (a removed token, a panic). The timeout stays
+    the one from the settings the wait started with."""
     lock = lock or contextlib.nullcontext()
     with lock:
+        if authorize is not None:
+            settings, hidden = authorize()
         waiter = Waiter(conditions, settings, hidden)
     limit = settings.max_wait_minutes * 60
     timeout_s = limit if timeout_s is None else min(float(timeout_s), limit)
@@ -185,6 +199,8 @@ def wait(conditions: list[dict], settings: Settings, timeout_s: float | None = N
     period = settings.poll_interval_ms / 1000
     while True:
         with lock:
+            if authorize is not None:
+                waiter.refresh(*authorize())
             fired = waiter.check()
         if fired:
             if settings.beep_on_detect:

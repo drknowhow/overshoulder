@@ -45,6 +45,8 @@ from overshoulder.gateway.log import ActionLog
 from overshoulder.profiles import ProfileStore
 
 KEYBOARD_ACTIONS = frozenset({"type", "hotkey"})
+# How a panic's pause reason ends; such a pause is lifted only with the person's yes (Gateway.resume).
+PANIC_SUFFIX = "; an operator must resume"
 # How long an approval stays good once given; a step that runs later asks again.
 APPROVAL_TTL_S = 30.0
 # Half the size of the box an approval picture outlines around a bare point.
@@ -118,6 +120,32 @@ def _element_in_scope_at(scope, x: int, y: int) -> dict | None:
     if binding is None:
         return uia.info_at_point(x, y)
     return uia.element_in_window_at(binding.hwnd, x, y)
+
+
+def _dialog_text(hwnd: int) -> str:
+    """The text a standard dialog shows, or "" when hwnd is not one. Its static controls hold the message;
+    a task dialog draws its text, which UI Automation reads."""
+    if not hwnd or w.class_name(hwnd) != "#32770":
+        return ""
+    parts = [w.title(hwnd)]
+    parts += [w.title(h) for h in w._enum_children(hwnd) if w.class_name(h) == "Static"]
+    if not any(p.strip() for p in parts[1:]):
+        try:
+            cache = uia.ElementCache()
+            for root in uia.roots_for_window(hwnd):
+                parts += [e.info.name or "" for e in uia.walk(cache, root, max_nodes=300)
+                          if (e.info.control_type or "").lower() == "text"]
+        except Exception:
+            pass
+    return " ".join(p for p in parts if p and p.strip())
+
+
+def _is_file_dialog(hwnd: int) -> bool:
+    """An Open, Save or Browse dialog: a standard dialog holding a shell folder view, which can browse any
+    folder and offers shell verbs (open, delete, rename, send to) on what it shows."""
+    if not hwnd or w.class_name(hwnd) != "#32770":
+        return False
+    return any(w.class_name(h) == "SHELLDLL_DefView" for h in w._enum_children(hwnd))
 
 
 def _label_at(scope, x: int, y: int) -> str:
@@ -195,6 +223,10 @@ class Checks:
     # The text on screen a click at a point lands on or beside ("" for none), read with OCR, for apps
     # whose drawn buttons UI Automation can't name.
     label_at: Callable[[Any, int, int], str] = _label_at
+    # The text of the dialog a top-level window is ("" if it is not one), so its OK or Yes is judged by it.
+    dialog_text: Callable[[int], str] = _dialog_text
+    # Whether a top-level window is a file dialog (Open, Save, Browse).
+    file_dialog: Callable[[int], bool] = _is_file_dialog
     # A PNG of the scope around a rect with the rect drawn, for an approval about a vision box.
     picture: Callable[[Any, Rect], bytes] = _picture
     root_of: Callable[[int], int] = lambda h: __import__(
@@ -426,6 +458,9 @@ class Gateway:
 
     def status(self) -> dict:
         out = {**self.leases.status(), "input_mode": self.settings_source().input_mode}
+        from overshoulder import settings as st  # imported late: settings imports this package's clients module
+        if problem := st.problem():
+            out["settings_problem"] = problem
         lease = self.leases.active()
         if out.get("active") and lease is not None:
             session = lease.meta.get("session_limits", Limits())
@@ -440,7 +475,7 @@ class Gateway:
     def panic(self, reason: str = "panic key") -> None:
         """Revoke the active lease AND pause, so no client can simply re-acquire until resume()."""
         lease = self.leases.revoke(reason)
-        self.leases.pause(f"{reason}; an operator must resume")
+        self.leases.pause(f"{reason}{PANIC_SUFFIX}")
         self.log.write("lease_revoked", reason=reason, lease=getattr(lease, "id", None),
                        client=getattr(lease, "client", None))
 
@@ -449,6 +484,21 @@ class Gateway:
         self.log.write("paused", reason=reason)
 
     def resume(self, only_if: str | None = None) -> bool:
+        """Lift the pause. A panic is lifted only when the person says yes to it on their own screen:
+        the operator key that resume arrives with is a file an agent in the same account could read."""
+        paused = self.leases.paused_reason() or ""
+        if only_if is None and paused.endswith(PANIC_SUFFIX):
+            req = {"kind": "resume", "client": "A resume command",
+                   "reason": f"lift the panic ({paused[:-len(PANIC_SUFFIX)]}) so agents can drive again"}
+            try:
+                yes = self.approver.approve(req)
+            except Exception:
+                yes = False
+            if not yes:
+                self.log.write("resume_refused", reason=paused, answered_by=req.get("answered_by"))
+                return False
+            # Only the panic the person saw is lifted; a newer pause stays.
+            only_if = paused
         lifted = self.leases.resume(only_if)
         if lifted:
             self.log.write("resumed", only_if=only_if)
@@ -543,6 +593,25 @@ class Gateway:
                         label, reason = "", f"{action} at {named.point()}, where the text could not be read"
                     if label:
                         reason = policy.approval_reason(action, label, params, focused_type=focused_type)
+                    if label and reason is None and policy.is_affirmative(label):
+                        name = label
+                if reason is None and named is not None and policy.is_affirmative(name):
+                    # An OK or Yes does whatever its dialog asked; judge it by that text.
+                    hwnd = named.hwnd or (self.checks.window_under(*named.point()) if named.kind != "element"
+                                          else 0)
+                    if hwnd:
+                        hwnd = self.checks.root_of(hwnd) or hwnd
+                    try:
+                        text = self.checks.dialog_text(hwnd) if hwnd else ""
+                    except Exception:  # fail closed: a dialog that can't be read is asked about
+                        text = None
+                    reason = policy.dialog_reason(action, name, text)
+                new_dialogs = self._file_dialogs(scope, lease, action, params,
+                                                 [t for t in (target, to_target) if t is not None], focus_info)
+                if new_dialogs:
+                    asked = (f"a file dialog ({', '.join(repr(w.title(h)) for h in new_dialogs)}) has opened in "
+                             "the scope; through it the agent can browse and pick any file")
+                    reason = asked if reason is None else f"{asked}; and {reason}"
                 guessed = [t for t in (target, to_target) if t is not None and t.kind == "vision"]
                 if reason is None:
                     unsure = next((t for t in guessed if t.unconfirmed), None)
@@ -564,6 +633,8 @@ class Gateway:
                     to_target = to_target if to_target is None else self._bind(scope, to_target, action)
                     _same_as_approved(facts, self._facts(scope, target, to_target, action, read_label=True))
                     approved = {"facts": _without_labels(facts), "at": time.monotonic()}
+                    if new_dialogs:
+                        lease.meta.setdefault("file_dialogs", set()).update(new_dialogs)
 
             shown = to_target if to_target is not None else target  # where the pointer ends up
             if shown is not None and (shown.kind == "point" or (shown.rect and not shown.rect.empty)):
@@ -619,6 +690,38 @@ class Gateway:
             # The action already happened; report the log failure instead of inviting a retry.
             out["log_error"] = str(e)
         return out
+
+    def _file_dialogs(self, scope, lease, action: str, params: dict, targets: list[Target],
+                      focus_info: dict | None) -> list[int]:
+        """File dialogs in a window scope that this action reaches and the person has not yet allowed for
+        this lease. Context menus in them are refused outright: they offer shell verbs on any file."""
+        if getattr(scope, "kind", "") != "window":  # a screen scope was approved as a whole
+            return []
+        main = getattr(getattr(scope, "binding", None), "hwnd", None)
+        hwnds = []
+        for t in targets:
+            h = t.hwnd or (self.checks.window_under(*t.point()) if t.kind != "element" else 0)
+            hwnds.append(h)
+        if action in KEYBOARD_ACTIONS and focus_info:
+            hwnds.append(focus_info.get("hwnd") or 0)
+        found = []
+        for h in hwnds:
+            h = (self.checks.root_of(h) or h) if h else 0
+            if not h or h == main or h in found:
+                continue
+            try:
+                is_dialog = self.checks.file_dialog(h)
+            except Exception:
+                is_dialog = False  # a window that vanished; the bind and gate checks catch it
+            if not is_dialog:
+                continue
+            if action == "right_click" or (action == "hotkey"
+                                           and policy.opens_context_menu(str(params.get("combo", "")))):
+                raise Denied("context menus in a file dialog are refused: they offer shell verbs (open, delete, "
+                             "rename, send to) on any file")
+            found.append(h)
+        seen = lease.meta.get("file_dialogs", set())
+        return [h for h in found if h not in seen]
 
     def _point_window(self, scope, target: Target) -> int:
         """The window an action at a point goes to. In a window scope that is the scope's own window,
@@ -770,6 +873,11 @@ class Gateway:
             saved = self.checks.desk_state() if s.input_mode == "borrow" else None
         b = Borrow(self, scope, action, target, lease_id, client, s.input_mode, saved, waited, to_target)
         try:
+            if not getattr(b.watch, "ok", False):
+                # Without its hooks nothing would notice the person taking the mouse back mid-action.
+                raise NeedsRealInput(
+                    "the watch for the person's own mouse and keyboard could not start, so their input is not "
+                    "borrowed. Use a ref with invoke, select or set_value, or method='background'")
             b.report["brought_forward"] = self._bring_scope_forward(scope, target)
             fg = self.checks.foreground()
             b.front = (self.checks.root_of(fg) or fg) if fg else 0

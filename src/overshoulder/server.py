@@ -29,12 +29,15 @@ from overshoulder.driver import input as inp
 from overshoulder.gateway.clients import default_home
 from overshoulder.gateway.core import Gateway
 from overshoulder.gateway.errors import GatewayError, Paused, Unauthorized
+from overshoulder.gateway.lease import HUMAN_PAUSE
 from overshoulder.narrate import NarrationError
 from overshoulder.scope import ScopeError
 from overshoulder.service import ACTIONS, Service
-from overshoulder.settings_page import NEXT_RE, Sessions
+from overshoulder.settings_page import NEXT_RE, Sessions, bounded_body
 from overshoulder.settings_page import routes as settings_routes
 
+# The operator verbs take a few small JSON fields.
+OPERATOR_BODY_LIMIT = 64 * 1024
 DEFAULT_PORT = 47621
 
 INSTRUCTIONS = """Overshoulder lets you see and operate desktop apps on this Windows PC, one scope at a time.
@@ -379,11 +382,23 @@ class Daemon:
 
             def go(token):
                 client = d.gw.registry.authenticate(token)
-                hidden = d.gw.hidden_for(client.name).deny_processes
+
+                def authorize():
+                    # Before every look: a removed token, a panic or a limit the person adds ends or
+                    # narrows the wait at once, not when it times out.
+                    if d.gw.registry.authenticate(token).name != client.name:
+                        raise WaitError("the client's token changed during the wait")
+                    paused = d.gw.leases.paused_reason()
+                    if paused and paused != HUMAN_PAUSE:
+                        raise WaitError(f"agents are paused ({paused}), so the wait stopped")
+                    return st.load_or_default(), d.gw.hidden_for(client.name).deny_processes
+
                 try:
                     # locked per look, not per wait
-                    out = wait(conditions, st.load(), timeout_s, lock=d._desk, hidden=hidden)
+                    out = wait(conditions, st.load_or_default(), timeout_s, lock=d._desk, authorize=authorize)
                 except WaitError as e:
+                    return {"ok": False, "error": {"code": e.code, "message": str(e)}}
+                except Unauthorized as e:
                     return {"ok": False, "error": {"code": e.code, "message": str(e)}}
                 d.gw.log.write("wait", client=client.name, conditions=len(conditions), **out)
                 return {"ok": True, **out}
@@ -411,21 +426,35 @@ class Daemon:
 
         @mcp.custom_route("/operator/{verb}", methods=["POST"])
         async def op_verb(request: Request):
-            # Read the body even to refuse: answering with it unread sometimes resets the connection on
-            # Windows, and the caller gets ConnectionAbortedError instead of the 403.
-            raw = await request.body()
+            # The key is checked before the body is parsed. A refused body is still read, up to the
+            # limit, because answering with it unread sometimes resets the connection on Windows and the
+            # caller gets ConnectionAbortedError instead of the 403.
+            raw = await bounded_body(request, OPERATOR_BODY_LIMIT)
             if not operator_ok(request):
                 return JSONResponse({"error": "forbidden"}, status_code=403)
+            if raw is None:
+                return JSONResponse({"error": "body too large or too slow"}, status_code=413)
             verb = request.path_params["verb"]
-            body = json.loads(raw) if raw else {}
+            try:
+                body = json.loads(raw) if raw else {}
+            except ValueError:
+                return JSONResponse({"error": "body is not JSON"}, status_code=400)
+            if not isinstance(body, dict):
+                return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
             if verb == "panic":
                 d.gw.panic(body.get("reason", "operator panic"))
             elif verb == "pause":
                 d.gw.pause(body.get("reason", "operator pause"))
             elif verb == "resume":
-                d.gw.resume(body.get("only_if"))
+                only_if = body.get("only_if")
+                # A panic asks the person first, which blocks until they answer.
+                lifted = await asyncio.to_thread(d.gw.resume, only_if if isinstance(only_if, str) else None)
+                return JSONResponse({"ok": lifted, "status": d.gw.status()})
             elif verb == "protect":
-                d.gw.protect_pid(int(body["pid"]))
+                try:
+                    d.gw.protect_pid(int(body["pid"]))
+                except (KeyError, TypeError, ValueError):
+                    return JSONResponse({"error": "protect needs a whole-number pid"}, status_code=400)
             elif verb == "settings_link":
                 token = d.settings_sessions.new_link()
                 nxt = str(body.get("next") or "")

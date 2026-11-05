@@ -11,13 +11,14 @@ import urllib.request
 from overshoulder.gateway.clients import ClientRegistry, default_home
 
 
-def _operator(verb: str, port: int, body: dict | None = None, method: str = "POST") -> dict:
+def _operator(verb: str, port: int, body: dict | None = None, method: str = "POST",
+              timeout: float = 10) -> dict:
     from overshoulder.server import ensure_operator_key
     data = json.dumps(body or {}).encode() if method == "POST" else None
     req = urllib.request.Request(f"http://127.0.0.1:{port}/operator/{verb}", data=data, method=method,
                                  headers={"x-overshoulder-operator": ensure_operator_key(),
                                           "content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
@@ -555,6 +556,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(_operator("status", a.port, method="GET"), indent=2))
     elif a.cmd in ("panic", "pause"):
         print(json.dumps(_operator(a.cmd, a.port, {"reason": a.reason}), indent=2))
+    elif a.cmd == "resume":
+        out = _operator("resume", a.port, timeout=660)  # the person may take a while to answer
+        print(json.dumps(out, indent=2))
+        if not out.get("ok"):
+            print("still paused: after a panic, resuming needs a yes in the box on this PC's screen", file=sys.stderr)
+            return 1
     else:
         print(json.dumps(_operator(a.cmd, a.port), indent=2))
     return 0

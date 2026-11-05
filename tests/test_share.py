@@ -79,6 +79,16 @@ def test_an_import_adds_only_what_this_pc_lacks():
         share.merge(new_profile(AppIdentity("microsoft.calc", "Calculator", "calc.exe")), other)
 
 
+def test_an_import_starts_every_use_count_at_zero():
+    other = share.read(share.export(_two_sessions())[0].dumps().encode())
+    for x in other.items:
+        x.fields.update({"n": "999", "ses": "999", "ok": "999"})
+    local = new_profile(AppIdentity(NOTEPAD, "Notepad", "Notepad.exe"))
+    share.merge(local, other)
+    imported = [x for x in local.items if x.fields.get("src") == "imported"]
+    assert imported and all(x.num(k) == 0 for x in imported for k in share.COUNT_FIELDS)
+
+
 def test_import_profile_saves_a_revision(tmp_path):
     store = ProfileStore(tmp_path)
     other = share.read(share.export(_two_sessions())[0].dumps().encode())
