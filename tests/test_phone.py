@@ -262,6 +262,11 @@ def test_the_window_title_and_a_screenshot_go_only_when_the_person_shares_them(n
     from overshoulder.driver import windows as w
     monkeypatch.setattr(w, "title", lambda h: "Quarterly report - Mail")
     monkeypatch.setattr(capture, "window_image", lambda h, r=None: Image.new("RGB", (40, 30), (255, 0, 0)))
+    from overshoulder.driver import uia
+    from overshoulder.driver.windows import Rect
+    monkeypatch.setattr(w, "frame_bounds", lambda h: Rect(0, 0, 40, 30))
+    monkeypatch.setattr(uia, "roots_for_window", lambda h: [h])
+    monkeypatch.setattr(uia, "password_rects", lambda h: [])  # no password fields (tests/test_secrets.py)
     plain = phone.make_question(REQUEST, ntfy_settings(ntfy.base), 10)
     assert plain.title == "" and plain.screenshot is None
     s = ntfy_settings(ntfy.base, share_title=True, share_screenshot=True)

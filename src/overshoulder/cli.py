@@ -376,6 +376,14 @@ def main(argv: list[str] | None = None) -> int:
     lim.add_argument("--allow-process", action="append", default=[], metavar="EXE",
                      help="take a program off the deny list (repeatable)")
     lim.add_argument("--clear", action="store_true", help="start from no limits")
+    lim.add_argument("--wait-folder", action="append", default=None, metavar="DIR",
+                     help="limit this client's file waits to these folders (repeatable; replaces the list)")
+    lim.add_argument("--any-wait-folder", action="store_true",
+                     help="lift the folder limit on file waits")
+    gr = csub.add_parser("grant", help="change which scopes a client may take, keeping its token")
+    gr.add_argument("name")
+    gr.add_argument("--window", choices=["allow", "approve", "deny"])
+    gr.add_argument("--screen", choices=["allow", "approve", "deny"])
     rm = csub.add_parser("remove")
     rm.add_argument("name")
     csub.add_parser("list")
@@ -495,14 +503,24 @@ def main(argv: list[str] | None = None) -> int:
                   f"; limits: {lim.describe()}", file=sys.stderr)
         elif a.ccmd == "limit":
             try:
+                folders = [] if a.any_wait_folder else a.wait_folder
                 out = reg.set_limits(a.name, read_only=a.read_only, no_typing=a.no_typing, deny=a.deny_process,
-                                     allow=a.allow_process, clear=a.clear)
+                                     allow=a.allow_process, clear=a.clear, wait_roots=folders)
             except KeyError as e:
                 print(e.args[0], file=sys.stderr)
                 return 2
             lifted = out.get("allow_builtin")
+            roots = out.get("wait_roots")
             print(f"{a.name}: {Limits.from_dict(out).describe()}"
-                  + (f"; allowed off the built-in deny list: {', '.join(lifted)}" if lifted else ""))
+                  + (f"; allowed off the built-in deny list: {', '.join(lifted)}" if lifted else "")
+                  + (f"; file waits only in: {', '.join(roots)}" if roots else ""))
+        elif a.ccmd == "grant":
+            try:
+                c = reg.set_grants(a.name, window=a.window, screen=a.screen)
+            except KeyError as e:
+                print(e.args[0], file=sys.stderr)
+                return 2
+            print(f"{c.name}: window={c.window} screen={c.screen}")
         elif a.ccmd == "remove":
             print("removed" if reg.remove(a.name) else "no such client")
         else:
@@ -511,7 +529,11 @@ def main(argv: list[str] | None = None) -> int:
                 lim = Limits.from_dict(c.limits)
                 lifted = c.limits.get("allow_builtin")
                 notes = [f"window={c.window} screen={c.screen}"] + ([lim.describe()] if lim else []) \
-                    + (["allowed: " + ", ".join(lifted)] if lifted else [])
+                    + (["allowed: " + ", ".join(lifted)] if lifted else []) \
+                    + (["file waits only in: " + ", ".join(c.limits["wait_roots"])]
+                       if c.limits.get("wait_roots") else []) \
+                    + (["window was allow; `client grant` gives it back"]
+                       if c.extra.get("window_was") == "allow" else [])
                 print(f"{name}  ({'; '.join(notes)})")
         return 0
     if a.cmd == "settings":

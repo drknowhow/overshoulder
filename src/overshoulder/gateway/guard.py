@@ -109,6 +109,9 @@ def widened_clients(old: dict, new: dict) -> list[str]:
         lifted = sorted(set(lo.get("deny_processes") or []) - set(ln.get("deny_processes") or []))
         if lifted:
             out.append(f"{name!r} may now reach {', '.join(lifted)}")
+        ro, rn = set(lo.get("wait_roots") or []), set(ln.get("wait_roots") or [])
+        if ro and (not rn or rn - ro):
+            out.append(f"{name!r} file waits may watch more folders")
         allowed = sorted(set(ln.get("allow_builtin") or []) - set(lo.get("allow_builtin") or []))
         if allowed:
             out.append(f"{name!r} allowed {', '.join(allowed)} (denied to every client by default)")

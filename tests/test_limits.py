@@ -262,7 +262,9 @@ def test_screen_recording_frames_are_blacked_out_before_the_encoder(tmp_path):
         def hidden_rects(self):
             return [Rect(0, 0, 2, 2)]  # the left half
 
+    from overshoulder.gateway.limits import capture_rects
     rec = Recording(Hiding(), tmp_path)
+    rec._hide = capture_rects(rec.scope)  # what start() and the refresher keep up to date
     rec._origin = Rect(0, 0, 4, 2)
     rec._proc = type("P", (), {"stdin": Pipe()})()
     assert rec._write_screen_frame(Grabber())

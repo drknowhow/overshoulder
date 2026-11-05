@@ -22,7 +22,7 @@ from overshoulder.gateway import policy
 from overshoulder.gateway.clients import default_home
 from overshoulder.gateway.core import Gateway, Target
 from overshoulder.gateway.errors import GatewayError, TargetStale
-from overshoulder.gateway.limits import black_out, hidden_rects
+from overshoulder.gateway.limits import black_out, capture_rects
 from overshoulder.osp import OspError, dec
 
 ACTIONS = ("click", "double_click", "right_click", "drag", "invoke", "toggle", "select", "set_value", "type",
@@ -738,11 +738,15 @@ class Service:
         if bounds.empty:
             return None
         binding = getattr(scope, "binding", None)
+        try:
+            hide = capture_rects(scope)
+        except GatewayError:  # password fields can't be checked: no picture, so the comparison is skipped
+            return None
         if binding is not None:
             img = capture.window_image(binding.hwnd, bounds)
             if img is not None:
-                return img
-        return capture.grab(bounds)
+                return black_out(img, bounds, hide)
+        return black_out(capture.grab(bounds), bounds, hide)
 
     def _check_expect(self, expect: dict, ref: str | None, lease_id: str, verdict: dict, before_img=None,
                       after_img=None, origin: Rect | None = None) -> dict:
@@ -805,12 +809,14 @@ class Service:
         screen area it occupies, so whatever covers it (the person's other windows) is not captured."""
         binding = getattr(scope, "binding", None)
         if binding is not None:
-            img = capture.window_image(binding.hwnd, scope.bounds())
+            bounds = scope.bounds()
+            img = capture.window_image(binding.hwnd, bounds)
             if img is None:
                 raise GatewayError("could not capture the window's own pixels; try again")
+            img = black_out(img, bounds, capture_rects(scope))
         else:
             bounds = scope.bounds()
-            img = black_out(capture.grab(bounds), bounds, hidden_rects(scope))
+            img = black_out(capture.grab(bounds), bounds, capture_rects(scope))
         ms = int(time.time() * 1000) % 1000
         path = self.shots_dir / f"{time.strftime('%Y%m%d-%H%M%S')}-{ms:03d}-{kind}.png"
         return capture.save(img, path)

@@ -302,6 +302,25 @@ def info_for_handle(hwnd: int) -> dict | None:
         return None
 
 
+def password_rects(root_hwnd: int) -> list[Rect] | None:
+    """Screen rects of the password fields in a top-level window, found by UI Automation's own FindAll in
+    one cross-process call. None when the window's tree can't be read."""
+    try:
+        from pywinauto.uia_defines import IUIA
+        iuia = IUIA()
+        cond = iuia.iuia.CreatePropertyCondition(iuia.UIA_dll.UIA_IsPasswordPropertyId, True)
+        found = UIAElementInfo(root_hwnd).element.FindAll(iuia.tree_scope["subtree"], cond)
+        out = []
+        for i in range(found.Length if found else 0):
+            r = found.GetElement(i).CurrentBoundingRectangle
+            rect = Rect(r.left, r.top, r.right, r.bottom)
+            if not rect.empty:
+                out.append(rect)
+        return out
+    except Exception:
+        return None
+
+
 def any_password(root_hwnd: int, max_nodes: int = 3000) -> bool | None:
     """Whether any password field exists in a window's tree (None if the tree cannot be read)."""
     try:

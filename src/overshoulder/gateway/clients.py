@@ -41,6 +41,10 @@ class Client:
     limits: dict = field(default_factory=dict)
 
 
+# Version of the grant defaults a client was made or last granted under. 2: window scopes ask by default.
+GRANTS_V = 2
+
+
 class ClientRegistry:
     def __init__(self, path: Path | None = None):
         self.path = path or default_home() / "clients.json"
@@ -53,8 +57,25 @@ class ClientRegistry:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             self._clients = {c["name"]: Client(**c) for c in data.get("clients", [])}
             self._mtime = self.path.stat().st_mtime
+            if self._ask_old_grants():
+                self.save()
         else:
             self._clients, self._mtime = {}, None
+
+    def _ask_old_grants(self) -> bool:
+        """Clients made before new clients defaulted to window="approve" got window="allow" without the
+        person choosing it. Each such client goes back to approve once; `client grant NAME --window allow`
+        gives it back on purpose. Returns whether anything changed."""
+        changed = False
+        for c in self._clients.values():
+            if c.extra.get("grants_v", 1) >= GRANTS_V:
+                continue
+            if c.window == "allow":
+                c.window = "approve"
+                c.extra["window_was"] = "allow"
+            c.extra["grants_v"] = GRANTS_V
+            changed = True
+        return changed
 
     def _reload_if_changed(self) -> None:
         # Another process (the CLI) may rotate or remove a token while the gateway runs.
@@ -82,17 +103,21 @@ class ClientRegistry:
         kept = Limits.from_dict(old.limits if old else None).merge(Limits.from_dict(limits))
         token = "os_" + secrets.token_urlsafe(32)
         stored = kept.to_dict() if kept else {}
-        if old and old.limits.get("allow_builtin"):
-            stored["allow_builtin"] = list(old.limits["allow_builtin"])
-        self._clients[name] = Client(name, _hash(token), window, screen, limits=stored)
+        for side in ("allow_builtin", "wait_roots"):
+            if old and old.limits.get(side):
+                stored[side] = list(old.limits[side])
+        self._clients[name] = Client(name, _hash(token), window, screen, limits=stored,
+                                     extra={"grants_v": GRANTS_V})
         self.save()
         return token
 
     def set_limits(self, name: str, read_only: bool | None = None, no_typing: bool | None = None,
-                   deny: list[str] | None = None, allow: list[str] | None = None, clear: bool = False) -> dict:
+                   deny: list[str] | None = None, allow: list[str] | None = None, clear: bool = False,
+                   wait_roots: list[str] | None = None) -> dict:
         """Change a client's standing limits without touching its token. None leaves a flag as it is;
         deny adds programs to the deny list, allow takes them off it (a program on the built-in list is
-        allowed for this client), clear starts from no limits and the full built-in list."""
+        allowed for this client), clear starts from no limits and the full built-in list. wait_roots
+        replaces the folders this client's file waits may watch ([] lifts the limit)."""
         from overshoulder.gateway.limits import BUILTIN_DENY, Limits, process_key
         self._reload_if_changed()
         c = self._clients.get(name)
@@ -106,9 +131,35 @@ class ClientRegistry:
         lifted = ((lifted | allowed) - denied) & BUILTIN_DENY
         new = Limits.make(cur.read_only if read_only is None else read_only,
                           cur.no_typing if no_typing is None else no_typing, procs)
-        c.limits = {**(new.to_dict() if new else {}), **({"allow_builtin": sorted(lifted)} if lifted else {})}
+        roots = [] if clear else list(c.limits.get("wait_roots") or [])
+        if wait_roots is not None:
+            roots = sorted({os.path.abspath(r) for r in wait_roots if r})
+        sides = {**({"allow_builtin": sorted(lifted)} if lifted else {}), **({"wait_roots": roots} if roots else {})}
+        c.limits = {**(new.to_dict() if new else {}), **sides}
         self.save()
-        return {**new.to_dict(), **({"allow_builtin": sorted(lifted)} if lifted else {})}
+        return {**new.to_dict(), **sides}
+
+    def set_grants(self, name: str, window: str | None = None, screen: str | None = None) -> Client:
+        """Change which scopes a client may take, keeping its token."""
+        for grant in (window, screen):
+            if grant is not None and grant not in ("allow", "approve", "deny"):
+                raise ValueError(f"grant must be allow|approve|deny, got {grant!r}")
+        self._reload_if_changed()
+        c = self._clients.get(name)
+        if c is None:
+            raise KeyError(f"no client named {name!r}")
+        c.window = window or c.window
+        c.screen = screen or c.screen
+        c.extra = {**c.extra, "grants_v": GRANTS_V}
+        c.extra.pop("window_was", None)
+        self.save()
+        return c
+
+    @staticmethod
+    def wait_roots_for(client: Client | None) -> tuple[str, ...] | None:
+        """The folders the person allows this client's file waits in, or None for any local folder."""
+        roots = tuple(client.limits.get("wait_roots") or ()) if client else ()
+        return roots or None
 
     def limits_for(self, client: Client):
         from overshoulder.gateway.limits import Limits

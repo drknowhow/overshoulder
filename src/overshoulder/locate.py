@@ -27,7 +27,7 @@ from overshoulder.driver import capture
 from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
 from overshoulder.gateway.errors import GatewayError
-from overshoulder.gateway.limits import black_out, hidden_rects
+from overshoulder.gateway.limits import black_out, capture_rects
 
 MOUSE_ACTIONS = frozenset({"click", "double_click", "right_click", "drag"})
 # A ref is stale once more than this share of its box's pixels has changed.
@@ -147,8 +147,8 @@ def _capture(scope, bounds: Rect) -> Image.Image:
         img = capture.window_image(binding.hwnd, bounds)
         if img is None:
             raise GatewayError("could not capture the window's own pixels; try again")
-        return img
-    return black_out(capture.grab(bounds), bounds, hidden_rects(scope))
+        return black_out(img, bounds, capture_rects(scope))
+    return black_out(capture.grab(bounds), bounds, capture_rects(scope))
 
 
 def window_of(scope, origin: Rect, rel: Rect) -> int | None:

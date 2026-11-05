@@ -167,11 +167,21 @@ def _thumbnail(png: bytes) -> bytes | None:
 
 def _screenshot(hwnd: int) -> bytes | None:
     try:
-        from overshoulder.driver import capture
-        img = capture.window_image(hwnd)
+        from overshoulder.driver import capture, uia
+        from overshoulder.driver import windows as w
+        from overshoulder.gateway.limits import black_out
+        frame = w.frame_bounds(hwnd)
+        img = capture.window_image(hwnd, frame)
+        if img is None:
+            return None
+        fields = []
+        for root in uia.roots_for_window(hwnd):
+            found = uia.password_rects(root)
+            if found is None:
+                return None  # can't tell whether a password shows: send no picture
+            fields += found
+        img = black_out(img, frame, fields)
     except Exception:
-        return None
-    if img is None:
         return None
     img.thumbnail((1280, 1280))
     buf = io.BytesIO()
