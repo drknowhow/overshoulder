@@ -245,6 +245,13 @@ refusal is logged.
   operator key can't lift a panic by itself.
   The watchdog is a separate process, so agents can't stop it. It outlines the active scope and
   shows the agent's own blue pointer where it last acted; neither appears in recordings.
+- **Settings that give agents more.** While the gateway runs it keeps the settings, phone and client
+  files as you last accepted them. A change that gives agents more (a new client or token, a looser
+  grant or limit, a higher input mode, a new phone channel or destination, vision switched on) pauses
+  every agent and asks you in a box on screen, whether it came from the settings page, `overshoulder
+  client add` or another program. No, or no answer, puts the old file back. A change that only takes
+  something away is kept without asking. This doesn't help against a program that can also restart the
+  gateway.
 - **Logs.** Every action goes to a JSONL file in `%LOCALAPPDATA%\Overshoulder\logs`. Typed text is
   recorded only as its length, unless the agent took the scope with `log_text=true` (needed for
   tutorial captions).

@@ -11,7 +11,7 @@ import html
 import re
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from urllib.parse import quote
 
 import anyio
@@ -30,7 +30,9 @@ COOKIE = "overshoulder_settings"
 # (`overshoulder profile open FILE`, which an .osp file opens with).
 NEXT_RE = re.compile(r"/settings/profiles/import\?p=[A-Za-z0-9_-]{16,64}")
 MESSAGES = {"imported": "Imported {n} items into the profile of {app}.", "removed": "Removed the profile of {app}.",
-            "cancelled": "Nothing was imported.", "loaded": "Loaded the catalog."}
+            "cancelled": "Nothing was imported.", "loaded": "Loaded the catalog.",
+            "refused": "Not saved: the change gives agents more than before, and it was not accepted in the "
+                       "box on this PC's screen."}
 
 
 @dataclass
@@ -616,9 +618,10 @@ def render_publish(d: publish.Draft, error: str, form_token: str) -> str:
 
 
 def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
-           phone_tester=None, profiles=None, cat: catalog.Catalog | None = None) -> None:
+           phone_tester=None, profiles=None, cat: catalog.Catalog | None = None, config_guard=None) -> None:
     """Attach /settings handlers to an MCPServer. port_ref["port"] is filled in at serve time. cat is the
-    registry's catalog for Find profiles; only its Load and Preview buttons go online."""
+    registry's catalog for Find profiles; only its Load and Preview buttons go online. config_guard()
+    returns the gateway's ConfigGuard (or None), which asks on screen before a save that widens access."""
 
     last_test: dict = {}
     last_find: dict = {}  # the error from the last Load or Preview, shown once
@@ -666,8 +669,22 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
         form, bad = await checked_form(request)
         if bad is not None:
             return bad
-        st.save(settings_from_form(form, st.load_or_default()))
-        phone.save(phone_from_form(form, phone.load()))
+        new_s = settings_from_form(form, st.load_or_default()).clamp()
+        new_p = phone_from_form(form, phone.load())
+        g = config_guard() if config_guard is not None else None
+        if g is None:
+            st.save(new_s)
+            phone.save(new_p)
+            return RedirectResponse("/settings?saved=1", status_code=303)
+
+        def propose() -> bool:
+            # Each file is asked about on its own; a No keeps that file as it was.
+            refused = g.propose("settings", asdict(new_s), lambda: st.save(new_s))
+            refused_phone = g.propose("phone", asdict(new_p), lambda: phone.save(new_p))
+            return bool(refused or refused_phone)
+
+        if await anyio.to_thread.run_sync(propose):
+            return RedirectResponse("/settings?msg=refused", status_code=303)
         return RedirectResponse("/settings?saved=1", status_code=303)
 
     @mcp.custom_route("/settings/phone-test", methods=["POST"])

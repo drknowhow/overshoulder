@@ -109,6 +109,36 @@ class Daemon:
         # pywinauto/COM and SendInput are not safe to drive from many threads at once; serialize.
         self._desk = threading.Lock()
         self.operator_key = ensure_operator_key()
+        self._stop = threading.Event()
+
+    def start_config_guard(self, ask=None, poll_s: float = 2.0):
+        """Keep the settings, phone and client files as the person has them now, and from here on ask on
+        screen about any change that widens what agents may do (gateway.guard). ask defaults to the box on
+        the desk alone: a phone channel is one of the things such a change could add."""
+        from overshoulder import phone
+        from overshoulder import settings as st
+        from overshoulder.approvals import MessageBoxApprover
+        from overshoulder.gateway.guard import ConfigGuard
+        gw = self.gw
+        st.load_or_default()  # records the settings as they are as the last good ones
+        phone.load()  # makes the phone secrets now, so making them later is not a change
+        g = ConfigGuard({"settings": st.settings_path(), "phone": phone.phone_path(), "clients": gw.registry.path},
+                        ask or MessageBoxApprover().approve, gw.pause, lambda r: gw.resume(only_if=r), gw.log.write)
+        gw.config_guard = g
+
+        def watch():
+            # Agents are paused within a poll even when none is acting, and the person is asked at once.
+            while not self._stop.wait(poll_s):
+                try:
+                    g.check()
+                except Exception:
+                    logging.getLogger(__name__).exception("config check failed")
+
+        threading.Thread(target=watch, name="overshoulder-config-watch", daemon=True).start()
+        return g
+
+    def stop(self) -> None:
+        self._stop.set()
 
     # -- auth and lease plumbing ---------------------------------------------------------------
 
@@ -386,6 +416,10 @@ class Daemon:
                 def authorize():
                     # Before every look: a removed token, a panic or a limit the person adds ends or
                     # narrows the wait at once, not when it times out.
+                    try:
+                        d.gw.check_config()
+                    except Paused as e:
+                        raise WaitError(str(e)) from e
                     if d.gw.registry.authenticate(token).name != client.name:
                         raise WaitError("the client's token changed during the wait")
                     paused = d.gw.leases.paused_reason()
@@ -465,7 +499,7 @@ class Daemon:
             return JSONResponse({"ok": True, "status": d.gw.status()})
 
         settings_routes(mcp, d.port_ref, d.settings_sessions, d.gw.registry, str(default_home() / "logs"),
-                        profiles=d.gw.profiles, cat=d.svc.catalog)
+                        profiles=d.gw.profiles, cat=d.svc.catalog, config_guard=lambda: d.gw.config_guard)
         return mcp
 
 
@@ -488,6 +522,7 @@ def quiet_status_polls() -> None:
 def serve(port: int = DEFAULT_PORT) -> None:
     quiet_status_polls()  # on the logger, which uvicorn's own logging setup leaves in place
     daemon = Daemon(port=port)
+    daemon.start_config_guard()
     mcp = daemon.build()
     from overshoulder.catalog import start_weekly_check
     start_weekly_check(daemon.svc.catalog, daemon.gw.settings_source)  # does nothing while the setting is off
