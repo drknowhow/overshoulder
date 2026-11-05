@@ -1022,3 +1022,136 @@ def test_the_gate_lets_an_unchanged_action_through(gw):
     g, token, lease_id, _ = gw
     perform, done = _gate_after(lambda: None)
     assert g.run(token, lease_id, "invoke", perform, target=ELEMENT)["ok"] and done == ["mutated"]
+
+
+# -- an approval holds only for what the person saw -------------------------------------------------
+
+def _live_element(name="Delete"):
+    """An element whose current state a test can change, as the app would."""
+    state = {"t": Target("element", rect=Rect(10, 10, 30, 30), name=name, control_type="Button", pid=1, hwnd=0x10)}
+    t = Target(**{**state["t"].__dict__, "revalidate": lambda: state["t"]})
+    return t, state
+
+
+def _approving(g, during=lambda: None):
+    asked = []
+
+    def answer(req):
+        asked.append(req)
+        during()
+        return True
+
+    g.approver = policy.CallbackApprover(answer)
+    return asked
+
+
+def test_a_target_renamed_while_the_person_decides_is_not_acted_on(gw):
+    g, token, lease_id, _ = gw
+    t, state = _live_element()
+    _approving(g, lambda: state.update(t=Target(**{**state["t"].__dict__, "name": "Delete all"})))
+    ran = []
+    with pytest.raises(E.TargetChanged):
+        g.run(token, lease_id, "invoke", lambda t, p: ran.append(1), target=t)
+    assert ran == []
+
+
+def test_a_target_moved_while_the_person_decides_is_not_acted_on(gw):
+    g, token, lease_id, _ = gw
+    t, state = _live_element()
+    _approving(g, lambda: state.update(t=Target(**{**state["t"].__dict__, "rect": Rect(40, 40, 60, 60)})))
+    ran = []
+    with pytest.raises((E.TargetChanged, E.TargetStale)):
+        g.run(token, lease_id, "invoke", lambda t, p: ran.append(1), target=t)
+    assert ran == []
+
+
+def test_new_text_at_an_approved_point_stops_the_click(gw):
+    g, token, lease_id, _ = gw
+    label = ["Delete"]
+    g.checks.label_at = lambda s, x, y: label[0]
+    _approving(g, lambda: label.__setitem__(0, "Delete everything"))
+    ran = []
+    with pytest.raises(E.TargetChanged):
+        g.run(token, lease_id, "click", lambda t, p: ran.append(1), target=Target("point", x=5, y=5))
+    assert ran == []
+
+
+def test_focus_moving_while_the_person_decides_stops_the_keys(gw):
+    g, token, lease_id, _ = gw
+    focus = [{**DOC_FOCUS, "type": "Edit", "name": "Search"}]
+    g.checks.scope_focus = lambda s: dict(focus[0])
+    _approving(g, lambda: focus.__setitem__(0, {**DOC_FOCUS, "type": "Edit", "name": "Amount", "hwnd": 0x11}))
+    ran = []
+    with pytest.raises(E.TargetChanged):
+        g.run(token, lease_id, "hotkey", lambda t, p: ran.append(1), params={"combo": "enter"})
+    assert ran == []
+
+
+def test_a_panic_while_the_person_decides_stops_the_action(gw):
+    g, token, lease_id, _ = gw
+    t, _ = _live_element()
+    _approving(g, lambda: g.panic("test"))
+    ran = []
+    with pytest.raises(E.GatewayError):
+        g.run(token, lease_id, "invoke", lambda t, p: ran.append(1), target=t)
+    assert ran == []
+
+
+def test_the_gate_holds_an_approved_action_to_what_was_approved(gw):
+    g, token, lease_id, _ = gw
+    t, state = _live_element()
+    _approving(g)
+    ran = []
+
+    def perform(_, p):
+        state.update(t=Target(**{**state["t"].__dict__, "name": "Pay now"}))
+        p["gate"]()
+        ran.append(1)
+
+    with pytest.raises(E.TargetChanged):
+        g.run(token, lease_id, "invoke", perform, target=t)
+    assert ran == []
+
+
+def test_an_approval_expires(gw, monkeypatch):
+    from overshoulder.gateway import core
+    g, token, lease_id, _ = gw
+    t, _ = _live_element()
+    _approving(g)
+    monkeypatch.setattr(core, "APPROVAL_TTL_S", -1.0)
+    with pytest.raises(E.TargetChanged, match="old"):
+        g.run(token, lease_id, "invoke", lambda _, p: p["gate"](), target=t)
+
+
+def test_an_unchanged_approved_action_runs_once(gw):
+    g, token, lease_id, _ = gw
+    t, _ = _live_element()
+    asked = _approving(g)
+    ran = []
+
+    def perform(_, p):
+        p["gate"]()
+        ran.append(1)
+
+    assert g.run(token, lease_id, "invoke", perform, target=t)["ok"] and ran == [1] and len(asked) == 1
+
+
+def test_every_action_approval_shows_a_picture_of_the_target(gw):
+    g, token, lease_id, _ = gw
+    shot = []
+    g.checks.picture = lambda s, r: shot.append(r) or b"png"
+    t, _ = _live_element()
+    asked = _approving(g)
+    g.run(token, lease_id, "invoke", lambda _, p: None, target=t)
+    g.checks.label_at = lambda s, x, y: "Send"
+    g.run(token, lease_id, "click", lambda _, p: None, target=Target("point", x=50, y=50))
+    assert [a["picture"] for a in asked] == [b"png", b"png"]
+    assert shot[0] == Rect(10, 10, 30, 30) and shot[1].contains(50, 50)
+
+
+def test_the_desk_box_quotes_the_apps_name_and_names_the_window(monkeypatch):
+    from overshoulder import approvals
+    monkeypatch.setattr(approvals.w, "title", lambda h: "Checkout - Shop")
+    text = approvals._summary({"client": "agent-a", "reason": "invoke on 'Close'", "hwnd": 0x10,
+                               "target": {"name": "Close", "kind": "element", "control_type": "Button"}})
+    assert "'Close' (the app's name for it) Button" in text and "Window: Checkout - Shop" in text

@@ -34,6 +34,7 @@ from overshoulder.gateway.errors import (
     NeedsRealInput,
     Paused,
     PersonActive,
+    TargetChanged,
     TargetStale,
     Unauthorized,
     VerifyFailed,
@@ -44,6 +45,10 @@ from overshoulder.gateway.log import ActionLog
 from overshoulder.profiles import ProfileStore
 
 KEYBOARD_ACTIONS = frozenset({"type", "hotkey"})
+# How long an approval stays good once given; a step that runs later asks again.
+APPROVAL_TTL_S = 30.0
+# Half the size of the box an approval picture outlines around a bare point.
+POINT_BOX = 40
 MOUSE_ACTIONS = frozenset({"click", "double_click", "right_click", "drag"})
 
 
@@ -469,6 +474,7 @@ class Gateway:
         lease = None
         scope_desc = None
         result = None  # what perform returned; logged with a failed verify to show which methods ran
+        approved = None  # {"facts", "at"}: what the person approved, which every gate checks again
         view = None  # which of the app's windows the target is in, for its profile
         logged_params = {k: v for k, v in params.items() if k != "secret"}
         try:
@@ -546,9 +552,18 @@ class Gateway:
                 if reason:
                     req = {"kind": "action", "client": client.name, "action": action, "reason": reason,
                            "target": named.describe() if named else None, "scope": scope_desc,
-                           **self._asked_about(scope, named), **self._picture_of(scope, guessed)}
+                           **self._asked_about(scope, named),
+                           **self._picture_of(scope, guessed or [t for t in (named,) if t is not None])}
+                    facts = self._facts(scope, target, to_target, action, read_label=True)
                     policy.require_approval(self.approver, req)
                     approved_by = req.get("answered_by")
+                    # The person decided on what they were shown; while they decided, a panic, a revoke or
+                    # a change in the app may have made that a different action.
+                    self.leases.check(lease_id, client.name, human_ok=True)
+                    target = target if target is None else self._bind(scope, target, action)
+                    to_target = to_target if to_target is None else self._bind(scope, to_target, action)
+                    _same_as_approved(facts, self._facts(scope, target, to_target, action, read_label=True))
+                    approved = {"facts": _without_labels(facts), "at": time.monotonic()}
 
             shown = to_target if to_target is not None else target  # where the pointer ends up
             if shown is not None and (shown.kind == "point" or (shown.rect and not shown.rect.empty)):
@@ -556,7 +571,8 @@ class Gateway:
                 self.pointer = {"x": x, "y": y, "action": action, "client": client.name, "at": time.time()}
             params["abort"] = lambda: self._check_background(lease_id, client.name, scope)
             params["gate"] = lambda: self._gate(token, lease_id, client.name, scope, action, read_only,
-                                                 [t for t in (target, to_target) if t is not None])
+                                                 [t for t in (target, to_target) if t is not None], approved,
+                                                 (target, to_target))
             # perform MUST wrap any use of the person's mouse/keyboard (SendInput) in borrow():
             #   with params["borrow"]() as b: fg = b.check(); <SendInput, calling b.abort() between keys>
             # and call background_target(hwnd) before posting to or messaging any window.
@@ -648,14 +664,23 @@ class Gateway:
         hosted = [p for p in procs if p and p != "applicationframehost.exe"]
         return {"process": (hosted or procs or [""])[0], "hwnd": hwnd}
 
-    def _picture_of(self, scope, guessed: list[Target]) -> dict:
-        """{"picture": PNG} of the first vision box an approval is about, which the box on the desk shows
-        (the phone gets it only if the person shares screenshots). {} if there is none or it can't be taken."""
-        t = next((t for t in guessed if t.rect is not None and not t.rect.empty), None)
-        if t is None:
+    def _picture_of(self, scope, shown: list[Target]) -> dict:
+        """{"picture": PNG} of the first target an approval is about, outlined, which the box on the desk
+        shows (the phone gets it only if the person shares screenshots), so the person judges the control
+        by how it looks and not only by the name the app gives it. {} if it can't be taken."""
+        rect = None
+        for t in shown:
+            if t.rect is not None and not t.rect.empty:
+                rect = t.rect
+            elif t.kind == "point":
+                x, y = t.point()
+                rect = Rect(x - POINT_BOX, y - POINT_BOX, x + POINT_BOX, y + POINT_BOX)
+            if rect is not None:
+                break
+        if rect is None:
             return {}
         try:
-            return {"picture": self.checks.picture(scope, t.rect)}
+            return {"picture": self.checks.picture(scope, rect)}
         except Exception:  # the question still goes out, in words
             return {}
 
@@ -666,8 +691,34 @@ class Gateway:
         if self.leases.paused_reason() == HUMAN_PAUSE and self._scope_in_front(scope):
             raise Paused("the person is working in this window, so the agent stopped")
 
+    def _facts(self, scope, target: Target | None, to_target: Target | None, action: str,
+               read_label: bool = False) -> dict:
+        """What an approval is about, read from the screen now: each target bound afresh (its window,
+        process, place, name, type and password state), what UI Automation finds at a point, the text at
+        it when read_label, and the focused control where keys go. Two reads are compared, not shown."""
+        out: dict = {}
+        for key, t in (("target", target), ("to", to_target)):
+            if t is None:
+                continue
+            fresh = self._bind(scope, t, action)
+            f = {**fresh.describe(), "pid": fresh.pid, "hwnd": fresh.hwnd, "password": fresh.is_password}
+            if fresh.kind in ("point", "text", "vision"):
+                f["under"] = (self.checks.element_in_scope_at(scope, *fresh.point()) or {}).get("name", "")
+                if read_label and action in policy.POINTED_ACTIONS \
+                        and getattr(self.settings_source(), "ocr_enabled", True):
+                    try:
+                        f["label"] = self.checks.label_at(scope, *fresh.point())
+                    except Exception:  # unreadable both times compares equal; once is a change
+                        f["label"] = None
+            out[key] = f
+        if action in KEYBOARD_ACTIONS and (target is None or action == "hotkey"):
+            focus = self.checks.scope_focus(scope) or {}
+            out["focus"] = {k: focus.get(k) for k in ("hwnd", "pid", "name", "type", "password")}
+        return out
+
     def _gate(self, token: str, lease_id: str, client_name: str, scope, action: str, read_only: bool,
-              targets: list[Target]) -> None:
+              targets: list[Target], approved: dict | None = None,
+              bound: tuple[Target | None, Target | None] = (None, None)) -> None:
         """Every check that can change while an action runs, made again right before a driver call that
         changes something (perform calls params["gate"]): a panic, revoke or pause; the client's token;
         the person's limits as they are now; the scope and the desktop; Overshoulder's own windows. A call
@@ -684,6 +735,10 @@ class Gateway:
             self._require_unprotected_target(t)
         scope.check_alive()
         self.checks.desktop()
+        if approved is not None:
+            if time.monotonic() - approved["at"] > APPROVAL_TTL_S:
+                raise TargetChanged(f"the approval is more than {APPROVAL_TTL_S:.0f} s old; act again to ask anew")
+            _same_as_approved(approved["facts"], self._facts(scope, *bound, action))
 
     def _scope_in_front(self, scope) -> bool:
         fg = self.checks.foreground()
@@ -847,6 +902,27 @@ class Gateway:
         else:
             sc.require_point(scope, x, y)
         return target
+
+
+def _without_labels(facts: dict) -> dict:
+    """facts without the OCR text at points: read once after approval, not at every gate."""
+    return {k: {kk: vv for kk, vv in v.items() if kk != "label"} for k, v in facts.items()}
+
+
+def _same_as_approved(approved: dict, now: dict) -> None:
+    """Refuse when what the action would do now differs from what the person approved. Labels are
+    compared only when both reads have them."""
+    if set(approved) != set(now):
+        raise TargetChanged("what the action is aimed at changed since it was approved; observe again")
+    for key, was in approved.items():
+        is_ = now[key]
+        for field_name in set(was) | set(is_):
+            if field_name == "label" and (field_name not in was or field_name not in is_):
+                continue
+            if was.get(field_name) != is_.get(field_name):
+                what = {"target": "the target", "to": "the drop point", "focus": "the focused control"}[key]
+                raise TargetChanged(f"{what} changed ({field_name}) while the approval was pending, so the "
+                                    "approved action was not done; observe again and act again to ask anew")
 
 
 def _view_of(scope, target: Target) -> str:
