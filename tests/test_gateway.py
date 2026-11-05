@@ -66,7 +66,8 @@ def ok_checks(**over):
                 foreground=lambda: PERSON_WINDOW, bring_forward=lambda h: True,
                 desk_state=lambda: ((7, 8), PERSON_WINDOW),
                 restore_desk=lambda s: {"cursor": True, "foreground": True}, person_watch=FakeWatch,
-                left_open=lambda s, front: False)
+                left_open=lambda s, front: False,
+                window_processes=lambda h: ["app.exe"], pid_process=lambda pid: "app.exe")
     return Checks(**{**base, **over})
 
 
@@ -74,7 +75,7 @@ def ok_checks(**over):
 def gw(tmp_path):
     scope = FakeScope()
     g = gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda spec: scope)
-    token = g.registry.add("agent-a")
+    token = g.registry.add("agent-a", window="allow")
     lease = g.acquire(token, "window:16")
     return g, token, lease["lease_id"], scope
 
@@ -232,7 +233,7 @@ def test_other_client_cannot_use_a_stolen_lease_id():
 def test_registry_stores_only_token_hashes(tmp_path):
     from overshoulder.gateway.clients import ClientRegistry
     reg = ClientRegistry(tmp_path / "c.json")
-    token = reg.add("agent-a")
+    token = reg.add("agent-a", window="allow")
     assert token not in (tmp_path / "c.json").read_text()
     assert ClientRegistry(tmp_path / "c.json").authenticate(token).name == "agent-a"
     with pytest.raises(E.Unauthorized):
@@ -243,7 +244,7 @@ def test_screen_scope_needs_approval_by_default(tmp_path):
     screen = FakeScope()
     screen.kind = "screen"
     g = gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda s: screen)
-    token = g.registry.add("agent-a")
+    token = g.registry.add("agent-a", window="allow")
     with pytest.raises(E.ApprovalDenied):
         g.acquire(token, "screen:all")
     g.approver = policy.CallbackApprover(lambda req: req["kind"] == "lease")
@@ -467,7 +468,7 @@ def test_scope_escaping_hotkeys_are_hard_denied(gw, combo):
 def test_typed_text_is_redacted_in_the_log_unless_the_lease_opts_in(tmp_path):
     scope = FakeScope()
     g = gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda s: scope)
-    token = g.registry.add("agent-a")
+    token = g.registry.add("agent-a", window="allow")
     lease_id = g.acquire(token, "window:16")["lease_id"]
     g.run(token, lease_id, "type", lambda t, p: None, params={"text": "hunter2"})
     assert "hunter2" not in g.log.path.read_text(encoding="utf-8")
@@ -483,7 +484,7 @@ def test_token_removed_by_another_process_stops_working(tmp_path):
     from overshoulder.gateway.clients import ClientRegistry
     path = tmp_path / "c.json"
     running = ClientRegistry(path)
-    token = running.add("agent-a")
+    token = running.add("agent-a", window="allow")
     _t.sleep(0.05)
     other = ClientRegistry(path)
     other.remove("agent-a")
@@ -663,7 +664,7 @@ def _mode_gateway(tmp_path, idle_s=999.0):
     path = tmp_path / "settings.json"
     g = gateway_for_tests(tmp_path, checks=ok_checks(person_idle_s=lambda: idle_s),
                           scope_factory=lambda s: FakeScope(), settings_source=lambda: st.load_or_default(path))
-    token = g.registry.add("agent-a")
+    token = g.registry.add("agent-a", window="allow")
     return g, token, g.acquire(token, "window:16")["lease_id"], path
 
 
@@ -738,7 +739,7 @@ def _borrow_gateway(tmp_path, idles):
     scope = BoundScope()
     g = gateway_for_tests(tmp_path, checks=checks, scope_factory=lambda s: scope,
                           settings_source=lambda: st.Settings(input_mode="borrow", borrow_idle_s=5))
-    token = g.registry.add("agent-a")
+    token = g.registry.add("agent-a", window="allow")
     return g, token, g.acquire(token, "window:16")["lease_id"], seen
 
 

@@ -362,7 +362,7 @@ def main(argv: list[str] | None = None) -> int:
     csub = c.add_subparsers(dest="ccmd", required=True)
     add = csub.add_parser("add", help="create or rotate a client; prints its token once")
     add.add_argument("name")
-    add.add_argument("--window", default="allow", choices=["allow", "approve", "deny"])
+    add.add_argument("--window", default="approve", choices=["allow", "approve", "deny"])
     add.add_argument("--screen", default="approve", choices=["allow", "approve", "deny"])
     _limit_flags(add)
     lim = csub.add_parser("limit", help="set a client's standing limits; its agent cannot lift them")
@@ -494,13 +494,19 @@ def main(argv: list[str] | None = None) -> int:
             except KeyError as e:
                 print(e.args[0], file=sys.stderr)
                 return 2
-            print(f"{a.name}: {Limits.from_dict(out).describe()}")
+            lifted = out.get("allow_builtin")
+            print(f"{a.name}: {Limits.from_dict(out).describe()}"
+                  + (f"; allowed off the built-in deny list: {', '.join(lifted)}" if lifted else ""))
         elif a.ccmd == "remove":
             print("removed" if reg.remove(a.name) else "no such client")
         else:
             for name in reg.names():
-                lim = Limits.from_dict(reg.get(name).limits)
-                print(f"{name}  ({lim.describe()})" if lim else name)
+                c = reg.get(name)
+                lim = Limits.from_dict(c.limits)
+                lifted = c.limits.get("allow_builtin")
+                notes = [f"window={c.window} screen={c.screen}"] + ([lim.describe()] if lim else []) \
+                    + (["allowed: " + ", ".join(lifted)] if lifted else [])
+                print(f"{name}  ({'; '.join(notes)})")
         return 0
     if a.cmd == "settings":
         import os

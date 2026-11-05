@@ -108,7 +108,7 @@ def test_an_xy_click_on_a_painted_delete_asks_and_one_on_save_goes(tmp_path):
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("label-test")
+    token = s.gw.registry.add("label-test", window="allow")
     out = tmp_path / "drawn.json"
     proc = _launch(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(DRAWN), str(out)])
     try:

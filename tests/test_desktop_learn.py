@@ -23,7 +23,7 @@ def test_two_notepad_sessions_revise_its_profile(tmp_path):
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("learner")
+    token = s.gw.registry.add("learner", window="allow")
     path = tmp_path / "pets_overshoulder_learn.txt"
     path.write_text("", encoding="utf-8")
     bghelpers.wait_no_window("Notepad")
@@ -73,7 +73,7 @@ def test_a_profile_sends_typing_straight_to_the_method_that_worked(tmp_path):
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("hinted")
+    token = s.gw.registry.add("hinted", window="allow")
     path = tmp_path / "pets_overshoulder_hint.txt"
     path.write_text("", encoding="utf-8")
     bghelpers.wait_no_window("Notepad")

@@ -54,7 +54,7 @@ def svc(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "Ladder", Ladder)
     s = service.Service(gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda spec: scope),
                         shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("agent")
+    token = s.gw.registry.add("agent", window="allow")
     return s, token, s.acquire(token, "window:16")["lease_id"]
 
 

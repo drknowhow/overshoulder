@@ -25,7 +25,7 @@ def svc(tmp_path):
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    return s, s.gw.registry.add("alice"), s.gw.registry.add("bob")
+    return s, s.gw.registry.add("alice", window="allow"), s.gw.registry.add("bob", window="allow")
 
 
 @needs_ffmpeg

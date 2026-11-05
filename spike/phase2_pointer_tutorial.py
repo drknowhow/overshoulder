@@ -25,7 +25,7 @@ def main(evidence: bool) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="os_pointer_"))
     s = Service(gateway_for_tests(tmp, settings_source=lambda: st.Settings(input_mode="never")),
                 shots_dir=tmp / "shots")
-    token = s.gw.registry.add("tutorial-agent")
+    token = s.gw.registry.add("tutorial-agent", window="allow")
     counter = H.InjectedCounter()
     sentinel = H.start_sentinel()
     H.launch_noactivate(["calc.exe"])

@@ -17,7 +17,7 @@ def test_record_and_render_a_notepad_session(tmp_path):
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("rec-test")
+    token = s.gw.registry.add("rec-test", window="allow")
     path = tmp_path / "rec_notes.txt"
     path.write_text("", encoding="utf-8")
     __import__("bghelpers").wait_no_window("Notepad")

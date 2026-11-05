@@ -33,7 +33,7 @@ def svc(tmp_path):
     from overshoulder.gateway.core import gateway_for_tests
     from overshoulder.service import Service
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    return s, s.gw.registry.add("bg-test")
+    return s, s.gw.registry.add("bg-test", window="allow")
 
 
 def _wait_window(title_re, timeout=45):
@@ -223,7 +223,7 @@ def test_never_mode_refuses_what_only_real_input_could_do(desk, tmp_path):
     from overshoulder.service import Service
     s = Service(gateway_for_tests(tmp_path, settings_source=lambda: st.Settings(input_mode="never")),
                 shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("never-test")
+    token = s.gw.registry.add("never-test", window="allow")
     H = desk[0]
     H.launch_noactivate(["calc.exe"])
     hwnd = _wait_window(r"^Calculator$")
@@ -256,7 +256,7 @@ def test_borrow_mode_waits_for_the_person_then_gives_back_cursor_and_window(desk
     s = Service(gateway_for_tests(tmp_path, settings_source=lambda: st.Settings(input_mode="borrow",
                                                                                 borrow_idle_s=2)),
                 shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("borrow-test")
+    token = s.gw.registry.add("borrow-test", window="allow")
     H, _, sentinel = desk
     H.launch_noactivate(["calc.exe"])
     hwnd = _wait_window(r"^Calculator$")

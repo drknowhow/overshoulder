@@ -152,7 +152,7 @@ def test_a_click_on_a_painted_button_reports_its_own_change_and_the_new_text(tmp
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("region-test")
+    token = s.gw.registry.add("region-test", window="allow")
     out = tmp_path / "drawn.json"
     proc = _launch(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(DRAWN), str(out)])
     try:

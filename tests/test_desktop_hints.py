@@ -49,7 +49,7 @@ def test_a_second_describe_of_a_painted_button_skips_the_vision_model(tmp_path):
             return self.inner.locate(img, description)
 
     s.locator_for = lambda cfg: Counting(vision.locator_for(cfg))
-    token = s.gw.registry.add("hint-test")
+    token = s.gw.registry.add("hint-test", window="allow")
     out = tmp_path / "drawn.json"
     proc = _launch(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(DRAWN), str(out)])
     hits, took = [], []

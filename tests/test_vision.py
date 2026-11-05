@@ -399,7 +399,7 @@ def test_the_local_model_finds_character_maps_select_button(tmp_path):
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path, settings_source=lambda: LOCAL), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("vision-test")
+    token = s.gw.registry.add("vision-test", window="allow")
     proc = subprocess.Popen(["charmap.exe"])
     try:
         end, hwnd = time.time() + 20, None

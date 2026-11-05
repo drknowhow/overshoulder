@@ -149,7 +149,7 @@ def test_real_input_checks_the_window_under_both_ends(tmp_path):
     checks = ok_checks(window_at_point=lambda s, x, y: hits.append((x, y)) or 0x10)
     scope = GwScope()
     g = gateway_for_tests(tmp_path, checks=checks, scope_factory=lambda spec: scope)
-    token = g.registry.add("agent-a")
+    token = g.registry.add("agent-a", window="allow")
     lease_id = g.acquire(token, "window:16")["lease_id"]
 
     def perform(t, p):
@@ -210,7 +210,7 @@ def test_a_drop_into_another_window_skips_the_background_rung(env, monkeypatch):
 def test_a_drag_without_a_drop_point_is_a_value_error(tmp_path):
     from overshoulder.service import Service
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("t")
+    token = s.gw.registry.add("t", window="allow")
     with pytest.raises(ValueError, match="drop point"):
         s.act(token, "no-lease", "drag", x=10, y=10)
     with pytest.raises(ValueError, match="drop point"):

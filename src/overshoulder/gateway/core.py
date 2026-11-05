@@ -336,7 +336,7 @@ class Gateway:
             grant = self.registry.grant_for(client, scope.kind)
             approved_by = None
             if grant == "approve":
-                eff = lim.effective
+                eff = lim.chosen
                 req = {"kind": "lease", "client": client.name, "scope": scope.describe(),
                        "reason": f"{client.name} wants {scope.kind} scope {scope.describe()}"
                                  + (f" (limits: {eff.describe()})" if eff else ""),
@@ -365,7 +365,7 @@ class Gateway:
     def lease_limits(self, client_name: str, session: Limits) -> LeaseLimits:
         """The person's standing limits for the client, read now, with the session's own."""
         c = self.registry.get(client_name)
-        return LeaseLimits(self.registry.limits_for(c) if c else Limits(), session)
+        return LeaseLimits(self.registry.limits_for(c) if c else Limits(), session, self.registry.builtin_for(c))
 
     def heartbeat(self, token: str, lease_id: str) -> dict:
         client = self.registry.authenticate(token)

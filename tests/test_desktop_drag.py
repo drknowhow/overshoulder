@@ -106,7 +106,7 @@ def test_a_file_drags_into_a_folder_in_explorer_through_a_borrow(tmp_path):
         pytest.skip("Explorer opened the folder in a window that was already open; not touching it")
     s = Service(gateway_for_tests(tmp_path, settings_source=lambda: st.Settings(input_mode="borrow")),
                 shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("drag-test")
+    token = s.gw.registry.add("drag-test", window="allow")
     try:
         time.sleep(2.0)
         lease = s.acquire(token, f"window:{hwnd}")["lease_id"]

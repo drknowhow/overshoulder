@@ -190,7 +190,7 @@ def svc(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "Ladder", Ladder)
     s = service.Service(gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda spec: AppScope(),
                                           settings_source=lambda: settings["s"]), shots_dir=tmp_path / "shots")
-    return s, s.gw.registry.add("agent"), settings, orders
+    return s, s.gw.registry.add("agent", window="allow"), settings, orders
 
 
 def test_take_scope_brings_the_brief(svc):

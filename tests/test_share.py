@@ -138,7 +138,7 @@ def test_an_agent_export_needs_the_person(tmp_path):
     asked = []
     s = service.Service(gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda spec: AppScope()),
                         shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("agent")
+    token = s.gw.registry.add("agent", window="allow")
     lease = s.acquire(token, "window:16")["lease_id"]
     with pytest.raises(ValueError, match="no profile yet"):
         s.profile(token, lease, "export")

@@ -66,6 +66,9 @@ Create a client for each agent. The token is printed once; only its hash is stor
 overshoulder client add claude-code
 ```
 
+A new client asks you before each window scope it takes and each screen scope. Add
+`--window allow` to let it take window scopes without asking.
+
 Register it with your agent, for example Claude Code:
 
 ```powershell
@@ -222,6 +225,15 @@ refusal is logged.
   ```
 
   A refusal comes back as `narrowed`, with the limit and who set it.
+
+  Some programs are denied to every client from the start: command shells and terminals
+  (`cmd.exe`, `powershell.exe`, `pwsh.exe`, Windows Terminal, WSL), script hosts, `regedit.exe`,
+  `mmc.exe`, Task Manager, Settings, Control Panel, Overshoulder itself and common password managers.
+  A scope on one of them would let an agent run any command. To allow one for a single client:
+
+  ```bash
+  overshoulder client limit claude-code --allow-process powershell.exe
+  ```
 - **The person always wins.** While you use the mouse or keyboard, agents keep to background work,
   and anything that needs your real input waits until you've been idle for a few seconds. Touching
   them during such an action stops it. **Ctrl+Alt+P** revokes the lease and pauses until you run

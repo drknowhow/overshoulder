@@ -151,7 +151,7 @@ def svc(tmp_path, monkeypatch):
     def make(**kw):
         s = service.Service(gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda spec: scope, **kw),
                             shots_dir=tmp_path / "shots")
-        token = s.gw.registry.add("agent")
+        token = s.gw.registry.add("agent", window="allow")
         return s, token, s.acquire(token, "window:16")["lease_id"]
 
     return make, pixels, pressed
@@ -260,7 +260,7 @@ def test_an_agent_clicks_a_painted_button_by_its_text(tmp_path):
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("ocr-test")
+    token = s.gw.registry.add("ocr-test", window="allow")
     out = tmp_path / "drawn.json"
     proc = _launch(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(DRAWN), str(out)])
     try:

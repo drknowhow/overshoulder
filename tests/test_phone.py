@@ -469,7 +469,7 @@ def test_the_approval_request_names_the_program_and_the_log_says_who_answered(tm
     original = approver._question
     approver._question = lambda req, t: seen.append(dict(req)) or original(req, t)
     g = gateway_for_tests(tmp_path, checks=checks, scope_factory=lambda spec: scope, approver=approver)
-    token = g.registry.add("agent-a")
+    token = g.registry.add("agent-a", window="allow")
     lease_id = g.acquire(token, "window:16")["lease_id"]
     send = Target("element", rect=Rect(10, 10, 30, 30), name="Send", hwnd=0x10)
     assert g.run(token, lease_id, "click", lambda t, p: "sent", target=send)["ok"]
