@@ -155,7 +155,7 @@ def require_hotkey_allowed(combo: str) -> None:
     keys = combo_keys(combo)
     if keys & {_VK_WIN, _VK_RWIN}:
         raise Denied(f"hotkey {combo!r} uses the Windows key, which acts outside any scope")
-    if any(keys == esc for esc in _SCOPE_ESCAPES):
+    if any(esc <= keys for esc in _SCOPE_ESCAPES):  # alt+shift+tab and ctrl+alt+tab switch windows too
         raise Denied(f"hotkey {combo!r} switches or leaves the active window")
 
 

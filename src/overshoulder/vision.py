@@ -25,6 +25,7 @@ from typing import Protocol
 
 from PIL import Image
 
+from overshoulder import netutil
 from overshoulder.driver.windows import Rect
 
 VISION_MODES = {
@@ -89,7 +90,7 @@ def _post_json(url: str, payload: dict, headers: dict | None = None, timeout: fl
     req = urllib.request.Request(url, json.dumps(payload).encode(),
                                  {"Content-Type": "application/json", **(headers or {})})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with netutil.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
         raise VisionError(f"{url} answered {e.code}: {e.read()[:300].decode(errors='replace')}") from e

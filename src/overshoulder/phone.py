@@ -43,6 +43,7 @@ import urllib.request
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
+from overshoulder import netutil
 from overshoulder.gateway.clients import default_home
 
 log = logging.getLogger(__name__)
@@ -231,7 +232,7 @@ def _http(method: str, url: str, body: bytes | None = None, headers: dict | None
           timeout: float = 10.0) -> tuple[int, bytes]:
     req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with netutil.urlopen(req, timeout=timeout) as r:
             return r.status, r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
@@ -302,7 +303,7 @@ class Ntfy:
     def _replies(self, since: int, stream: bool, timeout: float):
         q = "json?" + urllib.parse.urlencode({"since": since, **({} if stream else {"poll": "1"})})
         req = urllib.request.Request(self._url(self.s.ntfy_reply_topic) + "/" + q, headers=self._auth())
-        return urllib.request.urlopen(req, timeout=timeout)
+        return netutil.urlopen(req, timeout=timeout)
 
     def _stream(self, since: int):
         """The reply topic as a stream, with its socket: closing a response another thread is reading
