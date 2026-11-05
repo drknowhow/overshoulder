@@ -109,6 +109,36 @@ class Daemon:
         # pywinauto/COM and SendInput are not safe to drive from many threads at once; serialize.
         self._desk = threading.Lock()
         self.operator_key = ensure_operator_key()
+        self._stop = threading.Event()
+
+    def start_config_guard(self, ask=None, poll_s: float = 2.0):
+        """Keep the settings, phone and client files as the person has them now, and from here on ask on
+        screen about any change that widens what agents may do (gateway.guard). ask defaults to the box on
+        the desk alone: a phone channel is one of the things such a change could add."""
+        from overshoulder import phone
+        from overshoulder import settings as st
+        from overshoulder.approvals import MessageBoxApprover
+        from overshoulder.gateway.guard import ConfigGuard
+        gw = self.gw
+        st.load_or_default()  # records the settings as they are as the last good ones
+        phone.load()  # makes the phone secrets now, so making them later is not a change
+        g = ConfigGuard({"settings": st.settings_path(), "phone": phone.phone_path(), "clients": gw.registry.path},
+                        ask or MessageBoxApprover().approve, gw.pause, lambda r: gw.resume(only_if=r), gw.log.write)
+        gw.config_guard = g
+
+        def watch():
+            # Agents are paused within a poll even when none is acting, and the person is asked at once.
+            while not self._stop.wait(poll_s):
+                try:
+                    g.check()
+                except Exception:
+                    logging.getLogger(__name__).exception("config check failed")
+
+        threading.Thread(target=watch, name="overshoulder-config-watch", daemon=True).start()
+        return g
+
+    def stop(self) -> None:
+        self._stop.set()
 
     # -- auth and lease plumbing ---------------------------------------------------------------
 
@@ -386,6 +416,10 @@ class Daemon:
                 def authorize():
                     # Before every look: a removed token, a panic or a limit the person adds ends or
                     # narrows the wait at once, not when it times out.
+                    try:
+                        d.gw.check_config()
+                    except Paused as e:
+                        raise WaitError(str(e)) from e
                     if d.gw.registry.authenticate(token).name != client.name:
                         raise WaitError("the client's token changed during the wait")
                     paused = d.gw.leases.paused_reason()
@@ -465,7 +499,7 @@ class Daemon:
             return JSONResponse({"ok": True, "status": d.gw.status()})
 
         settings_routes(mcp, d.port_ref, d.settings_sessions, d.gw.registry, str(default_home() / "logs"),
-                        profiles=d.gw.profiles, cat=d.svc.catalog)
+                        profiles=d.gw.profiles, cat=d.svc.catalog, config_guard=lambda: d.gw.config_guard)
         return mcp
 
 
@@ -485,13 +519,69 @@ def quiet_status_polls() -> None:
         access.addFilter(_QuietStatusPolls())
 
 
-def serve(port: int = DEFAULT_PORT) -> None:
+WSL_ADAPTER = "vEthernet (WSL*"
+
+
+def wsl_host_address() -> str | None:
+    """The Windows end of WSL's NAT network (the vEthernet (WSL ...) adapter), or None when WSL is not
+    running. It changes from boot to boot, so it is looked up each time the gateway starts."""
+    import subprocess
+    cmd = ("(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
+           f"Where-Object InterfaceAlias -like '{WSL_ADAPTER}').IPAddress")
+    try:
+        out = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", cmd],
+                             capture_output=True, text=True, timeout=20,
+                             creationflags=subprocess.CREATE_NO_WINDOW).stdout.split()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out[0] if out else None
+
+
+class OnlyMcpOn:
+    """ASGI wrapper: requests that arrived on one of `addresses` (the socket's own address, not the Host
+    header a caller writes) reach /mcp and nothing else. The operator routes and the settings page stay
+    on loopback, where only programs on this PC can call them."""
+
+    def __init__(self, app, addresses: set[str], path: str = "/mcp"):
+        self.app, self.addresses, self.path = app, set(addresses), path
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket") and (scope.get("server") or ("",))[0] in self.addresses:
+            p = scope.get("path", "")
+            if not (p == self.path or p.startswith(self.path + "/")):
+                if scope["type"] == "http":
+                    await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+def serve(port: int = DEFAULT_PORT, listen_wsl: bool = False) -> None:
+    """listen_wsl: also take MCP calls on the WSL adapter, for an agent kept in a locked-down WSL distro
+    (docs/evidence/security-isolation). Only /mcp is served there, and every call still needs a token."""
+    import socket
+
+    import uvicorn
     quiet_status_polls()  # on the logger, which uvicorn's own logging setup leaves in place
     daemon = Daemon(port=port)
+    daemon.start_config_guard()
     mcp = daemon.build()
     from overshoulder.catalog import start_weekly_check
     start_weekly_check(daemon.svc.catalog, daemon.gw.settings_source)  # does nothing while the setting is off
+    hosts = ["127.0.0.1"]
+    if listen_wsl:
+        wsl = wsl_host_address()
+        if not wsl:
+            raise SystemExit("--listen-wsl: no WSL network adapter; start the agent's WSL distro first")
+        hosts.append(wsl)
     security = TransportSecuritySettings(enable_dns_rebinding_protection=True,
-                                         allowed_hosts=[f"127.0.0.1:{port}", f"localhost:{port}"],
+                                         allowed_hosts=[f"{h}:{port}" for h in hosts] + [f"localhost:{port}"],
                                          allowed_origins=[])
-    asyncio.run(mcp.run_streamable_http_async(host="127.0.0.1", port=port, transport_security=security))
+    app = OnlyMcpOn(mcp.streamable_http_app(transport_security=security, host="127.0.0.1"), set(hosts[1:]))
+    socks = []
+    for h in hosts:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        s.bind((h, port))
+        socks.append(s)
+    server = uvicorn.Server(uvicorn.Config(app, log_level=mcp.settings.log_level.lower()))
+    asyncio.run(server.serve(sockets=socks))

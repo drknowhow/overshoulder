@@ -321,7 +321,7 @@ class Gateway:
                  checks: Checks | None = None, scope_factory: Callable[[str], Any] = sc.parse_scope,
                  allow_elevated: bool = False, protected_pids: set[int] | None = None,
                  human_wait_s: float = 20.0, settings_source: Callable[[], Any] | None = None,
-                 profiles: ProfileStore | None = None):
+                 profiles: ProfileStore | None = None, config_guard: Any = None):
         # An elevated gateway could drive elevated windows past UIPI, defeating the elevated-window deny.
         if not allow_elevated and policy.self_elevated():
             raise Denied("refusing to run elevated; start Overshoulder from a normal (non-admin) process")
@@ -348,6 +348,8 @@ class Gateway:
         self.profiles = profiles or ProfileStore(default_home())
         self._learners: list[threading.Thread] = []
         self.leases.on_end = self._lease_ended
+        # Keeps the config the person accepted and asks about changes that widen it (gateway.guard).
+        self.config_guard = config_guard
 
     # -- lease lifecycle -----------------------------------------------------------------------
 
@@ -358,6 +360,7 @@ class Gateway:
         the limits it had and adds these; the person's standing limits for the client always apply."""
         client = None
         try:
+            self.check_config()
             client = self.registry.authenticate(token)
             session = limits if isinstance(limits, Limits) else Limits.from_dict(limits)
             held = self.leases.active()
@@ -528,6 +531,7 @@ class Gateway:
         view = None  # which of the app's windows the target is in, for its profile
         logged_params = {k: v for k, v in params.items() if k != "secret"}
         try:
+            self.check_config()
             client = self.registry.authenticate(token)
             client_name = client.name
             lease = self.leases.check(lease_id, client.name, human_ok=True)
@@ -819,6 +823,14 @@ class Gateway:
             out["focus"] = {k: focus.get(k) for k in ("hwnd", "pid", "name", "type", "password")}
         return out
 
+    def check_config(self) -> None:
+        """Settings, phone or client files changed since the person accepted them: a narrowing change is
+        taken, a widening one pauses every agent until the person answers on screen."""
+        g = self.config_guard
+        if g is not None and g.check():
+            raise Paused("driving is paused: Overshoulder's settings changed and the person is being asked "
+                         "whether to keep the change")
+
     def _gate(self, token: str, lease_id: str, client_name: str, scope, action: str, read_only: bool,
               targets: list[Target], approved: dict | None = None,
               bound: tuple[Target | None, Target | None] = (None, None)) -> None:
@@ -827,6 +839,7 @@ class Gateway:
         the person's limits as they are now; the scope and the desktop; Overshoulder's own windows. A call
         already handed to Windows cannot be taken back; this narrows the window, it does not close it."""
         self._check_background(lease_id, client_name, scope)
+        self.check_config()
         if self.registry.authenticate(token).name != client_name:
             raise Unauthorized("the client's token changed while the action ran")
         lim = self.lease_limits(client_name, self.leases.check(lease_id, client_name, human_ok=True)
