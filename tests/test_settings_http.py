@@ -156,3 +156,30 @@ def test_a_panic_ends_a_wait(daemon, tmp_path):  # noqa: F811
     out = call(port, token, "wait_for", {"conditions": [{"kind": "file", "path": str(tmp_path / "never")}],
                                          "timeout_s": 20})
     assert out["ok"] is False and "paused" in out["error"]["message"]
+
+
+def test_on_the_wsl_address_only_mcp_is_served():
+    import asyncio
+
+    from overshoulder.server import OnlyMcpOn
+    reached = []
+
+    async def app(scope, receive, send):
+        reached.append(scope["path"])
+
+    async def send(msg):
+        sent.append(msg)
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    wrapped = OnlyMcpOn(app, {"172.20.176.1"})
+    for server, path in [(("172.20.176.1", 47621), "/mcp"), (("172.20.176.1", 47621), "/settings"),
+                         (("172.20.176.1", 47621), "/operator/panic"), (("172.20.176.1", 47621), "/mcpx"),
+                         (("127.0.0.1", 47621), "/settings")]:
+        sent = []
+        asyncio.run(wrapped({"type": "http", "path": path, "server": server, "method": "GET",
+                             "headers": [(b"host", b"127.0.0.1:47621")]}, receive, send))
+        if path in ("/settings", "/operator/panic", "/mcpx") and server[0] != "127.0.0.1":
+            assert sent and sent[0]["status"] == 404, path
+    assert reached == ["/mcp", "/settings"]  # /settings only from loopback

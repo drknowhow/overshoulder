@@ -354,7 +354,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("serve", help="run the gateway daemon (MCP at http://127.0.0.1:<port>/mcp)")
+    sv = sub.add_parser("serve", help="run the gateway daemon (MCP at http://127.0.0.1:<port>/mcp)")
+    sv.add_argument("--listen-wsl", action="store_true",
+                    help="also serve /mcp on the WSL adapter, for an agent in a locked-down WSL distro")
     wd = sub.add_parser("watchdog", help="run the watchdog: panic hotkey, human-input pause, scope outline")
     wd.add_argument("--hotkey", default="ctrl+alt+p")
     wd.add_argument("--idle-resume", type=float, default=5.0, help="seconds of no physical input before resuming")
@@ -471,7 +473,10 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "serve":
         from overshoulder.server import serve
         print(f"Overshoulder MCP on http://127.0.0.1:{a.port}/mcp  (data: {default_home()})", flush=True)
-        serve(a.port)
+        if a.listen_wsl:
+            from overshoulder.server import wsl_host_address
+            print(f"  and for WSL on http://{wsl_host_address()}:{a.port}/mcp", flush=True)
+        serve(a.port, listen_wsl=a.listen_wsl)
         return 0
     if a.cmd == "watchdog":
         from overshoulder.watchdog import run

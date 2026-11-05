@@ -519,14 +519,69 @@ def quiet_status_polls() -> None:
         access.addFilter(_QuietStatusPolls())
 
 
-def serve(port: int = DEFAULT_PORT) -> None:
+WSL_ADAPTER = "vEthernet (WSL*"
+
+
+def wsl_host_address() -> str | None:
+    """The Windows end of WSL's NAT network (the vEthernet (WSL ...) adapter), or None when WSL is not
+    running. It changes from boot to boot, so it is looked up each time the gateway starts."""
+    import subprocess
+    cmd = ("(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
+           f"Where-Object InterfaceAlias -like '{WSL_ADAPTER}').IPAddress")
+    try:
+        out = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", cmd],
+                             capture_output=True, text=True, timeout=20,
+                             creationflags=subprocess.CREATE_NO_WINDOW).stdout.split()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out[0] if out else None
+
+
+class OnlyMcpOn:
+    """ASGI wrapper: requests that arrived on one of `addresses` (the socket's own address, not the Host
+    header a caller writes) reach /mcp and nothing else. The operator routes and the settings page stay
+    on loopback, where only programs on this PC can call them."""
+
+    def __init__(self, app, addresses: set[str], path: str = "/mcp"):
+        self.app, self.addresses, self.path = app, set(addresses), path
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket") and (scope.get("server") or ("",))[0] in self.addresses:
+            p = scope.get("path", "")
+            if not (p == self.path or p.startswith(self.path + "/")):
+                if scope["type"] == "http":
+                    await JSONResponse({"error": "not found"}, status_code=404)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+def serve(port: int = DEFAULT_PORT, listen_wsl: bool = False) -> None:
+    """listen_wsl: also take MCP calls on the WSL adapter, for an agent kept in a locked-down WSL distro
+    (docs/evidence/security-isolation). Only /mcp is served there, and every call still needs a token."""
+    import socket
+
+    import uvicorn
     quiet_status_polls()  # on the logger, which uvicorn's own logging setup leaves in place
     daemon = Daemon(port=port)
     daemon.start_config_guard()
     mcp = daemon.build()
     from overshoulder.catalog import start_weekly_check
     start_weekly_check(daemon.svc.catalog, daemon.gw.settings_source)  # does nothing while the setting is off
+    hosts = ["127.0.0.1"]
+    if listen_wsl:
+        wsl = wsl_host_address()
+        if not wsl:
+            raise SystemExit("--listen-wsl: no WSL network adapter; start the agent's WSL distro first")
+        hosts.append(wsl)
     security = TransportSecuritySettings(enable_dns_rebinding_protection=True,
-                                         allowed_hosts=[f"127.0.0.1:{port}", f"localhost:{port}"],
+                                         allowed_hosts=[f"{h}:{port}" for h in hosts] + [f"localhost:{port}"],
                                          allowed_origins=[])
-    asyncio.run(mcp.run_streamable_http_async(host="127.0.0.1", port=port, transport_security=security))
+    app = OnlyMcpOn(mcp.streamable_http_app(transport_security=security, host="127.0.0.1"), set(hosts[1:]))
+    socks = []
+    for h in hosts:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        s.bind((h, port))
+        socks.append(s)
+    server = uvicorn.Server(uvicorn.Config(app, log_level=mcp.settings.log_level.lower()))
+    asyncio.run(server.serve(sockets=socks))
