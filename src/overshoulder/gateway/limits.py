@@ -28,6 +28,17 @@ from overshoulder.gateway.errors import Narrowed
 TYPING_ACTIONS = frozenset({"type", "set_value", "hotkey"})
 LIMIT_KEYS = ("read_only", "no_typing", "deny_processes")
 
+# Programs that run commands, change the system or hold passwords. A scope on one would let an agent do
+# anything the person can, past every other check, so every client is denied them until the person
+# lifts one by name for that client (`overshoulder client limit NAME --allow-process EXE`).
+BUILTIN_DENY = frozenset({
+    "cmd.exe", "powershell.exe", "powershell_ise.exe", "pwsh.exe", "windowsterminal.exe", "wt.exe",
+    "openconsole.exe", "conhost.exe", "wsl.exe", "wslhost.exe", "bash.exe", "mintty.exe",
+    "wscript.exe", "cscript.exe", "mshta.exe", "regedit.exe", "mmc.exe", "taskmgr.exe",
+    "systemsettings.exe", "control.exe", "overshoulder.exe",
+    "keepass.exe", "keepassxc.exe", "1password.exe", "bitwarden.exe",
+})
+
 
 def process_key(name: str) -> str:
     n = str(name or "").strip().lower().rsplit("\\", 1)[-1]
@@ -75,26 +86,37 @@ class Limits:
 
 @dataclass(frozen=True)
 class LeaseLimits:
-    """The limits on one lease, keeping who set each, so a refusal can say whose limit it is."""
+    """The limits on one lease, keeping who set each, so a refusal can say whose limit it is. builtin is
+    the part of BUILTIN_DENY the person has not lifted for this client."""
     person: Limits = Limits()
     session: Limits = Limits()
+    builtin: Limits = Limits()
 
     @property
     def effective(self) -> Limits:
+        return self.person.merge(self.session).merge(self.builtin)
+
+    @property
+    def chosen(self) -> Limits:
+        """The limits the person and the agent set, without the built-in list: what descriptions show."""
         return self.person.merge(self.session)
 
     def set_by(self, key: str, process: str = "") -> str:
         if key == "deny_processes":
-            return "person" if self.person.denies(process) else "session"
+            if self.person.denies(process):
+                return "person"
+            return "session" if self.session.denies(process) else "builtin"
         return "person" if getattr(self.person, key) else "session"
 
     def to_dict(self) -> dict:
-        return {**self.effective.to_dict(), "set_by_person": self.person.to_dict()}
+        return {**self.chosen.to_dict(), "set_by_person": self.person.to_dict(),
+                "blocked_by_default": sorted(self.builtin.deny_processes)}
 
     def refuse(self, key: str, message: str, process: str = "") -> Narrowed:
         by = self.set_by(key, process)
-        who = "the person set this limit for your client" if by == "person" else \
-            "you asked for this limit in take_scope"
+        who = {"person": "the person set this limit for your client",
+               "builtin": "Overshoulder blocks this program for every agent unless the person allows it",
+               }.get(by, "you asked for this limit in take_scope")
         return Narrowed(f"{message} ({who})", limit=key, set_by=by)
 
     def check_action(self, action: str) -> None:
@@ -181,7 +203,7 @@ class NarrowedScope:
 
     def describe(self) -> dict:
         d = self.inner.describe()
-        hidden = self.limits.effective.deny_processes
+        hidden = self.limits.chosen.deny_processes
         return {**d, "hidden": sorted(hidden)} if hidden else d
 
     def hidden_rects(self) -> list[Rect]:

@@ -210,7 +210,7 @@ def test_the_gateway_learns_when_a_lease_ends(tmp_path):
         home = tmp_path / str(enabled)
         g = gateway_for_tests(home, checks=ok_checks(), scope_factory=lambda spec: AppScope(),
                               settings_source=lambda e=enabled: st.Settings(input_mode="full", learn_profiles=e))
-        token = g.registry.add("agent-a")
+        token = g.registry.add("agent-a", window="allow")
         lease = g.acquire(token, "window:16")["lease_id"]
         target = Target("element", rect=Rect(10, 10, 30, 30), name="Add New Tab", control_type="Button",
                         automation_id="AddButton", hwnd=0x10, ref="e1")

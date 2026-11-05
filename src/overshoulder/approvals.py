@@ -21,6 +21,7 @@ import time
 from collections.abc import Callable
 
 from overshoulder import phone
+from overshoulder.driver import windows as w
 
 log = logging.getLogger(__name__)
 
@@ -51,9 +52,19 @@ def _summary(request: dict, also: str = "") -> str:
     lines = [f"{request.get('client', 'An agent')} asks to:", "", f"    {request.get('reason', '?')}", ""]
     if request.get("target"):
         t = request["target"]
-        lines.append(f"Target: {t.get('name') or t.get('kind')} {t.get('control_type', '')}".rstrip())
+        # The name is whatever the app calls the control, so a hostile page can name a Pay button "Close";
+        # it is quoted as the app's words, and the picture (when there is one) shows the control itself.
+        named = f"{t['name']!r} (the app's name for it)" if t.get("name") else t.get("kind", "")
+        lines.append(f"Target: {named} {t.get('control_type', '')}".rstrip())
     if request.get("process"):
         lines.append(f"Program: {request['process']}")
+    if request.get("hwnd"):
+        try:
+            title = w.title(int(request["hwnd"]))
+        except Exception:  # the window may have closed; the question still stands
+            title = ""
+        if title:
+            lines.append(f"Window: {title[:120]}")
     if request.get("scope"):
         lines.append(f"Scope: {json.dumps(request['scope'])[:200]}")
     if also:

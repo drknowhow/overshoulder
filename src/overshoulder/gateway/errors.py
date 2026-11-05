@@ -85,6 +85,12 @@ class TargetStale(GatewayError):
     code = "target_stale"
 
 
+class TargetChanged(GatewayError):
+    """What the person approved is no longer what the action would do: the target, the text at a point
+    or the focused control changed while they decided, or the approval is too old."""
+    code = "target_changed"
+
+
 class VerifyFailed(GatewayError):
     code = "verify_failed"
 

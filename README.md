@@ -66,6 +66,9 @@ Create a client for each agent. The token is printed once; only its hash is stor
 overshoulder client add claude-code
 ```
 
+A new client asks you before each window scope it takes and each screen scope. Add
+`--window allow` to let it take window scopes without asking.
+
 Register it with your agent, for example Claude Code:
 
 ```powershell
@@ -206,9 +209,12 @@ refusal is logged.
   - Overshoulder's own windows
 
   If one of these checks can't tell, the answer is no.
-- **Approvals.** Clicking a control named like *Send*, *Delete*, *Buy*, *Pay* or *Install*, pressing
-  Delete or Alt+F4, or pressing Enter in a single-line field all need a one-time Yes from the person
-  at the desk. No answer within 60 seconds is No. The same question can also go to your phone; see
+- **Approvals.** Clicking a control named like *Send*, *Delete*, *Buy*, *Pay*, *Install*, *Save* or
+  *Replace*, pressing Delete, Alt+F4, Ctrl+S, Ctrl+W, Ctrl+Shift+W, Ctrl+Q or Ctrl+F4, or pressing Enter
+  in a single-line field all need a one-time Yes from the person at the desk. So does an *OK* or *Yes*
+  in a dialog whose text says one of those words ("Delete 3 files?"), and the first action in an Open
+  or Save dialog that opens inside a window scope; context menus in such a dialog are refused. No
+  answer within 60 seconds is No. The same question can also go to your phone; see
   [Approvals on your phone](#approvals-on-your-phone).
 - **Narrowing.** A session can do less than its scope allows. `read_only` refuses every action but
   observing, screenshots and recording; `no_typing` refuses typing, `set_value` and hotkeys;
@@ -222,10 +228,21 @@ refusal is logged.
   ```
 
   A refusal comes back as `narrowed`, with the limit and who set it.
+
+  Some programs are denied to every client from the start: command shells and terminals
+  (`cmd.exe`, `powershell.exe`, `pwsh.exe`, Windows Terminal, WSL), script hosts, `regedit.exe`,
+  `mmc.exe`, Task Manager, Settings, Control Panel, Overshoulder itself and common password managers.
+  A scope on one of them would let an agent run any command. To allow one for a single client:
+
+  ```bash
+  overshoulder client limit claude-code --allow-process powershell.exe
+  ```
 - **The person always wins.** While you use the mouse or keyboard, agents keep to background work,
   and anything that needs your real input waits until you've been idle for a few seconds. Touching
-  them during such an action stops it. **Ctrl+Alt+P** revokes the lease and pauses until you run
-  `overshoulder resume`.
+  them during such an action stops it. If Overshoulder can't watch for your input, it doesn't use
+  your mouse or keyboard at all. **Ctrl+Alt+P** revokes the lease and pauses until you run
+  `overshoulder resume` and then answer Yes in the box on screen, so a program that can read the
+  operator key can't lift a panic by itself.
   The watchdog is a separate process, so agents can't stop it. It outlines the active scope and
   shows the agent's own blue pointer where it last acted; neither appears in recordings.
 - **Logs.** Every action goes to a JSONL file in `%LOCALAPPDATA%\Overshoulder\logs`. Typed text is

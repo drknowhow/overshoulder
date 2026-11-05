@@ -79,3 +79,80 @@ def test_wait_for_tool_respects_settings(daemon, tmp_path):  # noqa: F811
     out = call(port, token, "wait_for", {"conditions": [{"kind": "file", "path": str(flag)}],
                                          "timeout_s": 10})
     assert out["ok"] and out["fired"]
+
+
+# -- bodies are bounded, and checked for auth before they are parsed ------------------------------
+
+def _receive_of(chunks):
+    msgs = [{"type": "http.request", "body": c, "more_body": i < len(chunks) - 1} for i, c in enumerate(chunks)]
+
+    async def receive():
+        return msgs.pop(0) if msgs else {"type": "http.disconnect"}
+
+    return receive
+
+
+def _request(chunks, headers=()):
+    from starlette.requests import Request
+    scope = {"type": "http", "method": "POST", "path": "/", "headers": [(k.encode(), v.encode()) for k, v in headers]}
+    return Request(scope, _receive_of(chunks))
+
+
+def test_bounded_body_stops_reading_a_chunked_body_past_the_limit():
+    import asyncio
+
+    from overshoulder.settings_page import bounded_body
+    got = asyncio.run(bounded_body(_request([b"x" * 600, b"y" * 600, b"z" * 600]), 1000))
+    assert got is None
+    req = _request([b"a=1", b"&b=2"])
+    assert asyncio.run(bounded_body(req, 1000)) == b"a=1&b=2"
+    assert asyncio.run(req.body()) == b"a=1&b=2"  # kept for form() and json()
+    assert asyncio.run(bounded_body(_request([b"x"], [("content-length", "5000")]), 1000)) is None
+
+
+def test_operator_routes_check_the_key_and_the_body(daemon):  # noqa: F811
+    d, port, _ = daemon
+    base = f"http://127.0.0.1:{port}/operator"
+    key = {"x-overshoulder-operator": d.operator_key, "content-type": "application/json"}
+    huge = {"Content-Length": "999999999"}
+    assert _http("POST", f"{base}/pause", b"{}", huge)[0] == 403
+    assert _http("POST", f"{base}/pause", b"{}", {**key, **huge})[0] == 413
+    assert _http("POST", f"{base}/pause", b"{not json", key)[0] == 400
+    assert _http("POST", f"{base}/pause", b"[1, 2]", key)[0] == 400
+    assert _http("POST", f"{base}/protect", b'{"pid": "x"}', key)[0] == 400
+    assert _http("POST", f"{base}/resume", b"{}", key)[0] == 200
+
+
+def test_settings_forms_need_a_session_before_their_body_is_read(daemon):  # noqa: F811
+    d, port, _ = daemon
+    d.port_ref["port"] = port
+    base = f"http://127.0.0.1:{port}"
+    hdr = {"content-type": "application/x-www-form-urlencoded", "Content-Length": "999999999"}
+    assert _http("POST", f"{base}/settings", b"form_token=x", hdr)[0] == 403
+    _, _, body = _http("POST", f"{base}/operator/settings_link", b"{}",
+                       {"x-overshoulder-operator": d.operator_key, "content-type": "application/json"})
+    _, headers, _ = _http("GET", json.loads(body)["url"])
+    cookie = (headers.get("set-cookie") or headers.get("Set-Cookie")).split(";")[0]
+    assert _http("POST", f"{base}/settings", b"form_token=x", hdr, cookie)[0] == 413
+
+
+def test_a_wait_ends_when_its_client_is_removed(daemon, tmp_path):  # noqa: F811
+    from overshoulder import settings as st
+
+    d, port, token = daemon
+    st.save(st.Settings(poll_interval_ms=100))
+    threading.Timer(0.6, lambda: d.gw.registry.remove("mcp-test")).start()
+    out = call(port, token, "wait_for", {"conditions": [{"kind": "file", "path": str(tmp_path / "never")}],
+                                         "timeout_s": 20})
+    assert out["ok"] is False and out["error"]["code"] in ("unauthorized", "wait_refused")
+
+
+def test_a_panic_ends_a_wait(daemon, tmp_path):  # noqa: F811
+    from overshoulder import settings as st
+
+    d, port, token = daemon
+    st.save(st.Settings(poll_interval_ms=100))
+    threading.Timer(0.6, lambda: d.gw.panic("test")).start()
+    out = call(port, token, "wait_for", {"conditions": [{"kind": "file", "path": str(tmp_path / "never")}],
+                                         "timeout_s": 20})
+    assert out["ok"] is False and "paused" in out["error"]["message"]

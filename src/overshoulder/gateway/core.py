@@ -34,7 +34,9 @@ from overshoulder.gateway.errors import (
     NeedsRealInput,
     Paused,
     PersonActive,
+    TargetChanged,
     TargetStale,
+    Unauthorized,
     VerifyFailed,
 )
 from overshoulder.gateway.lease import DEFAULT_TTL_S, HUMAN_PAUSE, LeaseManager
@@ -43,6 +45,12 @@ from overshoulder.gateway.log import ActionLog
 from overshoulder.profiles import ProfileStore
 
 KEYBOARD_ACTIONS = frozenset({"type", "hotkey"})
+# How a panic's pause reason ends; such a pause is lifted only with the person's yes (Gateway.resume).
+PANIC_SUFFIX = "; an operator must resume"
+# How long an approval stays good once given; a step that runs later asks again.
+APPROVAL_TTL_S = 30.0
+# Half the size of the box an approval picture outlines around a bare point.
+POINT_BOX = 40
 MOUSE_ACTIONS = frozenset({"click", "double_click", "right_click", "drag"})
 
 
@@ -112,6 +120,32 @@ def _element_in_scope_at(scope, x: int, y: int) -> dict | None:
     if binding is None:
         return uia.info_at_point(x, y)
     return uia.element_in_window_at(binding.hwnd, x, y)
+
+
+def _dialog_text(hwnd: int) -> str:
+    """The text a standard dialog shows, or "" when hwnd is not one. Its static controls hold the message;
+    a task dialog draws its text, which UI Automation reads."""
+    if not hwnd or w.class_name(hwnd) != "#32770":
+        return ""
+    parts = [w.title(hwnd)]
+    parts += [w.title(h) for h in w._enum_children(hwnd) if w.class_name(h) == "Static"]
+    if not any(p.strip() for p in parts[1:]):
+        try:
+            cache = uia.ElementCache()
+            for root in uia.roots_for_window(hwnd):
+                parts += [e.info.name or "" for e in uia.walk(cache, root, max_nodes=300)
+                          if (e.info.control_type or "").lower() == "text"]
+        except Exception:
+            pass
+    return " ".join(p for p in parts if p and p.strip())
+
+
+def _is_file_dialog(hwnd: int) -> bool:
+    """An Open, Save or Browse dialog: a standard dialog holding a shell folder view, which can browse any
+    folder and offers shell verbs (open, delete, rename, send to) on what it shows."""
+    if not hwnd or w.class_name(hwnd) != "#32770":
+        return False
+    return any(w.class_name(h) == "SHELLDLL_DefView" for h in w._enum_children(hwnd))
 
 
 def _label_at(scope, x: int, y: int) -> str:
@@ -189,6 +223,10 @@ class Checks:
     # The text on screen a click at a point lands on or beside ("" for none), read with OCR, for apps
     # whose drawn buttons UI Automation can't name.
     label_at: Callable[[Any, int, int], str] = _label_at
+    # The text of the dialog a top-level window is ("" if it is not one), so its OK or Yes is judged by it.
+    dialog_text: Callable[[int], str] = _dialog_text
+    # Whether a top-level window is a file dialog (Open, Save, Browse).
+    file_dialog: Callable[[int], bool] = _is_file_dialog
     # A PNG of the scope around a rect with the rect drawn, for an approval about a vision box.
     picture: Callable[[Any, Rect], bytes] = _picture
     root_of: Callable[[int], int] = lambda h: __import__(
@@ -329,6 +367,8 @@ class Gateway:
             lim = self.lease_limits(client.name, session)
             binding = getattr(inner, "binding", None)
             if binding is not None:
+                if binding.pid in self.protected_pids:
+                    raise Denied("that window belongs to Overshoulder itself; agents never drive it")
                 for proc in [*self.checks.window_processes(binding.hwnd), self.checks.pid_process(binding.pid)]:
                     lim.check_process(proc, "that window")
             scope = NarrowedScope(inner, lambda n=client.name, s=session: self.lease_limits(n, s),
@@ -336,7 +376,7 @@ class Gateway:
             grant = self.registry.grant_for(client, scope.kind)
             approved_by = None
             if grant == "approve":
-                eff = lim.effective
+                eff = lim.chosen
                 req = {"kind": "lease", "client": client.name, "scope": scope.describe(),
                        "reason": f"{client.name} wants {scope.kind} scope {scope.describe()}"
                                  + (f" (limits: {eff.describe()})" if eff else ""),
@@ -365,7 +405,7 @@ class Gateway:
     def lease_limits(self, client_name: str, session: Limits) -> LeaseLimits:
         """The person's standing limits for the client, read now, with the session's own."""
         c = self.registry.get(client_name)
-        return LeaseLimits(self.registry.limits_for(c) if c else Limits(), session)
+        return LeaseLimits(self.registry.limits_for(c) if c else Limits(), session, self.registry.builtin_for(c))
 
     def heartbeat(self, token: str, lease_id: str) -> dict:
         client = self.registry.authenticate(token)
@@ -418,6 +458,9 @@ class Gateway:
 
     def status(self) -> dict:
         out = {**self.leases.status(), "input_mode": self.settings_source().input_mode}
+        from overshoulder import settings as st  # imported late: settings imports this package's clients module
+        if problem := st.problem():
+            out["settings_problem"] = problem
         lease = self.leases.active()
         if out.get("active") and lease is not None:
             session = lease.meta.get("session_limits", Limits())
@@ -432,7 +475,7 @@ class Gateway:
     def panic(self, reason: str = "panic key") -> None:
         """Revoke the active lease AND pause, so no client can simply re-acquire until resume()."""
         lease = self.leases.revoke(reason)
-        self.leases.pause(f"{reason}; an operator must resume")
+        self.leases.pause(f"{reason}{PANIC_SUFFIX}")
         self.log.write("lease_revoked", reason=reason, lease=getattr(lease, "id", None),
                        client=getattr(lease, "client", None))
 
@@ -441,6 +484,21 @@ class Gateway:
         self.log.write("paused", reason=reason)
 
     def resume(self, only_if: str | None = None) -> bool:
+        """Lift the pause. A panic is lifted only when the person says yes to it on their own screen:
+        the operator key that resume arrives with is a file an agent in the same account could read."""
+        paused = self.leases.paused_reason() or ""
+        if only_if is None and paused.endswith(PANIC_SUFFIX):
+            req = {"kind": "resume", "client": "A resume command",
+                   "reason": f"lift the panic ({paused[:-len(PANIC_SUFFIX)]}) so agents can drive again"}
+            try:
+                yes = self.approver.approve(req)
+            except Exception:
+                yes = False
+            if not yes:
+                self.log.write("resume_refused", reason=paused, answered_by=req.get("answered_by"))
+                return False
+            # Only the panic the person saw is lifted; a newer pause stays.
+            only_if = paused
         lifted = self.leases.resume(only_if)
         if lifted:
             self.log.write("resumed", only_if=only_if)
@@ -466,6 +524,7 @@ class Gateway:
         lease = None
         scope_desc = None
         result = None  # what perform returned; logged with a failed verify to show which methods ran
+        approved = None  # {"facts", "at"}: what the person approved, which every gate checks again
         view = None  # which of the app's windows the target is in, for its profile
         logged_params = {k: v for k, v in params.items() if k != "secret"}
         try:
@@ -503,13 +562,20 @@ class Gateway:
             if not read_only:
                 if action == "hotkey":
                     policy.require_hotkey_allowed(str(params.get("combo", "")))
-                if action in KEYBOARD_ACTIONS and target is None:
+                policy.require_no_tab_in_text(action, params)
+                # A hotkey goes to whatever has focus even when a ref was given, so its focus is always read.
+                if action in KEYBOARD_ACTIONS and (target is None or action == "hotkey"):
                     # The scope's own focus, which is where background keys go.
                     focus_info = self.checks.scope_focus(scope)
                     if focus_info and focus_info.get("pid"):
                         lim.check_process(self.checks.pid_process(focus_info["pid"]), "the focused control")
+                    focused_pw = None if focus_info is None else focus_info["password"]
                     if action == "type":
-                        policy.require_not_password("type", None if focus_info is None else focus_info["password"])
+                        policy.require_not_password("type", focused_pw)
+                    else:
+                        if target is not None and target.is_password:
+                            focused_pw = True
+                        policy.require_hotkey_not_into_password(str(params.get("combo", "")), focused_pw)
                 focused_type = target.control_type if target is not None else (focus_info or {}).get("type", "")
                 named = to_target if to_target is not None else target  # a drag is judged by where it drops
                 name = named.name if named else ""
@@ -527,6 +593,25 @@ class Gateway:
                         label, reason = "", f"{action} at {named.point()}, where the text could not be read"
                     if label:
                         reason = policy.approval_reason(action, label, params, focused_type=focused_type)
+                    if label and reason is None and policy.is_affirmative(label):
+                        name = label
+                if reason is None and named is not None and policy.is_affirmative(name):
+                    # An OK or Yes does whatever its dialog asked; judge it by that text.
+                    hwnd = named.hwnd or (self.checks.window_under(*named.point()) if named.kind != "element"
+                                          else 0)
+                    if hwnd:
+                        hwnd = self.checks.root_of(hwnd) or hwnd
+                    try:
+                        text = self.checks.dialog_text(hwnd) if hwnd else ""
+                    except Exception:  # fail closed: a dialog that can't be read is asked about
+                        text = None
+                    reason = policy.dialog_reason(action, name, text)
+                new_dialogs = self._file_dialogs(scope, lease, action, params,
+                                                 [t for t in (target, to_target) if t is not None], focus_info)
+                if new_dialogs:
+                    asked = (f"a file dialog ({', '.join(repr(w.title(h)) for h in new_dialogs)}) has opened in "
+                             "the scope; through it the agent can browse and pick any file")
+                    reason = asked if reason is None else f"{asked}; and {reason}"
                 guessed = [t for t in (target, to_target) if t is not None and t.kind == "vision"]
                 if reason is None:
                     unsure = next((t for t in guessed if t.unconfirmed), None)
@@ -536,15 +621,29 @@ class Gateway:
                 if reason:
                     req = {"kind": "action", "client": client.name, "action": action, "reason": reason,
                            "target": named.describe() if named else None, "scope": scope_desc,
-                           **self._asked_about(scope, named), **self._picture_of(scope, guessed)}
+                           **self._asked_about(scope, named),
+                           **self._picture_of(scope, guessed or [t for t in (named,) if t is not None])}
+                    facts = self._facts(scope, target, to_target, action, read_label=True)
                     policy.require_approval(self.approver, req)
                     approved_by = req.get("answered_by")
+                    # The person decided on what they were shown; while they decided, a panic, a revoke or
+                    # a change in the app may have made that a different action.
+                    self.leases.check(lease_id, client.name, human_ok=True)
+                    target = target if target is None else self._bind(scope, target, action)
+                    to_target = to_target if to_target is None else self._bind(scope, to_target, action)
+                    _same_as_approved(facts, self._facts(scope, target, to_target, action, read_label=True))
+                    approved = {"facts": _without_labels(facts), "at": time.monotonic()}
+                    if new_dialogs:
+                        lease.meta.setdefault("file_dialogs", set()).update(new_dialogs)
 
             shown = to_target if to_target is not None else target  # where the pointer ends up
             if shown is not None and (shown.kind == "point" or (shown.rect and not shown.rect.empty)):
                 x, y = shown.point()
                 self.pointer = {"x": x, "y": y, "action": action, "client": client.name, "at": time.time()}
             params["abort"] = lambda: self._check_background(lease_id, client.name, scope)
+            params["gate"] = lambda: self._gate(token, lease_id, client.name, scope, action, read_only,
+                                                 [t for t in (target, to_target) if t is not None], approved,
+                                                 (target, to_target))
             # perform MUST wrap any use of the person's mouse/keyboard (SendInput) in borrow():
             #   with params["borrow"]() as b: fg = b.check(); <SendInput, calling b.abort() between keys>
             # and call background_target(hwnd) before posting to or messaging any window.
@@ -592,6 +691,38 @@ class Gateway:
             out["log_error"] = str(e)
         return out
 
+    def _file_dialogs(self, scope, lease, action: str, params: dict, targets: list[Target],
+                      focus_info: dict | None) -> list[int]:
+        """File dialogs in a window scope that this action reaches and the person has not yet allowed for
+        this lease. Context menus in them are refused outright: they offer shell verbs on any file."""
+        if getattr(scope, "kind", "") != "window":  # a screen scope was approved as a whole
+            return []
+        main = getattr(getattr(scope, "binding", None), "hwnd", None)
+        hwnds = []
+        for t in targets:
+            h = t.hwnd or (self.checks.window_under(*t.point()) if t.kind != "element" else 0)
+            hwnds.append(h)
+        if action in KEYBOARD_ACTIONS and focus_info:
+            hwnds.append(focus_info.get("hwnd") or 0)
+        found = []
+        for h in hwnds:
+            h = (self.checks.root_of(h) or h) if h else 0
+            if not h or h == main or h in found:
+                continue
+            try:
+                is_dialog = self.checks.file_dialog(h)
+            except Exception:
+                is_dialog = False  # a window that vanished; the bind and gate checks catch it
+            if not is_dialog:
+                continue
+            if action == "right_click" or (action == "hotkey"
+                                           and policy.opens_context_menu(str(params.get("combo", "")))):
+                raise Denied("context menus in a file dialog are refused: they offer shell verbs (open, delete, "
+                             "rename, send to) on any file")
+            found.append(h)
+        seen = lease.meta.get("file_dialogs", set())
+        return [h for h in found if h not in seen]
+
     def _point_window(self, scope, target: Target) -> int:
         """The window an action at a point goes to. In a window scope that is the scope's own window,
         whatever covers it on screen: background actions are sent to it, and real input brings it
@@ -636,14 +767,23 @@ class Gateway:
         hosted = [p for p in procs if p and p != "applicationframehost.exe"]
         return {"process": (hosted or procs or [""])[0], "hwnd": hwnd}
 
-    def _picture_of(self, scope, guessed: list[Target]) -> dict:
-        """{"picture": PNG} of the first vision box an approval is about, which the box on the desk shows
-        (the phone gets it only if the person shares screenshots). {} if there is none or it can't be taken."""
-        t = next((t for t in guessed if t.rect is not None and not t.rect.empty), None)
-        if t is None:
+    def _picture_of(self, scope, shown: list[Target]) -> dict:
+        """{"picture": PNG} of the first target an approval is about, outlined, which the box on the desk
+        shows (the phone gets it only if the person shares screenshots), so the person judges the control
+        by how it looks and not only by the name the app gives it. {} if it can't be taken."""
+        rect = None
+        for t in shown:
+            if t.rect is not None and not t.rect.empty:
+                rect = t.rect
+            elif t.kind == "point":
+                x, y = t.point()
+                rect = Rect(x - POINT_BOX, y - POINT_BOX, x + POINT_BOX, y + POINT_BOX)
+            if rect is not None:
+                break
+        if rect is None:
             return {}
         try:
-            return {"picture": self.checks.picture(scope, t.rect)}
+            return {"picture": self.checks.picture(scope, rect)}
         except Exception:  # the question still goes out, in words
             return {}
 
@@ -653,6 +793,55 @@ class Gateway:
         self.leases.check(lease_id, client, human_ok=True)
         if self.leases.paused_reason() == HUMAN_PAUSE and self._scope_in_front(scope):
             raise Paused("the person is working in this window, so the agent stopped")
+
+    def _facts(self, scope, target: Target | None, to_target: Target | None, action: str,
+               read_label: bool = False) -> dict:
+        """What an approval is about, read from the screen now: each target bound afresh (its window,
+        process, place, name, type and password state), what UI Automation finds at a point, the text at
+        it when read_label, and the focused control where keys go. Two reads are compared, not shown."""
+        out: dict = {}
+        for key, t in (("target", target), ("to", to_target)):
+            if t is None:
+                continue
+            fresh = self._bind(scope, t, action)
+            f = {**fresh.describe(), "pid": fresh.pid, "hwnd": fresh.hwnd, "password": fresh.is_password}
+            if fresh.kind in ("point", "text", "vision"):
+                f["under"] = (self.checks.element_in_scope_at(scope, *fresh.point()) or {}).get("name", "")
+                if read_label and action in policy.POINTED_ACTIONS \
+                        and getattr(self.settings_source(), "ocr_enabled", True):
+                    try:
+                        f["label"] = self.checks.label_at(scope, *fresh.point())
+                    except Exception:  # unreadable both times compares equal; once is a change
+                        f["label"] = None
+            out[key] = f
+        if action in KEYBOARD_ACTIONS and (target is None or action == "hotkey"):
+            focus = self.checks.scope_focus(scope) or {}
+            out["focus"] = {k: focus.get(k) for k in ("hwnd", "pid", "name", "type", "password")}
+        return out
+
+    def _gate(self, token: str, lease_id: str, client_name: str, scope, action: str, read_only: bool,
+              targets: list[Target], approved: dict | None = None,
+              bound: tuple[Target | None, Target | None] = (None, None)) -> None:
+        """Every check that can change while an action runs, made again right before a driver call that
+        changes something (perform calls params["gate"]): a panic, revoke or pause; the client's token;
+        the person's limits as they are now; the scope and the desktop; Overshoulder's own windows. A call
+        already handed to Windows cannot be taken back; this narrows the window, it does not close it."""
+        self._check_background(lease_id, client_name, scope)
+        if self.registry.authenticate(token).name != client_name:
+            raise Unauthorized("the client's token changed while the action ran")
+        lim = self.lease_limits(client_name, self.leases.check(lease_id, client_name, human_ok=True)
+                                .meta.get("session_limits", Limits()))
+        if not read_only:
+            lim.check_action(action)
+        for t in targets:
+            self._check_target_processes(lim, scope, t)
+            self._require_unprotected_target(t)
+        scope.check_alive()
+        self.checks.desktop()
+        if approved is not None:
+            if time.monotonic() - approved["at"] > APPROVAL_TTL_S:
+                raise TargetChanged(f"the approval is more than {APPROVAL_TTL_S:.0f} s old; act again to ask anew")
+            _same_as_approved(approved["facts"], self._facts(scope, *bound, action))
 
     def _scope_in_front(self, scope) -> bool:
         fg = self.checks.foreground()
@@ -684,6 +873,11 @@ class Gateway:
             saved = self.checks.desk_state() if s.input_mode == "borrow" else None
         b = Borrow(self, scope, action, target, lease_id, client, s.input_mode, saved, waited, to_target)
         try:
+            if not getattr(b.watch, "ok", False):
+                # Without its hooks nothing would notice the person taking the mouse back mid-action.
+                raise NeedsRealInput(
+                    "the watch for the person's own mouse and keyboard could not start, so their input is not "
+                    "borrowed. Use a ref with invoke, select or set_value, or method='background'")
             b.report["brought_forward"] = self._bring_scope_forward(scope, target)
             fg = self.checks.foreground()
             b.front = (self.checks.root_of(fg) or fg) if fg else 0
@@ -751,7 +945,9 @@ class Gateway:
         if action in KEYBOARD_ACTIONS:
             fg = self.checks.foreground_in_scope(scope)
             self._require_unprotected(fg)
-            if action == "type" and target is None:
+            # Checked with or without a target: by now the target has been focused, and focus may have
+            # landed somewhere else.
+            if action == "type":
                 focused = self.checks.focused_element()
                 policy.require_not_password("type", None if focused is None else focused["password"])
         for t in (target, to_target):
@@ -775,6 +971,14 @@ class Gateway:
         if hwnd and self.checks.pid_of(hwnd) in self.protected_pids:
             raise Denied("that window belongs to Overshoulder itself; agents never drive it")
 
+    def _require_unprotected_target(self, target: Target) -> None:
+        """The target's own process and its window's, so UI Automation patterns are covered as well as
+        input and window messages."""
+        if target.pid and target.pid in self.protected_pids:
+            raise Denied("that control belongs to Overshoulder itself; agents never drive it")
+        if target.hwnd:
+            self._require_unprotected(self.checks.root_of(target.hwnd) or target.hwnd)
+
     def protect_pid(self, pid: int) -> None:
         self.protected_pids.add(pid)
 
@@ -788,6 +992,7 @@ class Gateway:
             target = replace(fresh, revalidate=target.revalidate)
         if target.hwnd and not scope.owns_window(target.hwnd):
             raise sc.OutOfScope(f"target window {target.hwnd:#x} is not in scope")
+        self._require_unprotected_target(target)
         if target.kind == "element" and (target.rect is None or target.rect.empty) and action in MOUSE_ACTIONS:
             raise sc.OutOfScope("the element has no visible area to click; use invoke, select or type instead")
         if target.kind == "element" and (target.rect is None or target.rect.empty):
@@ -805,6 +1010,27 @@ class Gateway:
         else:
             sc.require_point(scope, x, y)
         return target
+
+
+def _without_labels(facts: dict) -> dict:
+    """facts without the OCR text at points: read once after approval, not at every gate."""
+    return {k: {kk: vv for kk, vv in v.items() if kk != "label"} for k, v in facts.items()}
+
+
+def _same_as_approved(approved: dict, now: dict) -> None:
+    """Refuse when what the action would do now differs from what the person approved. Labels are
+    compared only when both reads have them."""
+    if set(approved) != set(now):
+        raise TargetChanged("what the action is aimed at changed since it was approved; observe again")
+    for key, was in approved.items():
+        is_ = now[key]
+        for field_name in set(was) | set(is_):
+            if field_name == "label" and (field_name not in was or field_name not in is_):
+                continue
+            if was.get(field_name) != is_.get(field_name):
+                what = {"target": "the target", "to": "the drop point", "focus": "the focused control"}[key]
+                raise TargetChanged(f"{what} changed ({field_name}) while the approval was pending, so the "
+                                    "approved action was not done; observe again and act again to ask anew")
 
 
 def _view_of(scope, target: Target) -> str:

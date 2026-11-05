@@ -54,7 +54,9 @@ def svc(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "Ladder", Ladder)
     s = service.Service(gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda spec: scope),
                         shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("agent")
+    from overshoulder.gateway import policy
+    s.gw.approver = policy.CallbackApprover(lambda req: True)  # the person said yes to closing the tab
+    token = s.gw.registry.add("agent", window="allow")
     return s, token, s.acquire(token, "window:16")["lease_id"]
 
 
@@ -79,4 +81,4 @@ def test_the_next_action_on_the_closed_window_is_refused_as_stale(svc):
     s, token, lease = svc
     s.act(token, lease, "hotkey", combo="ctrl+w", method="background")
     with pytest.raises(ScopeStale):
-        s.act(token, lease, "hotkey", combo="ctrl+s", method="background")
+        s.act(token, lease, "hotkey", combo="ctrl+b", method="background")

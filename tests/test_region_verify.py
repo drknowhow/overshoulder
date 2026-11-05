@@ -62,7 +62,7 @@ def _verdict(out):
 def test_a_click_that_repaints_its_button_reports_the_change_there(painting):
     make, _, _, _ = painting
     s, token, lease = make()
-    ref = s.find(token, lease, text="Save")[0]["ref"]  # box (10, 10, 50, 26) in the scope, at (100, 50)
+    ref = s.find(token, lease, text="Open")[0]["ref"]  # box (10, 10, 50, 26) in the scope, at (100, 50)
     v = _verdict(s.act(token, lease, "click", ref=ref))
     assert v["area"]["rect"] == [102, 52, 158, 84]  # the box grown by half its height on each side
     assert v["area"]["changed"] and v["area"]["pixels_changed"] > 0.3
@@ -72,11 +72,11 @@ def test_a_change_elsewhere_is_not_a_change_in_the_area(painting):
     make, _, _, paint = painting
     s, token, lease = make()
     paint["rects"] = [(120, 60, 190, 90)]  # only the status line repaints
-    ref = s.find(token, lease, text="Save")[0]["ref"]
+    ref = s.find(token, lease, text="Open")[0]["ref"]
     v = _verdict(s.act(token, lease, "click", ref=ref))
     assert v["changed"] and not v["area"]["changed"]
     with pytest.raises(GatewayError, match="nothing changed around the target"):
-        s.act(token, lease, "click", ref=s.find(token, lease, text="Save")[0]["ref"], expect={"area_changed": True})
+        s.act(token, lease, "click", ref=s.find(token, lease, text="Open")[0]["ref"], expect={"area_changed": True})
 
 
 def test_an_xy_click_is_judged_around_its_point(painting):
@@ -90,7 +90,7 @@ def test_an_xy_click_is_judged_around_its_point(painting):
 def test_a_drag_reports_the_area_it_dropped_on(painting):
     make, _, _, _ = painting
     s, token, lease = make()
-    ref = s.find(token, lease, text="Save")[0]["ref"]
+    ref = s.find(token, lease, text="Open")[0]["ref"]
     v = _verdict(s.act(token, lease, "drag", ref=ref, to_x=270, to_y=130))
     assert not v["area"]["changed"] and v["drop_area"]["changed"]
 
@@ -152,7 +152,7 @@ def test_a_click_on_a_painted_button_reports_its_own_change_and_the_new_text(tmp
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("region-test")
+    token = s.gw.registry.add("region-test", window="allow")
     out = tmp_path / "drawn.json"
     proc = _launch(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(DRAWN), str(out)])
     try:
@@ -162,12 +162,12 @@ def test_a_click_on_a_painted_button_reports_its_own_change_and_the_new_text(tmp
             time.sleep(0.1)
         time.sleep(0.5)
         lease = s.acquire(token, f"window:{hwnd}")["lease_id"]
-        [save] = s.find(token, lease, text="Save")
-        v = _verdict(s.act(token, lease, "click", ref=save["ref"], method="background",
-                           expect={"text_appears": "Clicked Save", "area_changed": True}))
+        [opened] = s.find(token, lease, text="Open")
+        v = _verdict(s.act(token, lease, "click", ref=opened["ref"], method="background",
+                           expect={"text_appears": "Clicked Open", "area_changed": True}))
         assert v["area"]["changed"], v  # the button turned blue
         assert v["expect"] == "met" and len(v["text_appeared"]) == 1
-        assert json.loads(out.read_text(encoding="utf-8-sig"))["clicked"] == ["Save"]
+        assert json.loads(out.read_text(encoding="utf-8-sig"))["clicked"] == ["Open"]
         [open_] = s.find(token, lease, text="Open")
         x, y = (open_["rect"][0] + open_["rect"][2]) // 2, (open_["rect"][1] + open_["rect"][3]) // 2
         v = _verdict(s.act(token, lease, "click", x=x, y=y, method="background"))

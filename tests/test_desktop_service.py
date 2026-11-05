@@ -20,7 +20,7 @@ def svc(tmp_path):
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("test-agent")
+    token = s.gw.registry.add("test-agent", window="allow")
     yield s, token
 
 

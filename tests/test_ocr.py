@@ -117,7 +117,7 @@ class BoundScope(FakeScope):
         self._bounds = Rect(100, 50, 300, 150)
 
 
-PHRASES = [[Phrase(tuple(words(("Save", 10, 10, 40)))), Phrase(tuple(words(("Delete", 120, 10, 50)))),
+PHRASES = [[Phrase(tuple(words(("Open", 10, 10, 40)))), Phrase(tuple(words(("Delete", 120, 10, 50)))),
             Phrase(tuple(words(("Status", 10, 60, 50))))]]
 
 
@@ -151,7 +151,7 @@ def svc(tmp_path, monkeypatch):
     def make(**kw):
         s = service.Service(gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda spec: scope, **kw),
                             shots_dir=tmp_path / "shots")
-        token = s.gw.registry.add("agent")
+        token = s.gw.registry.add("agent", window="allow")
         return s, token, s.acquire(token, "window:16")["lease_id"]
 
     return make, pixels, pressed
@@ -160,14 +160,14 @@ def svc(tmp_path, monkeypatch):
 def test_find_text_returns_t_refs_in_screen_pixels(svc):
     make, _, _ = svc
     s, token, lease = make()
-    [hit] = s.find(token, lease, text="save")
-    assert hit == {"ref": "t1", "name": "Save", "text": "Save", "source": "ocr", "rect": [110, 60, 150, 76]}
+    [hit] = s.find(token, lease, text="open")
+    assert hit == {"ref": "t1", "name": "Open", "text": "Open", "source": "ocr", "rect": [110, 60, 150, 76]}
 
 
 def test_a_click_on_a_t_ref_goes_to_the_middle_of_its_box(svc):
     make, _, pressed = svc
     s, token, lease = make()
-    ref = s.find(token, lease, text="Save")[0]["ref"]
+    ref = s.find(token, lease, text="Open")[0]["ref"]
     out = s.act(token, lease, "click", ref=ref)
     assert out["ok"] and pressed == [(130, 68)]
 
@@ -194,7 +194,7 @@ def test_a_consequential_word_under_a_t_ref_needs_approval(svc):
 def test_a_t_ref_takes_mouse_actions_only(svc):
     make, _, _ = svc
     s, token, lease = make()
-    ref = s.find(token, lease, text="Save")[0]["ref"]
+    ref = s.find(token, lease, text="Open")[0]["ref"]
     with pytest.raises(ValueError, match="click it first"):
         s.act(token, lease, "type", ref=ref, text="hello")
     with pytest.raises(ValueError, match="not a control"):
@@ -212,13 +212,13 @@ def test_observe_text_lists_every_phrase(svc):
     make, _, _ = svc
     s, token, lease = make()
     out = s.observe(token, lease, text=True)
-    assert [t["text"] for t in out["texts"]] == ["Save", "Delete", "Status"]
+    assert [t["text"] for t in out["texts"]] == ["Open", "Delete", "Status"]
 
 
 def test_refs_from_an_ended_lease_are_gone(svc):
     make, _, _ = svc
     s, token, lease = make()
-    s.find(token, lease, text="Save")
+    s.find(token, lease, text="Open")
     s.release(token, lease)
     lease = s.acquire(token, "window:16")["lease_id"]
     with pytest.raises(GatewayError, match="unknown ref"):
@@ -231,8 +231,8 @@ def test_with_ocr_turned_off_text_is_not_read(svc):
     make, _, _ = svc
     s, token, lease = make(settings_source=lambda: st.Settings(input_mode="full", ocr_enabled=False))
     with pytest.raises(GatewayError, match="turned off"):
-        s.find(token, lease, text="Save")
-    assert s.find(token, lease, name="Save") == []
+        s.find(token, lease, text="Open")
+    assert s.find(token, lease, name="Open") == []
 
 
 def test_the_settings_page_switch_turns_ocr_off():
@@ -260,7 +260,7 @@ def test_an_agent_clicks_a_painted_button_by_its_text(tmp_path):
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("ocr-test")
+    token = s.gw.registry.add("ocr-test", window="allow")
     out = tmp_path / "drawn.json"
     proc = _launch(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(DRAWN), str(out)])
     try:
@@ -279,16 +279,16 @@ def test_an_agent_clicks_a_painted_button_by_its_text(tmp_path):
         assert el["rect"][1] <= tx["rect"][1] and tx["rect"][3] <= el["rect"][3], (el, tx)
 
         status = s.find(token, lease, text="Nothing clicked yet")[0]["ref"]
-        [save] = s.find(token, lease, name="Save")  # no such element: found on screen instead
-        assert save["source"] == "ocr"
-        res = s.act(token, lease, "click", ref=save["ref"], method="background")
+        [opened] = s.find(token, lease, name="Open")  # no such element: found on screen instead
+        assert opened["source"] == "ocr"
+        res = s.act(token, lease, "click", ref=opened["ref"], method="background")
         assert res["ok"] and res["result"]["method"] == "posted_click"
         end = time.time() + 5
         while time.time() < end and not _clicked(out):
             time.sleep(0.1)
-        assert _clicked(out) == ["Save"]
+        assert _clicked(out) == ["Open"]
 
-        with pytest.raises(GatewayError) as e:  # the status line now reads "Clicked Save"
+        with pytest.raises(GatewayError) as e:  # the status line now reads "Clicked Open"
             s.act(token, lease, "click", ref=status, method="background")
         assert e.value.code == "target_stale"
 
@@ -297,7 +297,7 @@ def test_an_agent_clicks_a_painted_button_by_its_text(tmp_path):
             s.act(token, lease, "click", ref=delete, method="background")
         assert e.value.code == "approval_denied"
         time.sleep(0.5)
-        assert _clicked(out) == ["Save"]
+        assert _clicked(out) == ["Open"]
         s.release(token, lease)
     finally:
         proc.kill()

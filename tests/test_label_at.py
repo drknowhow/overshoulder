@@ -55,7 +55,7 @@ def test_a_point_click_on_a_drawn_delete_needs_approval(gw):  # noqa: F811
 
 def test_a_point_click_on_a_harmless_label_goes_ahead(gw):  # noqa: F811
     g, token, lease_id, _ = gw
-    g.checks.label_at = lambda s, x, y: "Save"
+    g.checks.label_at = lambda s, x, y: "Open"
     assert g.run(token, lease_id, "click", lambda t, p: "done", target=Target("point", x=5, y=5))["ok"]
 
 
@@ -84,7 +84,7 @@ def test_keys_and_element_targets_are_not_read(gw):  # noqa: F811
     g.checks.label_at = lambda s, x, y: asked.append((x, y)) or "Delete"
     g.run(token, lease_id, "type", lambda t, p: None, params={"text": "x"})
     g.run(token, lease_id, "click", lambda t, p: None,
-          target=Target("element", rect=Rect(0, 0, 10, 10), name="Save", hwnd=0x10))
+          target=Target("element", rect=Rect(0, 0, 10, 10), name="Open", hwnd=0x10))
     assert asked == []
 
 
@@ -108,7 +108,7 @@ def test_an_xy_click_on_a_painted_delete_asks_and_one_on_save_goes(tmp_path):
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("label-test")
+    token = s.gw.registry.add("label-test", window="allow")
     out = tmp_path / "drawn.json"
     proc = _launch(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(DRAWN), str(out)])
     try:
@@ -128,12 +128,12 @@ def test_an_xy_click_on_a_painted_delete_asks_and_one_on_save_goes(tmp_path):
         x, y = at(290, 36)  # near the Delete button's corner, off its label
         with pytest.raises(E.ApprovalDenied, match="Delete"):
             s.act(token, lease, "click", x=x, y=y, method="background")
-        x, y = at(40, 60)
+        x, y = at(170, 60)  # the Open button
         assert s.act(token, lease, "click", x=x, y=y, method="background")["ok"]
         end = time.time() + 5
-        while time.time() < end and "Save" not in json.loads(out.read_text(encoding="utf-8-sig"))["clicked"]:
+        while time.time() < end and "Open" not in json.loads(out.read_text(encoding="utf-8-sig"))["clicked"]:
             time.sleep(0.1)
-        assert json.loads(out.read_text(encoding="utf-8-sig"))["clicked"] == ["Save"]
+        assert json.loads(out.read_text(encoding="utf-8-sig"))["clicked"] == ["Open"]
         s.release(token, lease)
     finally:
         proc.kill()

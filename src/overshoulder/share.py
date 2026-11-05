@@ -27,6 +27,9 @@ from overshoulder.osp import MAX_BYTES, Item, OspError, Profile, dec, loads
 
 DROP_FIELDS = frozenset({"last", "nh", "nses", "at", "exe", "miss"})
 NOTE_KINDS = frozenset({"quirk", "how", "note"})
+# Use counts that rank items in a brief. An imported item starts at zero, so a shared file can't put its
+# own items first by claiming they were used often.
+COUNT_FIELDS = frozenset({"n", "ok", "fail", "seen", "ses", "hit", "used", "ms"})
 
 
 def _copy(item: Item, **fields: str) -> Item:
@@ -116,7 +119,8 @@ def merge(local: Profile, other: Profile) -> dict:
             stats["kept_local"] += 1
             continue
         try:
-            local.put(_copy(item, src="imported"))
+            counts = {k: "0" for k in COUNT_FIELDS if k in item.fields}
+            local.put(_copy(item, src="imported", **counts))
             stats["imported"] += 1
         except OspError:
             stats["dropped"] += 1  # the profile is full

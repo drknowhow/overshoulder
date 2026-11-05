@@ -16,7 +16,7 @@ def svc(tmp_path):
     from overshoulder.service import Service
 
     s = Service(gateway_for_tests(tmp_path), shots_dir=tmp_path / "shots")
-    yield s, s.gw.registry.add("looker")
+    yield s, s.gw.registry.add("looker", window="allow")
 
 
 def _look(s, token, hwnd):

@@ -423,3 +423,52 @@ def test_win32_edits_get_wm_settext_before_ui_automation(env, monkeypatch):
     monkeypatch.setattr(A.uia, "set_value", calls.hook("uia_value"))
     out = A.Ladder(FakeScope(), p, "background").set_value(NativeEl(0x50), "abc")
     assert out.method == "set_text_message" and "uia_value" not in calls
+
+
+# -- the gate before every mutation --------------------------------------------------------------
+
+class Revoked(Exception):
+    pass
+
+
+def _revoked():
+    raise Revoked("revoked")
+
+
+def _gated(env, monkeypatch):
+    calls, p = env
+    p["gate"] = _revoked
+    for name in ("invoke", "toggle", "select", "set_value", "set_range_value", "focus"):
+        monkeypatch.setattr(A.uia, name, calls.hook(f"uia_{name}"))
+    for name in ("click_button", "post_click", "post_drag", "post_text", "replace_selection", "set_text",
+                 "post_hotkey"):
+        monkeypatch.setattr(A.bg, name, calls.hook(name))
+    monkeypatch.setattr(A.inp, "drag", calls.hook("real_drag"))
+    return calls, p
+
+
+MUTATIONS = {"uia_invoke", "uia_toggle", "uia_select", "uia_set_value", "uia_set_range_value", "uia_focus",
+             "click_button", "post_click", "post_drag", "post_text", "replace_selection", "set_text",
+             "post_hotkey", "real_click", "real_typing", "real_keys", "real_drag"}
+
+
+@pytest.mark.parametrize("method", ["background", "input", "auto"])
+@pytest.mark.parametrize("run", [
+    lambda L: L.invoke(object()),
+    lambda L: L.select(object()),
+    lambda L: L.pattern("uia_toggle", lambda: A.uia.toggle(object())),
+    lambda L: L.pattern("uia_focus", lambda: A.uia.focus(object())),
+    lambda L: L.set_value(object(), "x"),
+    lambda L: L.press(object(), Target("element", rect=Rect(0, 0, 10, 10), control_type="Button")),
+    lambda L: L.press(None, POINT),
+    lambda L: L.drag(POINT, Target("point", x=70, y=80)),
+    lambda L: L.type_text(None, "hi"),
+    lambda L: L.hotkey("ctrl+s"),
+], ids=["invoke", "select", "toggle", "focus", "set_value", "press_element", "press_point", "drag", "type",
+        "hotkey"])
+def test_a_revoked_lease_stops_every_rung_before_it_changes_anything(env, monkeypatch, method, run):
+    calls, p = _gated(env, monkeypatch)
+    monkeypatch.setattr(A.bg, "is_edit_class", lambda h: True)
+    with pytest.raises((Revoked, A.NeedsRealInput, PatternUnsupported)):
+        run(A.Ladder(FakeScope(), p, method))
+    assert not MUTATIONS & set(calls), calls

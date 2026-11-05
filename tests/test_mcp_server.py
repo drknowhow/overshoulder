@@ -40,7 +40,7 @@ def daemon(tmp_path, monkeypatch):
         if server.started:
             break
         time.sleep(0.05)
-    token = d.gw.registry.add("mcp-test")
+    token = d.gw.registry.add("mcp-test", window="allow")
     yield d, port, token
     server.should_exit = True
     t.join(timeout=10)
@@ -101,7 +101,7 @@ def test_annotate_and_render_run_while_another_caller_holds_the_desktop(daemon):
     assert results["add"]["ok"] and results["add"]["item"]["id"] == "a1"
     assert results["render"]["ok"] and results["render"]["steps"] == 2
 
-    other = d.gw.registry.add("someone-else")
+    other = d.gw.registry.add("someone-else", window="allow")
     out = call(port, other, "render", {"recording": "rec"})
     assert out["ok"] is False and "another client" in out["error"]["message"]
     out = call(port, token, "annotate", {"recording": "rec", "op": "add", "item": {"kind": "laser"}})

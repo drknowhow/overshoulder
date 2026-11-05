@@ -34,7 +34,7 @@ def narrowing_checks(**over):
 def make(tmp_path, scope=None, person=None, **acquire):
     scope = scope or FakeScope(owned=(0x10, 0x20))
     g = gateway_for_tests(tmp_path, checks=narrowing_checks(), scope_factory=lambda spec: scope)
-    token = g.registry.add("agent-a", limits=person)
+    token = g.registry.add("agent-a", window="allow", limits=person)
     lease = g.acquire(token, "screen:1", **acquire)
     return g, token, lease
 
@@ -115,14 +115,14 @@ def test_a_limit_the_person_adds_mid_lease_applies_at_once(tmp_path):
 
 def test_rotating_a_token_keeps_the_clients_limits(tmp_path):
     reg = ClientRegistry(tmp_path / "clients.json")
-    reg.add("a", limits={"no_typing": True, "deny_processes": ["chrome"]})
-    reg.add("a")  # rotate
+    reg.add("a", window="allow", limits={"no_typing": True, "deny_processes": ["chrome"]})
+    reg.add("a", window="allow")  # rotate
     assert Limits.from_dict(reg.get("a").limits) == Limits.make(no_typing=True, deny_processes=["chrome"])
 
 
 def test_set_limits_adds_and_takes_away_programs(tmp_path):
     reg = ClientRegistry(tmp_path / "clients.json")
-    reg.add("a")
+    reg.add("a", window="allow")
     reg.set_limits("a", deny=["chrome", "slack"])
     assert reg.set_limits("a", allow=["slack"])["deny_processes"] == ["chrome.exe"]
     assert reg.set_limits("a", read_only=True)["read_only"] is True
@@ -138,7 +138,7 @@ def test_cli_sets_and_lifts_a_clients_limits(tmp_path, monkeypatch, capsys):
     assert cli.main(["client", "limit", "a", "--read-only", "--typing"]) == 0
     assert capsys.readouterr().out.strip() == "a: read-only; hides chrome.exe"
     assert cli.main(["client", "list"]) == 0
-    assert "a  (read-only; hides chrome.exe)" in capsys.readouterr().out
+    assert "a  (window=approve screen=approve; read-only; hides chrome.exe)" in capsys.readouterr().out
     assert cli.main(["client", "limit", "nobody", "--read-only"]) == 2
 
 
@@ -195,7 +195,7 @@ def test_a_window_scope_on_a_denied_program_is_refused(tmp_path):
         binding = type("B", (), {"hwnd": 0x20, "pid": 2})()
 
     g = gateway_for_tests(tmp_path, checks=narrowing_checks(), scope_factory=lambda spec: Bound(owned=(0x20,)))
-    token = g.registry.add("agent-a", limits={"deny_processes": ["chrome"]})
+    token = g.registry.add("agent-a", window="allow", limits={"deny_processes": ["chrome"]})
     with pytest.raises(E.Narrowed) as ex:
         g.acquire(token, "window:32")
     assert ex.value.set_by == "person" and g.leases.active() is None
@@ -208,7 +208,7 @@ def test_windows_and_waits_leave_out_denied_programs(tmp_path, monkeypatch):
     monkeypatch.setattr(sc, "find_windows", lambda **kw: infos)
     monkeypatch.setattr(W, "_windows", lambda: infos)
     g = gateway_for_tests(tmp_path, checks=narrowing_checks())
-    token = g.registry.add("agent-a", limits={"deny_processes": ["chrome"]})
+    token = g.registry.add("agent-a", window="allow", limits={"deny_processes": ["chrome"]})
     svc = Service(g, shots_dir=tmp_path / "shots")
     assert [x["process"] for x in svc.windows(token)] == ["notepad.exe"]
     hidden = g.hidden_for("agent-a").deny_processes
@@ -268,3 +268,89 @@ def test_screen_recording_frames_are_blacked_out_before_the_encoder(tmp_path):
     assert rec._write_screen_frame(Grabber())
     px = [rec._proc.stdin.data[i:i + 3] for i in range(0, 24, 3)]
     assert px == [b"\0\0\0", b"\0\0\0", b"\xff\xff\xff", b"\xff\xff\xff"] * 2
+
+
+# -- the built-in deny list ----------------------------------------------------------------------
+
+SHELL = {3: "powershell.exe"}
+
+
+def shell_gateway(tmp_path, approver=None):
+    scope = FakeScope(owned=(0x30,))
+    scope.binding = types.SimpleNamespace(hwnd=0x30, pid=3)
+    checks = ok_checks(pid_process=lambda pid: SHELL.get(pid, "notepad.exe"),
+                       window_processes=lambda h: ["powershell.exe"] if h == 0x30 else ["notepad.exe"])
+    kw = {"approver": approver} if approver else {}
+    return gateway_for_tests(tmp_path, checks=checks, scope_factory=lambda spec: scope, **kw)
+
+
+def test_a_window_scope_on_a_shell_is_refused_for_every_client(tmp_path):
+    g = shell_gateway(tmp_path)
+    token = g.registry.add("agent-a", window="allow")
+    with pytest.raises(E.Narrowed) as ex:
+        g.acquire(token, "window:48")
+    assert ex.value.to_dict().get("set_by") == "builtin"
+    assert "powershell.exe" in str(ex.value)
+
+
+def test_the_agent_cannot_lift_the_built_in_list_from_take_scope(tmp_path):
+    g = shell_gateway(tmp_path)
+    token = g.registry.add("agent-a", window="allow")
+    with pytest.raises(E.Narrowed):
+        g.acquire(token, "window:48", limits={"deny_processes": [], "allow_builtin": ["powershell.exe"]})
+
+
+def test_the_person_can_allow_one_program_for_one_client_and_take_it_back(tmp_path):
+    g = shell_gateway(tmp_path)
+    token = g.registry.add("agent-a", window="allow")
+    other = g.registry.add("agent-b", window="allow")
+    assert g.registry.set_limits("agent-a", allow=["powershell"])["allow_builtin"] == ["powershell.exe"]
+    lease = g.acquire(token, "window:48")
+    g.release(token, lease["lease_id"])
+    with pytest.raises(E.Narrowed):
+        g.acquire(other, "window:48")
+    g.registry.set_limits("agent-a", deny=["powershell"])
+    with pytest.raises(E.Narrowed):
+        g.acquire(token, "window:48")
+
+
+def test_rotating_a_token_keeps_what_the_person_allowed_and_clear_restores_the_list(tmp_path):
+    reg = ClientRegistry(tmp_path / "clients.json")
+    reg.add("a")
+    reg.set_limits("a", allow=["cmd"])
+    reg.add("a")
+    assert "cmd.exe" not in reg.builtin_for(reg.get("a")).deny_processes
+    reg.set_limits("a", clear=True)
+    assert "cmd.exe" in reg.builtin_for(reg.get("a")).deny_processes
+
+
+def test_allowing_a_program_not_on_the_built_in_list_records_nothing_extra(tmp_path):
+    reg = ClientRegistry(tmp_path / "clients.json")
+    reg.add("a", limits={"deny_processes": ["chrome"]})
+    assert reg.set_limits("a", allow=["chrome"]) == Limits().to_dict()
+
+
+def test_descriptions_and_approval_text_leave_the_built_in_list_out(tmp_path):
+    asked = []
+    from overshoulder.gateway.policy import CallbackApprover
+    g = gateway_for_tests(tmp_path, checks=narrowing_checks(), scope_factory=lambda spec: FakeScope(),
+                          approver=CallbackApprover(lambda r: asked.append(r) or True))
+    token = g.registry.add("agent-a")
+    out = g.acquire(token, "window:16")
+    assert "hidden" not in out["scope"]
+    assert "cmd.exe" in out["limits"]["blocked_by_default"] and "cmd.exe" not in out["limits"]["deny_processes"]
+    assert "limits" not in asked[0]["reason"]
+
+
+def test_a_new_client_needs_approval_for_a_window_scope(tmp_path):
+    g = gateway_for_tests(tmp_path, checks=narrowing_checks(), scope_factory=lambda spec: FakeScope())
+    token = g.registry.add("agent-a")
+    assert g.registry.get("agent-a").window == "approve"
+    with pytest.raises(E.ApprovalDenied):
+        g.acquire(token, "window:16")
+
+
+def test_the_cli_adds_clients_that_need_approval_for_window_scopes(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("OVERSHOULDER_HOME", str(tmp_path))
+    assert cli.main(["client", "add", "agent-a"]) == 0
+    assert ClientRegistry(tmp_path / "clients.json").get("agent-a").window == "approve"

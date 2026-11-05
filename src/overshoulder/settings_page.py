@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
+import anyio
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 
@@ -55,6 +56,31 @@ class Sessions:
         if not got or got[0] < time.time():
             return None
         return got[1]
+
+
+# The most a settings form may send (a profile upload plus the fields), and how long it may take to.
+FORM_LIMIT = MAX_BYTES + 64 * 1024
+READ_DEADLINE_S = 10.0
+
+
+async def bounded_body(request: Request, limit: int) -> bytes | None:
+    """The request body, or None when it is longer than limit or arrives slower than READ_DEADLINE_S.
+    Reads at most about limit bytes whatever Content-Length says, chunked bodies included; what it read
+    is kept on the request, so form() and json() parse it without reading the network again."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        return None
+    buf = bytearray()
+    try:
+        with anyio.fail_after(READ_DEADLINE_S):
+            async for chunk in request.stream():
+                buf += chunk
+                if len(buf) > limit:
+                    return None
+    except TimeoutError:
+        return None
+    request._body = bytes(buf)  # Starlette serves request._body to form() and json() when it is set
+    return request._body
 
 
 def host_ok(request: Request, port: int) -> bool:
@@ -190,9 +216,12 @@ PAGE = """<!doctype html>
     below on the same server. Anyone who knows the topic can read the questions, so keep it to yourself.</span></span></label>
   <div class="field"><label for="ntfy_server">ntfy server</label>
     <input id="ntfy_server" type="text" name="ntfy_server" value="{ntfy_server}"></div>
-  <div class="field"><label>Topic to subscribe to</label><span class="secret">{ntfy_topic}</span></div>
+  <div class="field"><label>Topic to subscribe to</label>{ntfy_topic}</div>
   <div class="field"><label for="ntfy_token">Access token (only if your server needs one)</label>
-    <input id="ntfy_token" type="password" name="ntfy_token" value="{ntfy_token}" autocomplete="off"></div>
+    <input id="ntfy_token" type="password" name="ntfy_token" value="" placeholder="{ntfy_token_hint}"
+      autocomplete="off"></div>
+  <label class="row"><input type="checkbox" name="clear_ntfy_token">
+    <span>Remove the saved access token</span></label>
   <label class="row"><input type="checkbox" name="renew_topics">
     <span>Make new topics (your phone has to subscribe again)</span></label>
   <label class="row"><input type="checkbox" name="webhook_enabled" {webhook_enabled}>
@@ -202,7 +231,7 @@ PAGE = """<!doctype html>
     <input id="webhook_url" type="text" name="webhook_url" value="{webhook_url}" placeholder="https://..."></div>
   <div class="field"><label for="webhook_poll_url">Answer URL (if not the same)</label>
     <input id="webhook_poll_url" type="text" name="webhook_poll_url" value="{webhook_poll_url}"></div>
-  <div class="field"><label>Webhook secret</label><span class="secret">{webhook_secret}</span></div>
+  <div class="field"><label>Webhook secret</label>{webhook_secret}</div>
   <div class="field"><label for="phone_timeout">Time to answer (seconds)</label>
     <input id="phone_timeout" type="number" name="phone_timeout_s" min="10" max="600" value="{phone_timeout_s}"></div>
   <label class="row"><input type="checkbox" name="share_title" {share_title}>
@@ -398,12 +427,12 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
         logs=html.escape(logs),
         ntfy_enabled="checked" if ph.ntfy_enabled else "",
         ntfy_server=html.escape(ph.ntfy_server),
-        ntfy_topic=html.escape(ph.ntfy_topic),
-        ntfy_token=html.escape(ph.ntfy_token),
+        ntfy_topic=_hidden_secret(ph.ntfy_topic),
+        ntfy_token_hint="saved; type a new one to change it" if ph.ntfy_token else "",
         webhook_enabled="checked" if ph.webhook_enabled else "",
         webhook_url=html.escape(ph.webhook_url),
         webhook_poll_url=html.escape(ph.webhook_poll_url),
-        webhook_secret=html.escape(ph.webhook_secret),
+        webhook_secret=_hidden_secret(ph.webhook_secret),
         phone_timeout_s=ph.timeout_s,
         share_title="checked" if ph.share_title else "",
         share_screenshot="checked" if ph.share_screenshot else "",
@@ -443,6 +472,15 @@ def settings_from_form(form, current: st.Settings | None = None) -> st.Settings:
     ).clamp()
 
 
+def _hidden_secret(value: str) -> str:
+    """A secret the page shows only when the person opens it, so it is not on screen (or in a screenshot,
+    or read out by an agent watching the screen) the rest of the time."""
+    if not value:
+        return '<span class="hint">none yet</span>'
+    return (f'<details><summary>Show (ends in {html.escape(value[-4:])})</summary>'
+            f'<span class="secret">{html.escape(value)}</span></details>')
+
+
 def phone_from_form(form, current: phone.PhoneSettings) -> phone.PhoneSettings:
     """The phone settings the form asks for. Topics and secrets are kept unless renewal is ticked."""
     try:
@@ -453,7 +491,8 @@ def phone_from_form(form, current: phone.PhoneSettings) -> phone.PhoneSettings:
         ntfy_enabled=form.get("ntfy_enabled") == "on",
         ntfy_server=str(form.get("ntfy_server", current.ntfy_server)),
         ntfy_topic=current.ntfy_topic, ntfy_reply_topic=current.ntfy_reply_topic,
-        ntfy_token=str(form.get("ntfy_token", current.ntfy_token)),
+        ntfy_token="" if form.get("clear_ntfy_token") == "on"
+        else str(form.get("ntfy_token", "") or "") or current.ntfy_token,
         webhook_enabled=form.get("webhook_enabled") == "on",
         webhook_url=str(form.get("webhook_url", current.webhook_url)),
         webhook_poll_url=str(form.get("webhook_poll_url", current.webhook_poll_url)),
@@ -624,12 +663,9 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
 
     @mcp.custom_route("/settings", methods=["POST"])
     async def settings_post(request: Request):
-        if (bad := guard(request)) is not None:
+        form, bad = await checked_form(request)
+        if bad is not None:
             return bad
-        form = await request.form()
-        expected = sessions.form_token(request.cookies.get(COOKIE))
-        if not expected or not secrets.compare_digest(str(form.get("form_token", "")), expected):
-            return HTMLResponse("Session expired. Run <code>overshoulder settings</code> again.", 403)
         st.save(settings_from_form(form, st.load_or_default()))
         phone.save(phone_from_form(form, phone.load()))
         return RedirectResponse("/settings?saved=1", status_code=303)
@@ -639,25 +675,29 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
         import anyio
 
         from overshoulder import approvals
-        if (bad := guard(request)) is not None:
+        form, bad = await checked_form(request)
+        if bad is not None:
             return bad
-        form = await request.form()
-        expected = sessions.form_token(request.cookies.get(COOKIE))
-        if not expected or not secrets.compare_digest(str(form.get("form_token", "")), expected):
-            return HTMLResponse("Session expired. Run <code>overshoulder settings</code> again.", 403)
         s = phone.load()
         tester = phone_tester or approvals.try_phone
         last_test["result"] = await anyio.to_thread.run_sync(lambda: tester(s, s.timeout_s))
         return RedirectResponse("/settings", status_code=303)
 
     async def checked_form(request: Request):
-        """The posted form, or a refusal when the host or the session's form token is wrong."""
+        """The posted form, or a refusal when the host, the session or the form token is wrong. The
+        session cookie is checked before any of the body is read, and the body is read only up to
+        FORM_LIMIT, so a caller with no session costs a header read."""
         if (bad := guard(request)) is not None:
             return None, bad
-        form = await request.form(max_part_size=MAX_BYTES + 1024)
+        expired = HTMLResponse("Session expired. Run <code>overshoulder settings</code> again.", 403)
         expected = sessions.form_token(request.cookies.get(COOKIE))
-        if not expected or not secrets.compare_digest(str(form.get("form_token", "")), expected):
-            return None, HTMLResponse("Session expired. Run <code>overshoulder settings</code> again.", 403)
+        if not expected:
+            return None, expired
+        if await bounded_body(request, FORM_LIMIT) is None:
+            return None, HTMLResponse("That form is too large or too slow to send.", 413)
+        form = await request.form(max_files=1, max_fields=200, max_part_size=MAX_BYTES + 1024)
+        if not secrets.compare_digest(str(form.get("form_token", "")), expected):
+            return None, expired
         return form, None
 
     @mcp.custom_route("/settings/profiles/export", methods=["GET"])

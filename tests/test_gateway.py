@@ -66,7 +66,9 @@ def ok_checks(**over):
                 foreground=lambda: PERSON_WINDOW, bring_forward=lambda h: True,
                 desk_state=lambda: ((7, 8), PERSON_WINDOW),
                 restore_desk=lambda s: {"cursor": True, "foreground": True}, person_watch=FakeWatch,
-                left_open=lambda s, front: False)
+                left_open=lambda s, front: False,
+                window_processes=lambda h: ["app.exe"], pid_process=lambda pid: "app.exe",
+                dialog_text=lambda h: "", file_dialog=lambda h: False)
     return Checks(**{**base, **over})
 
 
@@ -74,7 +76,7 @@ def ok_checks(**over):
 def gw(tmp_path):
     scope = FakeScope()
     g = gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda spec: scope)
-    token = g.registry.add("agent-a")
+    token = g.registry.add("agent-a", window="allow")
     lease = g.acquire(token, "window:16")
     return g, token, lease["lease_id"], scope
 
@@ -232,7 +234,7 @@ def test_other_client_cannot_use_a_stolen_lease_id():
 def test_registry_stores_only_token_hashes(tmp_path):
     from overshoulder.gateway.clients import ClientRegistry
     reg = ClientRegistry(tmp_path / "c.json")
-    token = reg.add("agent-a")
+    token = reg.add("agent-a", window="allow")
     assert token not in (tmp_path / "c.json").read_text()
     assert ClientRegistry(tmp_path / "c.json").authenticate(token).name == "agent-a"
     with pytest.raises(E.Unauthorized):
@@ -243,7 +245,7 @@ def test_screen_scope_needs_approval_by_default(tmp_path):
     screen = FakeScope()
     screen.kind = "screen"
     g = gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda s: screen)
-    token = g.registry.add("agent-a")
+    token = g.registry.add("agent-a", window="allow")
     with pytest.raises(E.ApprovalDenied):
         g.acquire(token, "screen:all")
     g.approver = policy.CallbackApprover(lambda req: req["kind"] == "lease")
@@ -397,7 +399,7 @@ def test_approval_reason_matches_generic_words_only():
     assert policy.approval_reason("click", "Deleted items") is None
     assert policy.approval_reason("click", "Open") is None
     assert policy.approval_reason("hotkey", params={"combo": "Alt+F4"})
-    assert policy.approval_reason("hotkey", params={"combo": "ctrl+s"}) is None
+    assert policy.approval_reason("hotkey", params={"combo": "ctrl+b"}) is None
 
 
 def test_this_process_can_inspect_its_own_elevation():
@@ -439,14 +441,16 @@ def test_panic_pauses_so_the_client_cannot_reacquire(gw):
     g.panic()
     with pytest.raises(E.Paused):
         g.acquire(token, "window:16")
-    g.resume()
+    g.approver = policy.CallbackApprover(lambda req: True)  # the person says yes on screen
+    assert g.resume()
     assert g.acquire(token, "window:16")["lease_id"]
 
 
 
 
 
-@pytest.mark.parametrize("combo", ["del", "Shift+Del", "shift+ctrl+delete", "F4+Alt"])
+@pytest.mark.parametrize("combo", ["del", "Shift+Del", "shift+ctrl+delete", "F4+Alt", "ctrl+s", "ctrl+w",
+                                   "ctrl+shift+w", "ctrl+q", "ctrl+f4"])
 def test_hotkey_spellings_of_consequential_keys_need_approval(gw, combo):
     g, token, lease_id, _ = gw
     with pytest.raises(E.ApprovalDenied):
@@ -467,7 +471,7 @@ def test_scope_escaping_hotkeys_are_hard_denied(gw, combo):
 def test_typed_text_is_redacted_in_the_log_unless_the_lease_opts_in(tmp_path):
     scope = FakeScope()
     g = gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda s: scope)
-    token = g.registry.add("agent-a")
+    token = g.registry.add("agent-a", window="allow")
     lease_id = g.acquire(token, "window:16")["lease_id"]
     g.run(token, lease_id, "type", lambda t, p: None, params={"text": "hunter2"})
     assert "hunter2" not in g.log.path.read_text(encoding="utf-8")
@@ -483,7 +487,7 @@ def test_token_removed_by_another_process_stops_working(tmp_path):
     from overshoulder.gateway.clients import ClientRegistry
     path = tmp_path / "c.json"
     running = ClientRegistry(path)
-    token = running.add("agent-a")
+    token = running.add("agent-a", window="allow")
     _t.sleep(0.05)
     other = ClientRegistry(path)
     other.remove("agent-a")
@@ -663,7 +667,7 @@ def _mode_gateway(tmp_path, idle_s=999.0):
     path = tmp_path / "settings.json"
     g = gateway_for_tests(tmp_path, checks=ok_checks(person_idle_s=lambda: idle_s),
                           scope_factory=lambda s: FakeScope(), settings_source=lambda: st.load_or_default(path))
-    token = g.registry.add("agent-a")
+    token = g.registry.add("agent-a", window="allow")
     return g, token, g.acquire(token, "window:16")["lease_id"], path
 
 
@@ -701,18 +705,21 @@ def test_borrow_mode_uses_real_input_only_after_the_person_has_been_idle(tmp_pat
     g.human_wait_s = 0.3
     _save_from_page(path, input_mode="borrow", borrow_idle_s="5")
     with pytest.raises(E.PersonActive):
-        g.run(token, lease_id, "hotkey", lambda t, p: real(p), params={"combo": "ctrl+s"})
+        g.run(token, lease_id, "hotkey", lambda t, p: real(p), params={"combo": "ctrl+b"})
     g.checks.person_idle_s = lambda: 6.0
-    assert g.run(token, lease_id, "hotkey", lambda t, p: real(p), params={"combo": "ctrl+s"})["ok"]
+    assert g.run(token, lease_id, "hotkey", lambda t, p: real(p), params={"combo": "ctrl+b"})["ok"]
 
 
-def test_the_default_input_mode_borrows_and_a_broken_settings_file_falls_back_to_it(tmp_path):
-    g, token, lease_id, path = _mode_gateway(tmp_path, idle_s=0.5)
-    g.human_wait_s = 0.3
+def test_the_default_input_mode_borrows_and_a_broken_settings_file_never_widens_it(tmp_path):
+    from overshoulder import settings as st
+    g, token, lease_id, path = _mode_gateway(tmp_path, idle_s=999.0)
     assert g.status()["input_mode"] == "borrow"  # no settings file yet
+    st.save(st.Settings(input_mode="never"), path)
+    assert g.status()["input_mode"] == "never"
     path.write_text("{not json", encoding="utf-8")
-    with pytest.raises(E.PersonActive):
-        g.run(token, lease_id, "hotkey", lambda t, p: real(p), params={"combo": "ctrl+s"})
+    assert g.status()["input_mode"] == "never"  # the last settings read, not the default
+    with pytest.raises(E.NeedsRealInput):
+        g.run(token, lease_id, "hotkey", lambda t, p: real(p), params={"combo": "ctrl+b"})
 
 
 # -- borrowing politely ----------------------------------------------------------------------------------
@@ -738,7 +745,7 @@ def _borrow_gateway(tmp_path, idles):
     scope = BoundScope()
     g = gateway_for_tests(tmp_path, checks=checks, scope_factory=lambda s: scope,
                           settings_source=lambda: st.Settings(input_mode="borrow", borrow_idle_s=5))
-    token = g.registry.add("agent-a")
+    token = g.registry.add("agent-a", window="allow")
     return g, token, g.acquire(token, "window:16")["lease_id"], seen
 
 
@@ -802,7 +809,7 @@ def test_full_mode_brings_the_window_forward_and_leaves_it_there(tmp_path):
     from overshoulder import settings as st
     g, token, lease_id, seen = _borrow_gateway(tmp_path, [0.1])  # idle time does not matter in full mode
     g.settings_source = lambda: st.Settings(input_mode="full")
-    assert g.run(token, lease_id, "hotkey", lambda t, p: real(p), params={"combo": "ctrl+s"})["ok"]
+    assert g.run(token, lease_id, "hotkey", lambda t, p: real(p), params={"combo": "ctrl+b"})["ok"]
     assert seen["forward"] == [0x10] and seen["restored"] == []
 
 
@@ -846,7 +853,487 @@ def test_status_shows_where_the_agent_last_acted_while_it_holds_the_scope(gw):
     g.run(token, lease_id, "click", lambda t, p: None, target=Target("point", x=5, y=6))
     p = g.status()["pointer"]
     assert (p["x"], p["y"], p["action"], p["client"]) == (5, 6, "click", "agent-a")
-    g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "ctrl+s"})
+    g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "ctrl+b"})
     assert (g.status()["pointer"]["x"], g.status()["pointer"]["y"]) == (5, 6)  # keys do not move it
     g.release(token, lease_id)
     assert g.status()["pointer"] is None
+
+
+# -- password fields reached through keys --------------------------------------------------------
+
+PW_FOCUS = {**DOC_FOCUS, "type": "Edit", "password": True}
+
+
+@pytest.mark.parametrize("combo", ["ctrl+v", "shift+insert", "ctrl+c", "ctrl+x", "a", "shift+a", "space",
+                                   "ctrl+alt+q", "alt+num6"])
+def test_a_hotkey_that_moves_text_is_refused_on_a_focused_password_field(gw, combo):
+    g, token, lease_id, _ = gw
+    g.checks.scope_focus = lambda s: dict(PW_FOCUS)
+    ran = []
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "hotkey", lambda t, p: ran.append(1), params={"combo": combo})
+    assert ran == []
+
+
+@pytest.mark.parametrize("combo", ["tab", "shift+tab", "escape", "ctrl+a", "f5", "alt+f"])
+def test_keys_that_move_no_text_still_work_in_a_password_field(gw, combo):
+    g, token, lease_id, _ = gw
+    g.checks.scope_focus = lambda s: dict(PW_FOCUS)
+    assert g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": combo})["ok"]
+
+
+def test_a_paste_is_refused_when_the_focused_field_cannot_be_checked(gw):
+    g, token, lease_id, _ = gw
+    for unknown in (None, {**DOC_FOCUS, "password": None}):
+        g.checks.scope_focus = lambda s, u=unknown: u
+        with pytest.raises(E.Denied):
+            g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "ctrl+v"})
+
+
+def test_a_hotkey_with_a_ref_is_judged_by_the_focused_field_not_the_ref(gw):
+    g, token, lease_id, _ = gw
+    g.checks.scope_focus = lambda s: dict(PW_FOCUS)
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "hotkey", lambda t, p: None, target=Target("element", rect=Rect(10, 10, 30, 30)),
+              params={"combo": "ctrl+v"})
+    g.checks.scope_focus = lambda s: dict(DOC_FOCUS)
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "hotkey", lambda t, p: None,
+              target=Target("element", rect=Rect(10, 10, 30, 30), is_password=True), params={"combo": "ctrl+v"})
+
+
+def test_a_paste_into_a_single_line_field_needs_approval(gw):
+    g, token, lease_id, _ = gw
+    g.checks.scope_focus = lambda s: {**DOC_FOCUS, "type": "Edit"}
+    with pytest.raises(E.ApprovalDenied):
+        g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "ctrl+v"})
+    g.checks.scope_focus = lambda s: dict(DOC_FOCUS)
+    assert g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": "ctrl+v"})["ok"]
+
+
+@pytest.mark.parametrize("target", [None, Target("element", rect=Rect(10, 10, 30, 30))])
+def test_text_with_a_tab_is_refused_before_anything_is_typed(gw, target):
+    g, token, lease_id, _ = gw
+    ran = []
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "type", lambda t, p: ran.append(1), target=target, params={"text": "alice\tsecret"})
+    assert ran == []
+
+
+def test_real_typing_at_a_target_checks_where_focus_landed(gw):
+    g, token, lease_id, _ = gw
+    g.checks.focused_element = lambda: dict(PW_FOCUS)  # focusing the target put focus in a password box
+    typed = []
+
+    def perform(t, p):
+        with p["borrow"]() as b:
+            b.check()
+            typed.append("x")
+
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "type", perform, target=Target("element", rect=Rect(10, 10, 30, 30)),
+              params={"text": "x"})
+    assert typed == []
+
+
+# -- Overshoulder's own windows through UI Automation, and the gate ------------------------------
+
+ELEMENT = Target("element", rect=Rect(10, 10, 30, 30), name="OK", control_type="Button")
+
+
+@pytest.mark.parametrize("action", ["invoke", "select", "toggle", "focus", "set_value", "click"])
+def test_a_control_in_overshoulders_own_process_is_refused_for_every_action(gw, action):
+    g, token, lease_id, _ = gw
+    g.protect_pid(77)
+    ran = []
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, action, lambda t, p: ran.append(1), target=Target(**{**ELEMENT.__dict__, "pid": 77}),
+              params={"value": "x"})
+    assert ran == []
+
+
+def test_a_control_in_a_window_of_overshoulder_is_refused(tmp_path):
+    scope = FakeScope(owned=(0x10, 0x77))
+    g = gateway_for_tests(tmp_path, checks=ok_checks(pid_of=lambda h: 77 if h == 0x77 else 1),
+                          scope_factory=lambda spec: scope)
+    token = g.registry.add("agent-a", window="allow")
+    lease_id = g.acquire(token, "window:16")["lease_id"]
+    g.protect_pid(77)
+    ran = []
+    with pytest.raises(E.Denied):
+        g.run(token, lease_id, "invoke", lambda t, p: ran.append(1),
+              target=Target(**{**ELEMENT.__dict__, "hwnd": 0x77}))
+    assert ran == []
+
+
+def test_a_window_scope_on_overshoulder_itself_is_refused(tmp_path):
+    import types
+    scope = FakeScope()
+    scope.binding = types.SimpleNamespace(hwnd=0x10, pid=77)
+    g = gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda spec: scope, protected_pids={77})
+    token = g.registry.add("agent-a", window="allow")
+    with pytest.raises(E.Denied):
+        g.acquire(token, "window:16")
+
+
+def _gate_after(change):
+    """A perform that lets the world change, then asks the gate, then would mutate."""
+    done = []
+
+    def perform(t, p):
+        change()
+        p["gate"]()
+        done.append("mutated")
+
+    return perform, done
+
+
+def test_the_gate_stops_an_action_after_a_panic(gw):
+    g, token, lease_id, _ = gw
+    perform, done = _gate_after(lambda: g.panic("test"))
+    with pytest.raises(E.GatewayError):
+        g.run(token, lease_id, "invoke", perform, target=ELEMENT)
+    assert done == []
+
+
+def test_the_gate_stops_an_action_when_the_token_is_removed(gw):
+    g, token, lease_id, _ = gw
+    perform, done = _gate_after(lambda: g.registry.remove("agent-a"))
+    with pytest.raises(E.Unauthorized):
+        g.run(token, lease_id, "invoke", perform, target=ELEMENT)
+    assert done == []
+
+
+def test_the_gate_applies_a_limit_the_person_adds_mid_action(gw):
+    g, token, lease_id, _ = gw
+    perform, done = _gate_after(lambda: g.registry.set_limits("agent-a", read_only=True))
+    with pytest.raises(E.Narrowed):
+        g.run(token, lease_id, "invoke", perform, target=ELEMENT)
+    assert done == []
+
+
+def test_the_gate_stops_an_action_when_the_scope_window_closes(gw):
+    g, token, lease_id, scope = gw
+
+    def close():
+        scope.alive = False
+
+    perform, done = _gate_after(close)
+    with pytest.raises(sc.ScopeStale):
+        g.run(token, lease_id, "invoke", perform, target=ELEMENT)
+    assert done == []
+
+
+def test_the_gate_lets_an_unchanged_action_through(gw):
+    g, token, lease_id, _ = gw
+    perform, done = _gate_after(lambda: None)
+    assert g.run(token, lease_id, "invoke", perform, target=ELEMENT)["ok"] and done == ["mutated"]
+
+
+# -- an approval holds only for what the person saw -------------------------------------------------
+
+def _live_element(name="Delete"):
+    """An element whose current state a test can change, as the app would."""
+    state = {"t": Target("element", rect=Rect(10, 10, 30, 30), name=name, control_type="Button", pid=1, hwnd=0x10)}
+    t = Target(**{**state["t"].__dict__, "revalidate": lambda: state["t"]})
+    return t, state
+
+
+def _approving(g, during=lambda: None):
+    asked = []
+
+    def answer(req):
+        asked.append(req)
+        during()
+        return True
+
+    g.approver = policy.CallbackApprover(answer)
+    return asked
+
+
+def test_a_target_renamed_while_the_person_decides_is_not_acted_on(gw):
+    g, token, lease_id, _ = gw
+    t, state = _live_element()
+    _approving(g, lambda: state.update(t=Target(**{**state["t"].__dict__, "name": "Delete all"})))
+    ran = []
+    with pytest.raises(E.TargetChanged):
+        g.run(token, lease_id, "invoke", lambda t, p: ran.append(1), target=t)
+    assert ran == []
+
+
+def test_a_target_moved_while_the_person_decides_is_not_acted_on(gw):
+    g, token, lease_id, _ = gw
+    t, state = _live_element()
+    _approving(g, lambda: state.update(t=Target(**{**state["t"].__dict__, "rect": Rect(40, 40, 60, 60)})))
+    ran = []
+    with pytest.raises((E.TargetChanged, E.TargetStale)):
+        g.run(token, lease_id, "invoke", lambda t, p: ran.append(1), target=t)
+    assert ran == []
+
+
+def test_new_text_at_an_approved_point_stops_the_click(gw):
+    g, token, lease_id, _ = gw
+    label = ["Delete"]
+    g.checks.label_at = lambda s, x, y: label[0]
+    _approving(g, lambda: label.__setitem__(0, "Delete everything"))
+    ran = []
+    with pytest.raises(E.TargetChanged):
+        g.run(token, lease_id, "click", lambda t, p: ran.append(1), target=Target("point", x=5, y=5))
+    assert ran == []
+
+
+def test_focus_moving_while_the_person_decides_stops_the_keys(gw):
+    g, token, lease_id, _ = gw
+    focus = [{**DOC_FOCUS, "type": "Edit", "name": "Search"}]
+    g.checks.scope_focus = lambda s: dict(focus[0])
+    _approving(g, lambda: focus.__setitem__(0, {**DOC_FOCUS, "type": "Edit", "name": "Amount", "hwnd": 0x11}))
+    ran = []
+    with pytest.raises(E.TargetChanged):
+        g.run(token, lease_id, "hotkey", lambda t, p: ran.append(1), params={"combo": "enter"})
+    assert ran == []
+
+
+def test_a_panic_while_the_person_decides_stops_the_action(gw):
+    g, token, lease_id, _ = gw
+    t, _ = _live_element()
+    _approving(g, lambda: g.panic("test"))
+    ran = []
+    with pytest.raises(E.GatewayError):
+        g.run(token, lease_id, "invoke", lambda t, p: ran.append(1), target=t)
+    assert ran == []
+
+
+def test_the_gate_holds_an_approved_action_to_what_was_approved(gw):
+    g, token, lease_id, _ = gw
+    t, state = _live_element()
+    _approving(g)
+    ran = []
+
+    def perform(_, p):
+        state.update(t=Target(**{**state["t"].__dict__, "name": "Pay now"}))
+        p["gate"]()
+        ran.append(1)
+
+    with pytest.raises(E.TargetChanged):
+        g.run(token, lease_id, "invoke", perform, target=t)
+    assert ran == []
+
+
+def test_an_approval_expires(gw, monkeypatch):
+    from overshoulder.gateway import core
+    g, token, lease_id, _ = gw
+    t, _ = _live_element()
+    _approving(g)
+    monkeypatch.setattr(core, "APPROVAL_TTL_S", -1.0)
+    with pytest.raises(E.TargetChanged, match="old"):
+        g.run(token, lease_id, "invoke", lambda _, p: p["gate"](), target=t)
+
+
+def test_an_unchanged_approved_action_runs_once(gw):
+    g, token, lease_id, _ = gw
+    t, _ = _live_element()
+    asked = _approving(g)
+    ran = []
+
+    def perform(_, p):
+        p["gate"]()
+        ran.append(1)
+
+    assert g.run(token, lease_id, "invoke", perform, target=t)["ok"] and ran == [1] and len(asked) == 1
+
+
+def test_every_action_approval_shows_a_picture_of_the_target(gw):
+    g, token, lease_id, _ = gw
+    shot = []
+    g.checks.picture = lambda s, r: shot.append(r) or b"png"
+    t, _ = _live_element()
+    asked = _approving(g)
+    g.run(token, lease_id, "invoke", lambda _, p: None, target=t)
+    g.checks.label_at = lambda s, x, y: "Send"
+    g.run(token, lease_id, "click", lambda _, p: None, target=Target("point", x=50, y=50))
+    assert [a["picture"] for a in asked] == [b"png", b"png"]
+    assert shot[0] == Rect(10, 10, 30, 30) and shot[1].contains(50, 50)
+
+
+def test_the_desk_box_quotes_the_apps_name_and_names_the_window(monkeypatch):
+    from overshoulder import approvals
+    monkeypatch.setattr(approvals.w, "title", lambda h: "Checkout - Shop")
+    text = approvals._summary({"client": "agent-a", "reason": "invoke on 'Close'", "hwnd": 0x10,
+                               "target": {"name": "Close", "kind": "element", "control_type": "Button"}})
+    assert "'Close' (the app's name for it) Button" in text and "Window: Checkout - Shop" in text
+
+
+# -- wider consequential checks -----------------------------------------------------------------
+
+@pytest.mark.parametrize("name", ["Save", "Replace", "Save as..."])
+def test_save_and_replace_buttons_need_approval(gw, name):
+    g, token, lease_id, _ = gw
+    with pytest.raises(E.ApprovalDenied):
+        g.run(token, lease_id, "click", lambda t, p: None, target=Target("element", rect=Rect(10, 10, 30, 30),
+                                                                        name=name))
+
+
+def test_an_ok_button_is_judged_by_its_dialogs_text(gw):
+    g, token, lease_id, scope = gw
+    scope.owned = {*scope.owned, 0x20, 0x21}  # the scope's own dialogs
+    asked = []
+    texts = {0x20: "Delete 3 files? This cannot be undone.", 0x21: "Your settings were updated."}
+    g.checks.dialog_text = lambda h: texts.get(h, "")
+    g.approver = policy.CallbackApprover(lambda req: asked.append(req["reason"]) or False)
+    ok = Target("element", rect=Rect(10, 10, 30, 30), name="&OK", hwnd=0x20)
+    with pytest.raises(E.ApprovalDenied):
+        g.run(token, lease_id, "click", lambda t, p: None, target=ok)
+    assert "Delete 3 files?" in asked[0]
+    harmless = Target("element", rect=Rect(10, 10, 30, 30), name="OK", hwnd=0x21)
+    assert g.run(token, lease_id, "click", lambda t, p: "ok", target=harmless)["ok"]
+    cancel = Target("element", rect=Rect(10, 10, 30, 30), name="Cancel", hwnd=0x20)
+    assert g.run(token, lease_id, "click", lambda t, p: "ok", target=cancel)["ok"]
+
+
+def test_a_dialog_whose_text_cannot_be_read_is_asked_about(gw):
+    g, token, lease_id, scope = gw
+    scope.owned = {*scope.owned, 0x20}
+    g.checks.dialog_text = lambda h: (_ for _ in ()).throw(OSError("gone"))
+    with pytest.raises(E.ApprovalDenied) as e:
+        g.run(token, lease_id, "click", lambda t, p: None,
+              target=Target("element", rect=Rect(10, 10, 30, 30), name="Yes", hwnd=0x20))
+    assert "could not be read" in str(e.value)
+
+
+def test_an_ocr_ok_at_a_point_is_judged_by_the_dialog_under_it(gw):
+    g, token, lease_id, _ = gw
+    g.checks.label_at = lambda s, x, y: "OK"
+    g.checks.window_under = lambda x, y: 0x20
+    g.checks.dialog_text = lambda h: "Do you want to replace it?" if h == 0x20 else ""
+    with pytest.raises(E.ApprovalDenied):
+        g.run(token, lease_id, "click", lambda t, p: None, target=Target("point", x=15, y=15))
+
+
+def test_dialog_text_reads_a_real_message_box():
+    import ctypes
+    import threading as th
+    import time
+
+    from overshoulder.driver import windows as w
+    from overshoulder.gateway.core import _dialog_text
+    title = f"overshoulder-test-{time.time_ns()}"
+    t = th.Thread(target=lambda: ctypes.windll.user32.MessageBoxW(0, "Delete everything?", title, 0x40000),
+                  daemon=True)
+    t.start()
+    hwnd = 0
+    for _ in range(50):
+        hwnd = ctypes.windll.user32.FindWindowW("#32770", title)
+        if hwnd:
+            break
+        time.sleep(0.1)
+    try:
+        assert hwnd and "Delete everything?" in _dialog_text(hwnd) and title in _dialog_text(hwnd)
+        assert _dialog_text(0) == ""
+    finally:
+        ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+        t.join(5)
+    assert not w.is_window(hwnd)
+
+
+# -- file dialogs in a window scope -------------------------------------------------------------
+
+def _dialog_gw(gw):
+    g, token, lease_id, scope = gw
+    scope.owned = {*scope.owned, 0x30}
+    g.checks.file_dialog = lambda h: h == 0x30
+    return g, token, lease_id
+
+
+def test_a_file_dialog_in_a_window_scope_is_asked_about_once_per_lease(gw):
+    g, token, lease_id = _dialog_gw(gw)
+    asked = []
+    g.approver = policy.CallbackApprover(lambda req: asked.append(req["reason"]) or True)
+    name_box = Target("element", rect=Rect(10, 10, 30, 30), name="File name", hwnd=0x30)
+    assert g.run(token, lease_id, "click", lambda t, p: "ok", target=name_box)["ok"]
+    assert g.run(token, lease_id, "click", lambda t, p: "ok", target=name_box)["ok"]
+    assert len(asked) == 1 and "file dialog" in asked[0]
+    in_app = Target("element", rect=Rect(10, 10, 30, 30), name="Bold", hwnd=0x10)
+    assert g.run(token, lease_id, "click", lambda t, p: "ok", target=in_app)["ok"] and len(asked) == 1
+
+
+def test_a_refused_file_dialog_stays_refused(gw):
+    g, token, lease_id = _dialog_gw(gw)
+    t = Target("element", rect=Rect(10, 10, 30, 30), name="File name", hwnd=0x30)
+    for _ in range(2):
+        with pytest.raises(E.ApprovalDenied):
+            g.run(token, lease_id, "click", lambda t, p: None, target=t)
+
+
+def test_typing_into_a_focused_file_dialog_is_asked_about(gw):
+    g, token, lease_id = _dialog_gw(gw)
+    g.checks.scope_focus = lambda s: {**DOC_FOCUS, "hwnd": 0x30}
+    with pytest.raises(E.ApprovalDenied) as e:
+        g.run(token, lease_id, "type", lambda t, p: None, params={"text": r"C:\Windows"})
+    assert "file dialog" in str(e.value)
+
+
+@pytest.mark.parametrize("how", ["right_click", "shift+f10"])
+def test_context_menus_in_a_file_dialog_are_refused(gw, how):
+    g, token, lease_id = _dialog_gw(gw)
+    g.approver = policy.CallbackApprover(lambda req: True)
+    g.checks.scope_focus = lambda s: {**DOC_FOCUS, "hwnd": 0x30}
+    t = Target("element", rect=Rect(10, 10, 30, 30), name="report.pdf", hwnd=0x30)
+    with pytest.raises(E.Denied):
+        if how == "right_click":
+            g.run(token, lease_id, "right_click", lambda t, p: None, target=t)
+        else:
+            g.run(token, lease_id, "hotkey", lambda t, p: None, params={"combo": how})
+
+
+def test_is_file_dialog_on_real_windows():
+    import ctypes
+
+    from overshoulder.gateway.core import _is_file_dialog
+    assert _is_file_dialog(0) is False
+    assert _is_file_dialog(ctypes.windll.user32.GetDesktopWindow()) is False
+
+
+def test_real_input_is_refused_when_the_person_watch_could_not_start(tmp_path):
+    g, token, lease_id, seen = _borrow_gateway(tmp_path, [6.0])
+
+    class DeadWatch(FakeWatch):
+        ok = False
+
+    g.checks.person_watch = DeadWatch
+    with pytest.raises(E.NeedsRealInput) as e:
+        g.run(token, lease_id, "click", lambda t, p: real(p), target=Target("point", x=5, y=5))
+    assert "watch" in str(e.value) and seen["forward"] == []
+
+
+# -- a panic stays until the person lifts it -----------------------------------------------------
+
+def test_resume_without_the_persons_yes_does_not_lift_a_panic(gw):
+    g, token, _, _ = gw
+    g.panic()
+    assert not g.resume()  # DenyAll: nobody said yes
+    assert g.status()["paused"]
+    with pytest.raises(E.Paused):
+        g.acquire(token, "window:16")
+    asked = []
+    g.approver = policy.CallbackApprover(lambda req: asked.append(req) or True)
+    assert g.resume() and not g.status()["paused"]
+    assert asked[0]["kind"] == "resume" and "panic" in asked[0]["reason"]
+
+
+def test_a_plain_pause_resumes_without_asking(gw):
+    g, _, _, _ = gw
+    g.pause("operator pause")
+    assert g.resume() and not g.status()["paused"]
+
+
+def test_a_newer_panic_is_not_lifted_by_a_yes_to_an_older_one(gw):
+    g, _, _, _ = gw
+    g.panic("first")
+
+    def yes_but_panic_again(req):
+        g.panic("second")
+        return True
+
+    g.approver = policy.CallbackApprover(yes_but_panic_again)
+    assert not g.resume()
+    assert "second" in g.status()["paused"]

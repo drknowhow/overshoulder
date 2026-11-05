@@ -134,7 +134,7 @@ def test_profile_add_through_the_service(tmp_path, monkeypatch):
     cfg = {"s": st.Settings()}
     s = service.Service(gateway_for_tests(tmp_path, checks=ok_checks(), scope_factory=lambda spec: AppScope(),
                                           settings_source=lambda: cfg["s"]), shots_dir=tmp_path / "shots")
-    token = s.gw.registry.add("agent")
+    token = s.gw.registry.add("agent", window="allow")
     lease = s.acquire(token, "window:16")["lease_id"]
     secret = "Find opens a panel at the top"
     out = s.profile(token, lease, "add", {"kind": "quirk", "text": secret})

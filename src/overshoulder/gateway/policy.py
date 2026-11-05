@@ -109,10 +109,16 @@ def require_not_password(action: str, is_password: bool | None) -> None:
 
 _CONSEQUENTIAL = re.compile(
     r"\b(send|delete|remove|erase|discard|purchase|buy|pay|checkout|order|place order|install|uninstall|"
-    r"format|submit|publish|post|transfer|wipe|reset|sign out|log out|empty trash|overwrite|replace all)\b",
+    r"format|submit|publish|post|transfer|wipe|reset|sign out|log out|empty trash|overwrite|replace all|save|"
+    r"replace)\b",
     re.IGNORECASE)
+# Buttons that say yes to whatever their dialog asks; what they confirm is in the dialog's text.
+_AFFIRMATIVE = re.compile(
+    r"^\W*(ok|okay|yes|yes to all|continue|confirm|allow|accept|agree|i agree|proceed|apply|finish|run|"
+    r"go|do it)\W*$", re.IGNORECASE)
 _VK_CTRL, _VK_SHIFT, _VK_ALT, _VK_WIN, _VK_RWIN = 0x11, 0x10, 0x12, 0x5B, 0x5C
 _VK_TAB, _VK_ESC, _VK_DEL, _VK_ENTER, _VK_F4 = 0x09, 0x1B, 0x2E, 0x0D, 0x73
+_VK_Q, _VK_S, _VK_W = 0x51, 0x53, 0x57
 
 # Combos that act on the shell rather than the focused window, so they would leave the scope.
 _SCOPE_ESCAPES = [
@@ -122,7 +128,15 @@ _SCOPE_ESCAPES = [
 _CONSEQUENTIAL_KEYS = [
     frozenset({_VK_DEL}), frozenset({_VK_SHIFT, _VK_DEL}), frozenset({_VK_CTRL, _VK_SHIFT, _VK_DEL}),
     frozenset({_VK_ALT, _VK_F4}), frozenset({_VK_CTRL, _VK_ENTER}),
+    # save (over a file), close a tab or window, quit the app
+    frozenset({_VK_CTRL, _VK_S}), frozenset({_VK_CTRL, _VK_W}), frozenset({_VK_CTRL, _VK_SHIFT, _VK_W}),
+    frozenset({_VK_CTRL, _VK_Q}), frozenset({_VK_CTRL, _VK_F4}),
 ]
+_VK_INSERT, _VK_C, _VK_V, _VK_X = 0x2D, 0x43, 0x56, 0x58
+# Clipboard combos: in a password field they paste text in or copy it out.
+_CLIPBOARD_KEYS = [frozenset({_VK_CTRL, _VK_V}), frozenset({_VK_SHIFT, _VK_INSERT}), frozenset({_VK_CTRL, _VK_C}),
+                   frozenset({_VK_CTRL, _VK_X}), frozenset({_VK_CTRL, _VK_INSERT}), frozenset({_VK_SHIFT, _VK_DEL})]
+_PASTE_KEYS = [frozenset({_VK_CTRL, _VK_V}), frozenset({_VK_SHIFT, _VK_INSERT})]
 _CLICK_ACTIONS = frozenset({"click", "invoke", "double_click", "right_click", "toggle", "select"})
 # Actions aimed at a point whose on-screen text is checked when UI Automation names nothing there.
 POINTED_ACTIONS = frozenset({"click", "double_click", "right_click", "drag"})
@@ -143,6 +157,69 @@ def require_hotkey_allowed(combo: str) -> None:
         raise Denied(f"hotkey {combo!r} uses the Windows key, which acts outside any scope")
     if any(keys == esc for esc in _SCOPE_ESCAPES):
         raise Denied(f"hotkey {combo!r} switches or leaves the active window")
+
+
+def _printable_vk(vk: int) -> bool:
+    return vk == 0x20 or 0x30 <= vk <= 0x39 or 0x41 <= vk <= 0x5A or 0x60 <= vk <= 0x6F \
+        or 0xBA <= vk <= 0xC0 or 0xDB <= vk <= 0xDF or vk == 0xE2
+
+
+def moves_text(keys: frozenset[int]) -> bool:
+    """Whether a combo puts text into the focused field or copies it out: a clipboard combo, or a key that
+    types a character (alone, with Shift, with AltGr as Ctrl+Alt, or a number-pad digit with Alt)."""
+    if keys in _CLIPBOARD_KEYS:
+        return True
+    mods = keys & {_VK_CTRL, _VK_SHIFT, _VK_ALT}
+    rest = keys - mods - {_VK_WIN, _VK_RWIN}
+    if len(rest) != 1 or not _printable_vk(next(iter(rest))):
+        return False
+    vk = next(iter(rest))
+    if _VK_CTRL in mods and _VK_ALT not in mods:
+        return False  # Ctrl+letter is a shortcut
+    if _VK_ALT in mods and _VK_CTRL not in mods:
+        return 0x60 <= vk <= 0x69  # Alt+letter opens a menu; Alt+number-pad digit enters a character
+    return True
+
+
+def require_hotkey_not_into_password(combo: str, is_password: bool | None) -> None:
+    """is_password None (could not be checked) counts as a password field, as for typing."""
+    if is_password is not False and moves_text(combo_keys(combo)):
+        raise Denied(f"hotkey {combo!r} would put text into or copy it out of a password field (or one that "
+                     "could not be checked); agents never do that")
+
+
+def require_no_tab_in_text(action: str, params: dict) -> None:
+    """A tab inside typed text moves focus mid-string, possibly into a password field the type check never
+    saw, so it has to be its own hotkey."""
+    if action == "type" and "\t" in str(params.get("text", "")):
+        raise Denied("text to type may not hold a tab; type each field on its own, with hotkey('tab') between")
+
+
+_VK_APPS, _VK_F10 = 0x5D, 0x79
+
+
+def opens_context_menu(combo: str) -> bool:
+    """Shift+F10 or the menu key: the keyboard's right click."""
+    keys = combo_keys(combo)
+    return keys in (frozenset({_VK_SHIFT, _VK_F10}), frozenset({_VK_APPS}), frozenset({_VK_SHIFT, _VK_APPS}))
+
+
+def is_affirmative(name: str) -> bool:
+    return bool(name) and bool(_AFFIRMATIVE.match(name.replace("&", "")))
+
+
+def dialog_reason(action: str, button: str, dialog_text: str | None) -> str | None:
+    """Why pressing a dialog's OK or Yes needs approval: the dialog's own text names something
+    consequential ("Delete 3 files?", "Replace the existing file?"). dialog_text None means the window
+    is a dialog whose text could not be read, which is asked about too."""
+    if action not in _CLICK_ACTIONS or not is_affirmative(button):
+        return None
+    if dialog_text is None:
+        return f"{action} on {button!r} in a dialog whose text could not be read"
+    if _CONSEQUENTIAL.search(dialog_text):
+        shown = " ".join(dialog_text.split())
+        return f"{action} on {button!r} in a dialog that says {shown[:200]!r}"
+    return None
 
 
 def approval_reason(action: str, target_name: str = "", params: dict | None = None,
@@ -166,6 +243,8 @@ def approval_reason(action: str, target_name: str = "", params: dict | None = No
             return f"hotkey {combo}"
         if keys == frozenset({_VK_ENTER}) and focused_type.lower() in _SINGLE_LINE:
             return "Enter in a single-line field may submit a form"
+        if keys in _PASTE_KEYS and focused_type.lower() in _SINGLE_LINE:
+            return "a paste into a single-line field may hold a line break and submit a form"
     if action == "type" and "\n" in str(params.get("text", "")) and focused_type.lower() in _SINGLE_LINE:
         return "Enter in a single-line field may submit a form"
     return None
