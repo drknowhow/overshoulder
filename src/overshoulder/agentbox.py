@@ -117,7 +117,11 @@ ip6tables -A AGENT_OUT -j ACCEPT
 ROOT_SETUP = f"""\
 set -e
 chmod 755 /usr/local/sbin/agent-boot.sh /usr/local/sbin/agent-egress.sh
-command -v iptables >/dev/null || (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables)
+# iptables for the egress filter; git, curl and certificates for the agent's own work (it can't install
+# packages itself: it isn't root).
+for c in iptables git curl; do command -v $c >/dev/null || NEED=1; done
+[ -z "$NEED" ] || (apt-get update -qq &&
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables git curl ca-certificates)
 id -u {AGENT} >/dev/null 2>&1 || useradd -m -s /bin/bash -u {AGENT_UID} {AGENT}
 [ "$(id -u {AGENT})" = "{AGENT_UID}" ]
 for g in sudo adm wheel; do gpasswd -d {AGENT} "$g" >/dev/null 2>&1 || true; done
@@ -197,7 +201,9 @@ class Box:
         return out
 
     def _root(self, script: str, input: bytes | None = None) -> str:
-        return self._wsl("-d", DISTRO, "-u", "root", "--", "sh", "-c", script, input=input)
+        # --exec: without it wsl.exe hands the command to the distro's login shell first, which expands
+        # every $variable in the script before sh sees it.
+        return self._wsl("-d", DISTRO, "-u", "root", "--exec", "sh", "-c", script, input=input)
 
     def _put(self, path: str, content: str | bytes, mode: str, owner: str = "root") -> None:
         data = content.encode("utf-8") if isinstance(content, str) else content
@@ -254,7 +260,7 @@ class Box:
             who = ("-u", user) if user else ()
             # On stdin, so Windows' command-line quoting never touches the script.
             script = cmd.format(uid=AGENT_UID, user=AGENT)
-            out = self._wsl("-d", DISTRO, *who, "--", "sh", "-s", input=script.encode(), check=False)
+            out = self._wsl("-d", DISTRO, *who, "--exec", "sh", "-s", input=script.encode(), check=False)
             if out.strip() != "ok":
                 failed.append(f"{name}: {why.format(uid=AGENT_UID)}")
         return failed

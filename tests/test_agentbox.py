@@ -165,3 +165,12 @@ def test_create_turns_on_serving_the_box_and_names_the_gateway_inside_it(tmp_pat
     box(tmp_path, win).create(tmp_path / "home", firewall=False)
     assert st.load_or_default().listen_wsl
     assert b"echo \"$GW overshoulder-gateway\" >> /etc/hosts" in win.files["/usr/local/sbin/agent-boot.sh"]
+
+
+def test_scripts_run_with_exec_so_no_login_shell_expands_their_variables(tmp_path):
+    win = FakeWindows()
+    box(tmp_path, win).create(tmp_path / "home", firewall=False)
+    in_box = [c for c in win.calls if c[0] == "wsl.exe" and "-d" in c and c[-1] != "true"]
+    assert in_box and all("--exec" in c and "--" not in c for c in in_box)
+    setup = next(c[-1] for c in in_box if "useradd" in c[-1])
+    assert "git curl ca-certificates" in setup and 'gpasswd -d agent "$g"' in setup

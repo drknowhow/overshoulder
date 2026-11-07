@@ -311,6 +311,48 @@ iptables, can remove the box's network filter until the box restarts; the daily 
 Give an agent in another distro no token. `/mnt/wsl` is shared between distros, so the agent can read
 what other distros put there.
 
+#### Working in the box
+
+The agent can't see your Windows files. It works on its own clone inside the box, and code moves in
+and out as git bundles, which you check before they reach your own copy. `agent-box create` installs
+`git` and `curl` in the box, since `agent` can't install packages.
+
+Open a shell in the box as `agent`, then install Claude Code and point it at the gateway:
+
+```bash
+wsl -d overshoulder-agent
+curl -fsSL https://claude.ai/install.sh | bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
+claude mcp add --scope user --transport http overshoulder http://overshoulder-gateway:47621/mcp \
+  --header "Authorization: Bearer $(cat ~/.overshoulder/token)"
+claude mcp list    # overshoulder: ... Connected
+```
+
+Codex works the same way, with its own MCP setting for the same address and header. Sign in to the
+agent inside the box. Its API key or login then stays in the box.
+
+To get code into the box, clone a public repository there over HTTPS. For a private one, send a bundle
+from Windows; this hands the agent no GitHub credentials. The bundles go through `cmd /c` because
+Windows PowerShell 5.1 turns a program's binary output into text:
+
+```powershell
+git bundle create project.bundle --all
+cmd /c "wsl -d overshoulder-agent -u agent --exec sh -c ""cat > ~/project.bundle"" < project.bundle"
+# in the box: git clone -b main ~/project.bundle project
+```
+
+To get the agent's work out, have it commit to a branch, then fetch that branch from Windows into your
+copy and review it before you merge or run anything:
+
+```powershell
+cmd /c "wsl -d overshoulder-agent -u agent --exec sh -c ""cd ~/project && git bundle create - main..agent-work"" > agent.bundle"
+git fetch agent.bundle agent-work:agent-work
+git diff main...agent-work
+```
+
+A fetch from a bundle runs none of the box's git hooks or config on Windows. The agent can still have
+written anything into the branch, including build scripts and tests, so read it before you build it.
+
 ## Working beside you
 
 Agents act on their window in the background first: UI Automation, then messages sent to the window
