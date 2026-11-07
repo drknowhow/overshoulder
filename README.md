@@ -297,15 +297,14 @@ Python through the Windows firewall from WSL. Finally it checks each part of the
 Run it again to repair the box; `overshoulder agent-box check` checks it, and `overshoulder agent-box
 remove --yes` deletes it. The gateway also checks the box when it starts and once a day, including
 that the network filter still refuses the agent's private and loopback connections, and shows the
-result on the settings page and in `overshoulder status`. Then start the gateway with:
+result on the settings page and in `overshoulder status`.
 
-```powershell
-overshoulder serve --listen-wsl
-```
-
-The gateway then also listens on the WSL network adapter, and serves only `/mcp` there; the settings
-page and the operator routes stay on `127.0.0.1`. The agent finds the gateway at its default route,
-port 47621.
+`create` also turns on **Serve the agent box** on the settings page, which the box on screen asks you
+about first. While it is on, the gateway listens on the WSL network adapter and serves only `/mcp`
+there; the settings page and the operator routes stay on `127.0.0.1`. The adapter's address changes
+when WSL starts again, and the gateway follows it. Inside the box, the agent's MCP address is
+`http://overshoulder-gateway:47621/mcp`, with the token from `/home/agent/.overshoulder/token` as
+`Authorization: Bearer <token>`.
 
 All WSL2 distros share one VM, kernel and network. Root in another distro, or Docker rewriting
 iptables, can remove the box's network filter until the box restarts; the daily check catches that.

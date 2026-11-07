@@ -569,8 +569,9 @@ class OnlyMcpOn:
 
 
 def serve(port: int = DEFAULT_PORT, listen_wsl: bool = False) -> None:
-    """listen_wsl: also take MCP calls on the WSL adapter, for an agent kept in a locked-down WSL distro
-    (docs/evidence/security-isolation). Only /mcp is served there, and every call still needs a token."""
+    """Serve on 127.0.0.1, and on BOX_LOOPBACK with /mcp alone. The agent box reaches the latter through
+    wslbridge, which listens on the WSL adapter while the listen_wsl setting is on (listen_wsl=True here
+    keeps it on whatever the setting says) and follows the adapter's address when WSL starts again."""
     import socket
 
     import uvicorn
@@ -581,16 +582,17 @@ def serve(port: int = DEFAULT_PORT, listen_wsl: bool = False) -> None:
     mcp = daemon.build()
     from overshoulder.catalog import start_weekly_check
     start_weekly_check(daemon.svc.catalog, daemon.gw.settings_source)  # does nothing while the setting is off
-    hosts = ["127.0.0.1"]
-    if listen_wsl:
-        wsl = wsl_host_address()
-        if not wsl:
-            raise SystemExit("--listen-wsl: no WSL network adapter; start the agent's WSL distro first")
-        hosts.append(wsl)
-    security = TransportSecuritySettings(enable_dns_rebinding_protection=True,
-                                         allowed_hosts=[f"{h}:{port}" for h in hosts] + [f"localhost:{port}"],
-                                         allowed_origins=[])
-    app = OnlyMcpOn(mcp.streamable_http_app(transport_security=security, host="127.0.0.1"), set(hosts[1:]))
+    from overshoulder.wslbridge import BOX_HOSTNAME, BOX_LOOPBACK, WslBridge
+    hosts = ["127.0.0.1", BOX_LOOPBACK]
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[f"{h}:{port}" for h in (*hosts, "localhost", BOX_HOSTNAME)], allowed_origins=[])
+    app = OnlyMcpOn(mcp.streamable_http_app(transport_security=security, host="127.0.0.1"), {BOX_LOOPBACK})
+    # The bridge adds the adapter's address to the Host allow-list while it listens there. It follows the
+    # setting as the person accepted it, so turning it on in the file waits for their Yes on screen.
+    guard = daemon.gw.config_guard
+    WslBridge(port, lambda: listen_wsl or bool(guard.accepted("settings").get("listen_wsl")), wsl_host_address,
+              allowed_hosts=security.allowed_hosts, record=daemon.gw.log.write).start(daemon._stop)
     socks = []
     for h in hosts:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -59,6 +59,8 @@ class Settings:
     # The visible "Made with Overshoulder" mark on tutorials, GIFs, step images and annotated screenshots.
     # On for a new install; turning it off is free. The files' metadata says it either way (mark.py).
     show_mark: bool = True
+    # Take MCP calls from the agent box (agentbox.py) on the WSL adapter; only /mcp is served there.
+    listen_wsl: bool = False
 
     def clamp(self) -> Settings:
         self.poll_interval_ms = max(100, min(int(self.poll_interval_ms), 10_000))

@@ -67,6 +67,11 @@ AGENT_BOOT = """\
 #!/bin/sh
 # Run as root each time the distro starts ([boot] command in /etc/wsl.conf).
 /usr/local/sbin/agent-egress.sh
+# The Windows host's address on WSL's network changes when WSL starts again; agents reach the gateway at
+# http://overshoulder-gateway:<port>/mcp, whatever it is.
+GW=$(ip route | awk '/default/{print $3; exit}')
+sed -i '/ overshoulder-gateway$/d' /etc/hosts
+[ -n "$GW" ] && echo "$GW overshoulder-gateway" >> /etc/hosts
 # WSLg gives Linux GUI apps a display remoted to the Windows desktop, with the Windows clipboard synced
 # both ways. The agent gets neither: the X socket mount is removed, and the WSLg directory (Wayland,
 # PulseAudio) is closed to everyone but root.
@@ -273,7 +278,18 @@ class Box:
         failed = self.check()
         if firewall:
             self.allow_through_firewall()
+        self.serve_box()
         return failed
+
+    def serve_box(self) -> None:
+        """Turn on the setting that has the gateway serve the box. It widens what agents may reach, so a
+        running gateway asks the person on screen before it takes effect."""
+        from overshoulder import settings as st
+        s = st.load_or_default()
+        if not s.listen_wsl:
+            s.listen_wsl = True
+            st.save(s)
+            self.say("Turned on serving the agent box. If the gateway is running, answer the box on screen.")
 
     # -- firewall ----------------------------------------------------------------------------------
 
