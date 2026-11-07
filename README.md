@@ -1,7 +1,7 @@
 <h1 align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/header-dark.png">
-    <img src="docs/brand/header-light.png" alt="Overshoulder" width="420">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/drknowhow/overshoulder/main/docs/brand/header-dark.png">
+    <img src="https://raw.githubusercontent.com/drknowhow/overshoulder/main/docs/brand/header-light.png" alt="Overshoulder" width="420">
   </picture>
 </h1>
 
@@ -18,10 +18,10 @@ A desktop hand for AI agents on Windows. An agent leases one window (or a whole 
 controls, clicks and types inside it, and can record what it did as a tutorial with numbered steps.
 Any agent that speaks MCP can use it: Claude Code, Codex, Gemini CLI, or a plain script.
 
-![Calculator tutorial made by an agent](docs/demo/calculator-tip/contact-sheet.png)
+![Calculator tutorial made by an agent](https://raw.githubusercontent.com/drknowhow/overshoulder/main/docs/demo/calculator-tip/contact-sheet.png)
 
 *An agent recorded this on its own, through MCP: "How to work out a 15% tip on a $48.50 bill in
-Windows Calculator". Video, step images and `steps.md` are in [docs/demo/calculator-tip](docs/demo/calculator-tip).*
+Windows Calculator". Video, step images and `steps.md` are in [docs/demo/calculator-tip](https://github.com/drknowhow/overshoulder/tree/main/docs/demo/calculator-tip).*
 
 Agents work on their window in the background, so the person at the desk keeps their own cursor and
 keyboard. See [Working beside you](#working-beside-you).
@@ -33,13 +33,21 @@ Status: phase 6. Windows 10/11 only.
 
 ## Install
 
-Needs Python 3.11+ and `ffmpeg` on `PATH` (for recording).
+Needs Windows, Python 3.11+ and `ffmpeg` on `PATH` (for recording).
+
+```powershell
+python -m venv $env:LOCALAPPDATA\Programs\Overshoulder
+& $env:LOCALAPPDATA\Programs\Overshoulder\Scripts\pip install overshoulder
+```
+
+Put `%LOCALAPPDATA%\Programs\Overshoulder\Scripts` on your `PATH`, or call `overshoulder.exe` from there.
+To work on Overshoulder itself, install it from a clone instead:
 
 ```powershell
 git clone https://github.com/drknowhow/overshoulder
 cd overshoulder
 python -m venv .venv
-.venv\Scripts\pip install -e .
+.venv\Scripts\pip install -e ".[dev]"
 ```
 
 Run Overshoulder from a normal user session. It refuses to start elevated.
@@ -371,22 +379,22 @@ In every mode, touching the mouse or keyboard stops an agent that is using them.
 What works in the background depends on the app. Overshoulder tries, in order: a Win32 control's own
 message (`BM_CLICK`, `WM_SETTEXT`, `EM_REPLACESEL`), UI Automation, then messages posted to the window
 (characters, clicks, drags, and hotkeys with their modifiers set in the app's own key state). The measurements
-are in [docs/SPIKE-phase2.md](docs/SPIKE-phase2.md). In
-[docs/evidence/phase2-e2e-never](docs/evidence/phase2-e2e-never), a headless Claude agent works in
+are in [docs/SPIKE-phase2.md](https://github.com/drknowhow/overshoulder/blob/main/docs/SPIKE-phase2.md). In
+[docs/evidence/phase2-e2e-never](https://github.com/drknowhow/overshoulder/tree/main/docs/evidence/phase2-e2e-never), a headless Claude agent works in
 Notepad, Calculator and Character Map with the input mode set to "never". Sampled every 50 ms for
 56 seconds, the person's window stayed in front, the cursor did not move, and no input was injected.
-[docs/evidence/phase2-borrow](docs/evidence/phase2-borrow) shows a borrowed click that waited for
+[docs/evidence/phase2-borrow](https://github.com/drknowhow/overshoulder/tree/main/docs/evidence/phase2-borrow) shows a borrowed click that waited for
 the person to stop using the PC, then put their cursor and window back. In
-[docs/evidence/phase3-e2e](docs/evidence/phase3-e2e), a headless agent narrows its own session, drags
+[docs/evidence/phase3-e2e](https://github.com/drknowhow/overshoulder/tree/main/docs/evidence/phase3-e2e), a headless agent narrows its own session, drags
 a box in the background while a program it was denied covers the start point, and records the drag as
 a tutorial whose Shotcut project renders to match the video. In
-[docs/evidence/phase4-e2e](docs/evidence/phase4-e2e), a headless agent works a window of painted
+[docs/evidence/phase4-e2e](https://github.com/drknowhow/overshoulder/tree/main/docs/evidence/phase4-e2e), a headless agent works a window of painted
 buttons with text refs and vision refs, and its click on a painted Delete is put to the person. In
-[docs/evidence/phase5-e2e](docs/evidence/phase5-e2e), three headless agents do Calculator tasks: the
+[docs/evidence/phase5-e2e](https://github.com/drknowhow/overshoulder/tree/main/docs/evidence/phase5-e2e), three headless agents do Calculator tasks: the
 first with no profile, the second with the profile the first one's session built, and the third in a
 clean data directory with that profile exported and imported. On Calculator, the profile did not make
 the work smaller (29, 26 and 27 tool calls, no failed tries in any run); the later agents followed its
-how-to and said its brief matched what they saw. In [docs/evidence/phase6-e2e](docs/evidence/phase6-e2e),
+how-to and said its brief matched what they saw. In [docs/evidence/phase6-e2e](https://github.com/drknowhow/overshoulder/tree/main/docs/evidence/phase6-e2e),
 headless agents build profiles of Calculator, Notepad, Character Map and Paint, @yepgent publishes them
 on the registry, and a clean data directory finds the Calculator profile on the site, installs it, and
 the next agent's brief carries it.
@@ -464,7 +472,7 @@ Overshoulder POSTs `{"type": "overshoulder.approval.closed", "id": "<id>", "outc
 
 ## Tutorials
 
-![Frames of a Notepad tutorial an agent recorded and annotated](docs/evidence/tutorial-annotate/contact-sheet.png)
+![Frames of a Notepad tutorial an agent recorded and annotated](https://raw.githubusercontent.com/drknowhow/overshoulder/main/docs/evidence/tutorial-annotate/contact-sheet.png)
 
 `record_start` captures a clean video of the scope. `record_stop` renders it into `tutorial/` inside
 the recording's folder (`%LOCALAPPDATA%\Overshoulder\recordings\<stamp>-<name>`):
@@ -509,7 +517,7 @@ which the agent or you can edit before rendering again:
 
 Coordinates are pixels of the recorded frame, the same pixels `steps.json` uses for each step's
 `rect`. A drawn item shows during one step (`step`: that step's id), between `t0` and `t1` seconds,
-or throughout. Items from the [example](docs/evidence/tutorial-annotate):
+or throughout. Items from the [example](https://github.com/drknowhow/overshoulder/tree/main/docs/evidence/tutorial-annotate):
 
 ```json
 {"id": "a1", "kind": "redact", "rect": [56, 12, 363, 52], "style": "blur", "note": "redacted by ref e72"},
@@ -535,7 +543,7 @@ overshoulder voices
 A screenshot takes a layer too: `overshoulder annotate shot.png add box --rect 10,10,200,80` writes
 `shot.annotations.json`, and `overshoulder render shot.png` writes `shot.annotated.png`.
 
-In [docs/evidence/tutorial-annotate](docs/evidence/tutorial-annotate), a headless agent records,
+In [docs/evidence/tutorial-annotate](https://github.com/drknowhow/overshoulder/tree/main/docs/evidence/tutorial-annotate), a headless agent records,
 redacts, annotates and narrates a Notepad tutorial on its own, working in the background.
 
 ### Finishing in Shotcut
@@ -572,10 +580,10 @@ writes `tutorial-2.mlt` with its media in `edit-2/`.
   a button is held, so dragging in them needs real input: borrowed in "borrow" mode, refused in
   "never" mode. A drop into another window always needs real input. One background drag in the phase 3
   end-to-end run moved nothing while someone was using the mouse at the same time; the cause is not
-  known ([run 1](docs/evidence/phase3-e2e#earlier-runs)). That drag reported `verify.changed: false`.
+  known ([run 1](https://github.com/drknowhow/overshoulder/tree/main/docs/evidence/phase3-e2e#earlier-runs)). That drag reported `verify.changed: false`.
 - In four of the six live phone runs, the phone sent a different answer from the one the person meant,
   in both directions. In one of them it approved Delete with Allow and Confirm when the plan was to deny
-  it. The cause is not known ([phone check](docs/evidence/phase3-phone)). Both later runs passed: one
+  it. The cause is not known ([phone check](https://github.com/drknowhow/overshoulder/tree/main/docs/evidence/phase3-phone)). Both later runs passed: one
   asked its questions 10 s apart, and the other, after the titles began naming the action, 1.5 s apart.
   Use phone approvals for actions you could undo, or answer at the desk.
 - For apps that hide their controls from UI Automation, OCR reads the languages installed for your
@@ -609,10 +617,10 @@ pytest -q                                   # unit tests, CI runs these
 $env:OVERSHOULDER_DESKTOP_TESTS = "1"; pytest -q   # plus live tests that open real apps
 ```
 
-Design notes: [docs/PLAN.md](docs/PLAN.md), [docs/SPIKE-phase0.md](docs/SPIKE-phase0.md),
-[docs/SPIKE-phase2.md](docs/SPIKE-phase2.md).
-Evidence from live runs: [docs/evidence](docs/evidence).
+Design notes: [docs/PLAN.md](https://github.com/drknowhow/overshoulder/blob/main/docs/PLAN.md), [docs/SPIKE-phase0.md](https://github.com/drknowhow/overshoulder/blob/main/docs/SPIKE-phase0.md),
+[docs/SPIKE-phase2.md](https://github.com/drknowhow/overshoulder/blob/main/docs/SPIKE-phase2.md).
+Evidence from live runs: [docs/evidence](https://github.com/drknowhow/overshoulder/tree/main/docs/evidence).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/drknowhow/overshoulder/tree/main/LICENSE).
