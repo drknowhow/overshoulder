@@ -7,7 +7,8 @@ the files with it before each use.
 
 - A change that only narrows what agents may do is accepted and logged.
 - A change that widens it pauses every agent and asks the person in a box on their own screen. Yes keeps
-  it; No (or no answer) puts the accepted version back.
+  it; No puts the accepted version back. With no answer the files stay as they are, agents stay paused,
+  and the question comes back until the person answers.
 - The settings page goes through propose(), which asks before it writes.
 
 The accepted versions are also saved to a file (`saved`), and a gateway that starts compares the files
@@ -26,11 +27,14 @@ import base64
 import binascii
 import json
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 
 CONFIG_PAUSE = "settings changed outside Overshoulder; waiting for the person to accept them on screen"
+# Seconds between a question that got no answer and the next one.
+ASK_AGAIN_S = 5.0
 
 _INPUT_RANK = {"never": 0, "borrow": 1, "full": 2}
 _GRANT_RANK = {"deny": 0, "approve": 1, "allow": 2}
@@ -166,15 +170,17 @@ def _load_saved(path: Path, names) -> dict[str, bytes | None] | None:
 
 
 class ConfigGuard:
-    """files: name ("settings" | "phone" | "clients") -> path. ask(request) -> bool asks the person at the
-    desk only. pause(reason) and resume(only_if) are the gateway's; log(event, **fields) its action log.
+    """files: name ("settings" | "phone" | "clients") -> path. ask(request) -> True, False, or None for
+    no answer, asks the person at the desk only. pause(reason) and resume(only_if) are the gateway's;
+    log(event, **fields) its action log. ask_again_s: the wait between an unanswered question and the next.
     saved: where the accepted versions are kept between runs. Without it the files as they are now count
     as accepted (tests)."""
 
-    def __init__(self, files: dict[str, Path], ask: Callable[[dict], bool], pause: Callable[[str], None],
+    def __init__(self, files: dict[str, Path], ask: Callable[[dict], bool | None], pause: Callable[[str], None],
                  resume: Callable[[str], bool], log: Callable[..., None] = lambda *a, **k: None,
-                 saved: Path | None = None):
+                 saved: Path | None = None, ask_again_s: float = ASK_AGAIN_S):
         self.files = dict(files)
+        self.ask_again_s = ask_again_s
         self._ask, self._pause, self._resume, self._log = ask, pause, resume, log
         self._lock = threading.Lock()
         self.saved = saved
@@ -236,10 +242,16 @@ class ConfigGuard:
     def _decide(self, changed: dict, reasons: list[str]) -> None:
         req = {"kind": "config", "client": "A program on this PC",
                "reason": "change Overshoulder's settings outside its settings page: " + "; ".join(reasons)}
-        try:
-            yes = bool(self._ask(req))
-        except Exception:
-            yes = False
+        while True:
+            try:
+                answer = self._ask(dict(req))
+            except Exception:  # a broken box decides nothing: stay paused and ask again
+                answer = None
+            if answer is not None:
+                break
+            self._log("config_unanswered", why=reasons)
+            time.sleep(self.ask_again_s)
+        yes = bool(answer)
         with self._lock:
             for name, (seen, why) in changed.items():
                 if yes:

@@ -249,7 +249,8 @@ refusal is logged.
   last accepted them, in memory and in `accepted-config.json`. A change that gives agents more (a new
   client or token, a looser grant or limit, a higher input mode, a new phone channel or destination,
   vision switched on) pauses every agent and asks you in a box on screen, whether it came from the
-  settings page, `overshoulder client add` or another program. No, or no answer, puts the old file back.
+  settings page, `overshoulder client add` or another program. No puts the old file back. If the box
+  closes unanswered, nothing changes and agents stay paused; it asks again until you answer.
   A change that only takes something away is kept without asking. The gateway compares the files with
   the saved copy when it starts, so a change made while it was stopped is asked about too.
 - **The first start without a saved copy** (after updating to this version, or if the copy was
