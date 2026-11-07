@@ -280,17 +280,35 @@ refusal is logged.
 The gateway guards one path to the desktop: its MCP tools. An agent that also has a shell running as
 you, as Claude Code or Codex do, has others. It can read Overshoulder's files, rewrite the settings
 together with the saved copy of what you accepted, change Overshoulder's own code, end the watchdog, or
-send input without the gateway. The checks above don't stop that. To keep such an agent out, run it in a separate WSL distro with Windows interop and drive
-mounting turned off (`[interop] enabled=false` and `[automount] enabled=false` in its `/etc/wsl.conf`),
-under a user without `sudo`, and give it only its client token. Then start the gateway with:
+send input without the gateway. The checks above don't stop that. To keep such an agent out, run it in
+the agent box, a WSL2 distro of its own:
+
+```powershell
+overshoulder agent-box create
+```
+
+It downloads Debian from the list Microsoft publishes and checks its SHA-256, then locks the distro
+down: Windows programs can't start (interop off), no Windows drives are mounted, the user `agent` has
+no `sudo` and root is locked, the Windows clipboard and other distros' services are out of reach, and
+`agent`'s network allows only DNS, the gateway's port and the internet. It adds the client
+`agent-box` (window scopes ask, screen scopes refused); the box on screen asks you about it. Its token
+goes into the distro at `/home/agent/.overshoulder/token`. A UAC prompt asks to let the gateway's
+Python through the Windows firewall from WSL. Finally it checks each part of the lock-down from inside.
+Run it again to repair the box; `overshoulder agent-box check` checks it, and `overshoulder agent-box
+remove --yes` deletes it. Then start the gateway with:
 
 ```powershell
 overshoulder serve --listen-wsl
 ```
 
 The gateway then also listens on the WSL network adapter, and serves only `/mcp` there; the settings
-page and the operator routes stay on `127.0.0.1`. Windows Firewall has to allow the gateway's port
-from the WSL adapter. WSL distros share one network, so give an agent in another distro no token.
+page and the operator routes stay on `127.0.0.1`. The agent finds the gateway at its default route,
+port 47621.
+
+All WSL2 distros share one VM, kernel and network. Root in another distro, or Docker rewriting
+iptables, can remove the box's network filter, so run `agent-box check` after such changes; give an
+agent in another distro no token. `/mnt/wsl` is shared between distros, so the agent can read what other
+distros put there.
 
 ## Working beside you
 

@@ -347,6 +347,36 @@ def _profile(a) -> int:
     return 0
 
 
+def _agent_box(a) -> int:
+    from overshoulder import agentbox
+    from overshoulder.server import DEFAULT_PORT
+    box = agentbox.Box(port=DEFAULT_PORT)
+    try:
+        if a.bcmd == "create":
+            failed = box.create(agentbox.default_home(), firewall=not a.no_firewall)
+        elif a.bcmd == "check":
+            if not box.exists():
+                print("No agent box: run `overshoulder agent-box create`.")
+                return 1
+            failed = box.check()
+        else:
+            if not a.yes:
+                print(f"This deletes the distro {agentbox.DISTRO!r} and everything in it, the client "
+                      f"{agentbox.CLIENT!r} and its firewall rules. Run it again with --yes.")
+                return 2
+            box.remove()
+            return 0
+    except agentbox.BoxError as e:
+        print(f"agent-box: {e}", file=sys.stderr)
+        return 1
+    for line in failed:
+        print(f"NOT LOCKED DOWN: {line}")
+    if failed:
+        return 1
+    print(f"The agent box holds. Inside it, as {agentbox.AGENT}, the token is in {agentbox.TOKEN_PATH}.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     from overshoulder.server import DEFAULT_PORT
 
@@ -406,6 +436,13 @@ def main(argv: list[str] | None = None) -> int:
     wt.add_argument("--timeout", type=float, default=None, help="seconds (capped by settings)")
     au = sub.add_parser("autostart", help="start the gateway and watchdog at login (scheduled tasks)")
     au.add_argument("action", choices=["install", "uninstall", "status"])
+    ab = sub.add_parser("agent-box", help="a locked-down WSL distro for an agent that has a shell")
+    absub = ab.add_subparsers(dest="bcmd", required=True)
+    abc = absub.add_parser("create", help="build the box, or repair it (download, lock down, token, firewall)")
+    abc.add_argument("--no-firewall", action="store_true", help="skip the firewall rule (it needs UAC)")
+    absub.add_parser("check", help="say whether the box's lock-down holds")
+    abr = absub.add_parser("remove", help="delete the box, its client and its firewall rules")
+    abr.add_argument("--yes", action="store_true", help="needed: everything in the distro is deleted")
     an = sub.add_parser("annotate", help="edit the annotation layer of a recording or a screenshot")
     an.add_argument("target", help="recording directory or image file")
     asub = an.add_subparsers(dest="acmd", required=True)
@@ -549,6 +586,8 @@ def main(argv: list[str] | None = None) -> int:
         fn = {"install": autostart.install, "uninstall": autostart.uninstall, "status": autostart.status}
         print(json.dumps(fn[a.action](), indent=2))
         return 0
+    if a.cmd == "agent-box":
+        return _agent_box(a)
     if a.cmd == "annotate":
         return _annotate(a)
     if a.cmd == "profile":
