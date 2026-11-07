@@ -260,8 +260,9 @@ refusal is logged.
 - **Password fields are painted black** in every picture: screenshots, recordings, the text OCR reads,
   what goes to the vision model, approval pictures and the screenshot sent to your phone. A window
   scope whose controls can't be read for password fields is not captured at all; on a screen scope
-  such a window is painted black whole. Recordings look for fields again every 0.3 s, so a field that
-  moves can show for that long.
+  such a window is painted black whole. Recordings look for fields every 0.3 s and hold each frame
+  until the next look; a frame taken while a field moved, appeared or went away is painted black
+  whole. A frame no look reaches within 3 s stops the recording.
 - **Clients made before window scopes asked by default.** A client that got `window="allow"` from the
   old default asks again before window scopes. `overshoulder client list` marks it; to give it back on
   purpose, keeping the token:

@@ -32,9 +32,25 @@ from overshoulder.driver import windows as w
 from overshoulder.driver.windows import Rect
 from overshoulder.gateway.limits import black_out, capture_rects
 
-# How often a recording looks again for password fields and denied windows to black out. Reading them
-# takes too long to do for every frame; a field that moves shows unhidden for at most this long.
+# How often a recording looks again for password fields and denied windows to black out. A look takes too
+# long to run for every frame, so each frame is held until a look that began after it was grabbed has
+# finished, and is blacked out with what that look and the one before the frame found (held_rects).
 HIDE_REFRESH_S = 0.3
+# A frame held longer than this, because a look hangs on a frozen app, stops the recording.
+HOLD_MAX_S = 3.0
+
+
+def held_rects(before: list[Rect], after: list[Rect], area: Rect) -> list[Rect]:
+    """What to black out in a frame grabbed after look `before` finished and before look `after` began.
+
+    The same rects in both: nothing moved. Otherwise a field moved, came or went between the looks, and it
+    may have been anywhere in the frame meanwhile (a field that turns back is past both places it was
+    seen), so the whole frame is blacked out.
+    """
+    if set(before) == set(after):
+        return list(after)
+    return [area]
+
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
@@ -150,19 +166,32 @@ class Recording:
         self._proc: subprocess.Popen | None = None
         self.frames = 0
         self.error: str | None = None
-        self._hide: list[Rect] = []
+        # Looks for what to black out, (began, ended, rects) oldest first; and frames grabbed but not yet
+        # blacked out and sent to the encoder, oldest first. Times are perf_counter: on Windows monotonic()
+        # moves in 15.6 ms steps, so a look and a frame would often share a time.
+        self._looks: list[tuple[float, float, list[Rect]]] = []
+        self._held: list[dict] = []
+        self._lock = threading.Lock()
+        self._track = None
         self._hide_error: str | None = None
+
+    def _look(self) -> None:
+        began = time.perf_counter()
+        rects = capture_rects(self.scope)
+        with self._lock:
+            self._looks.append((began, time.perf_counter(), rects))
+            del self._looks[:-64]
 
     def _refresh_hidden(self) -> None:
         while not self._stop.wait(HIDE_REFRESH_S):
             try:
-                self._hide = capture_rects(self.scope)
+                self._look()
             except Exception as e:  # can't tell where password fields are: stop rather than show them
                 self._hide_error = f"stopped: {e}"
                 return
 
     def start(self) -> None:
-        self._hide = capture_rects(self.scope)  # refuses the recording if password fields can't be checked
+        self._look()  # refuses the recording if password fields can't be checked
         self.dir.mkdir(parents=True, exist_ok=True)
         b = self.scope.bounds()
         self.size = (b.width // 2 * 2, b.height // 2 * 2)
@@ -175,6 +204,7 @@ class Recording:
              "-s", f"{self.size[0]}x{self.size[1]}", "-r", str(self.fps), "-i", "-", "-c:v", "libx264",
              "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", str(self.dir / "video.mp4")],
             stdin=subprocess.PIPE, creationflags=NO_WINDOW)
+        self._track = open(self.dir / "frames.jsonl", "w", encoding="utf-8")
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
         threading.Thread(target=self._refresh_hidden, daemon=True, name="overshoulder-record-hide").start()
@@ -191,62 +221,98 @@ class Recording:
                 grabber.close()
 
     def _frames(self, period: float, t0: float, grabber) -> None:
-        with open(self.dir / "frames.jsonl", "w", encoding="utf-8") as track:
-            i = 0
-            while not self._stop.is_set():
-                if not self.alive():
-                    self.error = "lease ended"
-                    break
-                if self._hide_error:
-                    self.error = self._hide_error
-                    break
-                due = t0 + i * period
-                now = time.time()
-                if now < due:
-                    time.sleep(due - now)
-                try:
-                    b = self.scope.bounds()
-                except Exception as e:  # scope went stale: stop recording, keep what we have
-                    self.error = f"scope ended: {e}"
-                    break
-                wrote = self._write_window_frame(b) if grabber is None else self._write_screen_frame(grabber)
-                if not wrote:
-                    i += 1
-                    continue
-                track.write(json.dumps({"i": i, "t": round(time.time() - t0, 3),
-                                        "bounds": [b.left, b.top, b.right, b.bottom],
-                                        "cursor": list(cursor_pos())}) + "\n")
-                self.frames += 1
-                i += 1
+        i = 0
+        while not self._stop.is_set():
+            if not self.alive():
+                self.error = "lease ended"
+                break
+            if self._hide_error:
+                self.error = self._hide_error
+                break
+            due = t0 + i * period
+            now = time.time()
+            if now < due:
+                time.sleep(due - now)
+            try:
+                b = self.scope.bounds()
+            except Exception as e:  # scope went stale: stop recording, keep what we have
+                self.error = f"scope ended: {e}"
+                break
+            row = {"i": i, "t": round(time.time() - t0, 3), "bounds": [b.left, b.top, b.right, b.bottom],
+                   "cursor": list(cursor_pos())}
+            if grabber is None:
+                self._write_window_frame(b, row)
+            else:
+                self._write_screen_frame(grabber, row)
+            i += 1
+            if not self._flush():
+                break
 
-    def _write_window_frame(self, inner: Rect) -> bool:
-        from PIL import Image
+    def _hold(self, began: float, kind: str, data: bytes, size: tuple[int, int], area: Rect,
+              row: dict | None) -> bool:
+        with self._lock:
+            # The last look that had finished before the grab began.
+            before = next((r for _, ended, r in reversed(self._looks) if ended < began), self._looks[0][2])
+        self._held.append({"ended": time.perf_counter(), "before": before, "kind": kind, "data": data,
+                           "size": size, "area": area, "row": row})
+        return True
+
+    def _write_window_frame(self, inner: Rect, row: dict | None = None) -> bool:
+        """Grab the window and hold the frame until it can be blacked out (_flush)."""
+        began = time.perf_counter()
         got = print_window_bgra(self.scope.binding.hwnd)
         if got is None:
             return False
         raw, outer = got
         shown = inner.intersect(outer)
         data, width, height = crop_bgra(raw, outer, shown)
-        if self._hide:
-            img = Image.frombuffer("RGBA", (width, height), data, "raw", "BGRA", 0, 1).copy()
-            data = black_out(img, shown, self._hide).tobytes("raw", "BGRA")
-        if (width, height) != self.size:
-            img = Image.frombuffer("RGBA", (width, height), data, "raw", "BGRA", 0, 1)
-            canvas = Image.new("RGBA", self.size, (0, 0, 0, 255))
-            canvas.paste(img.crop((0, 0, min(width, self.size[0]), min(height, self.size[1]))), (0, 0))
-            data = canvas.tobytes("raw", "BGRA")
-        return self._feed(data)
+        return self._hold(began, "window", data, (width, height), shown, row)
 
-    def _write_screen_frame(self, grabber) -> bool:
-        """The monitor rect, with denied programs' windows painted black (gateway.limits)."""
+    def _write_screen_frame(self, grabber, row: dict | None = None) -> bool:
+        """Grab the monitor rect and hold the frame until it can be blacked out (_flush)."""
+        began = time.perf_counter()
         o = self._origin
         shot = grabber.grab({"left": o.left, "top": o.top, "width": o.width, "height": o.height})
-        rects = self._hide
-        if not rects:
-            return self._feed(shot.rgb)
+        return self._hold(began, "screen", shot.rgb, tuple(shot.size), o, row)
+
+    def _flush(self) -> bool:
+        """Black out and send every held frame that a look began after; False once the recording must stop."""
+        while self._held:
+            f = self._held[0]
+            with self._lock:
+                after = next((r for began, _, r in self._looks if began > f["ended"]), None)
+            if after is None:
+                if time.perf_counter() - f["ended"] > HOLD_MAX_S:
+                    self.error = "stopped: password fields were not checked in time"
+                    self._held.clear()
+                    return False
+                return True
+            self._held.pop(0)
+            if not self._send(f, held_rects(f["before"], after, f["area"])):
+                return False
+        return True
+
+    def _send(self, f: dict, rects: list[Rect]) -> bool:
         from PIL import Image
-        img = black_out(Image.frombytes("RGB", shot.size, shot.rgb), o, rects)
-        return self._feed(img.tobytes())
+        width, height = f["size"]
+        if f["kind"] == "screen":
+            data = f["data"]
+            if rects:
+                data = black_out(Image.frombytes("RGB", f["size"], data), f["area"], rects).tobytes()
+        else:
+            img = Image.frombuffer("RGBA", (width, height), f["data"], "raw", "BGRA", 0, 1).copy()
+            black_out(img, f["area"], rects)
+            if (width, height) != self.size:
+                canvas = Image.new("RGBA", self.size, (0, 0, 0, 255))
+                canvas.paste(img.crop((0, 0, min(width, self.size[0]), min(height, self.size[1]))), (0, 0))
+                img = canvas
+            data = img.tobytes("raw", "BGRA")
+        if not self._feed(data):
+            return False
+        if self._track is not None and f["row"] is not None:
+            self._track.write(json.dumps(f["row"]) + "\n")
+        self.frames += 1
+        return True
 
     def _feed(self, data: bytes) -> bool:
         try:
@@ -261,6 +327,15 @@ class Recording:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=10)
+        if self._held:  # the last frames need one more look before they can go out
+            try:
+                self._look()
+                self._flush()
+            except Exception as e:
+                self.error = self.error or f"stopped: {e}"
+            self._held.clear()
+        if self._track is not None:
+            self._track.close()
         if self._proc:
             try:
                 self._proc.stdin.close()

@@ -1,6 +1,7 @@
 """Narrowing: the caller's own limits from take_scope and the person's standing limits per client."""
 
 import sys
+import time
 import types
 
 import pytest
@@ -264,10 +265,13 @@ def test_screen_recording_frames_are_blacked_out_before_the_encoder(tmp_path):
 
     from overshoulder.gateway.limits import capture_rects
     rec = Recording(Hiding(), tmp_path)
-    rec._hide = capture_rects(rec.scope)  # what start() and the refresher keep up to date
+    rec._looks = [(0.0, 0.0, capture_rects(rec.scope))]  # what start() and the refresher keep up to date
     rec._origin = Rect(0, 0, 4, 2)
     rec._proc = type("P", (), {"stdin": Pipe()})()
     assert rec._write_screen_frame(Grabber())
+    assert rec._flush() and rec._proc.stdin.data == b""  # held until a look begins after the grab
+    rec._looks.append((time.perf_counter() + 1, time.perf_counter() + 1, capture_rects(rec.scope)))
+    assert rec._flush()
     px = [rec._proc.stdin.data[i:i + 3] for i in range(0, 24, 3)]
     assert px == [b"\0\0\0", b"\0\0\0", b"\xff\xff\xff", b"\xff\xff\xff"] * 2
 
