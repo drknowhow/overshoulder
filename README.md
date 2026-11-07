@@ -295,7 +295,9 @@ no `sudo` and root is locked, the Windows clipboard and other distros' services 
 goes into the distro at `/home/agent/.overshoulder/token`. A UAC prompt asks to let the gateway's
 Python through the Windows firewall from WSL. Finally it checks each part of the lock-down from inside.
 Run it again to repair the box; `overshoulder agent-box check` checks it, and `overshoulder agent-box
-remove --yes` deletes it. Then start the gateway with:
+remove --yes` deletes it. The gateway also checks the box when it starts and once a day, including
+that the network filter still refuses the agent's private and loopback connections, and shows the
+result on the settings page and in `overshoulder status`. Then start the gateway with:
 
 ```powershell
 overshoulder serve --listen-wsl
@@ -306,9 +308,9 @@ page and the operator routes stay on `127.0.0.1`. The agent finds the gateway at
 port 47621.
 
 All WSL2 distros share one VM, kernel and network. Root in another distro, or Docker rewriting
-iptables, can remove the box's network filter, so run `agent-box check` after such changes; give an
-agent in another distro no token. `/mnt/wsl` is shared between distros, so the agent can read what other
-distros put there.
+iptables, can remove the box's network filter until the box restarts; the daily check catches that.
+Give an agent in another distro no token. `/mnt/wsl` is shared between distros, so the agent can read
+what other distros put there.
 
 ## Working beside you
 
