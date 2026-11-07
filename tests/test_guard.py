@@ -183,7 +183,15 @@ def test_the_settings_page_asks_on_screen_before_widening(daemon):  # noqa: F811
     d, port, _ = daemon
     d.port_ref["port"] = port
     asked = []
-    g = d.start_config_guard(ask=lambda req: asked.append(req["reason"]) or False, poll_s=60)
+
+    def ask(req):  # yes to the first start's question about the files as they are, no to the page
+        if "no saved copy" in req["reason"]:
+            return True
+        asked.append(req["reason"])
+        return False
+
+    g = d.start_config_guard(ask=ask, poll_s=60)
+    g.wait(5)
     try:
         base = f"http://127.0.0.1:{port}"
         _, _, body = _http("POST", f"{base}/operator/settings_link", b"{}",
@@ -201,4 +209,95 @@ def test_the_settings_page_asks_on_screen_before_widening(daemon):  # noqa: F811
         assert asked and "input mode" in asked[0] and st.load_or_default().input_mode == before
         assert g.check() == []
     finally:
+        d.stop()
+
+
+# -- across restarts ----------------------------------------------------------------------------
+
+def saved_guard(tmp_path, ev, **files):
+    paths = {}
+    for name in ("settings", "phone", "clients"):
+        p = tmp_path / f"{name}.json"
+        if name in files:
+            p.write_text(json.dumps(files[name]), encoding="utf-8")
+        paths[name] = p
+    return ConfigGuard(paths, ev.ask, ev.paused.append, lambda r: ev.resumed.append(r) or True,
+                       lambda e, **kw: ev.logged.append((e, kw)), saved=tmp_path / "accepted-config.json")
+
+
+def test_a_change_made_while_the_gateway_was_stopped_is_asked_about_when_it_starts(tmp_path):
+    old = {"clients": [_client("a")]}
+    ev = Events(answer=True)
+    g = saved_guard(tmp_path, ev, clients=old)
+    g.check()
+    g.wait(5)  # the first start asks once about the files as they are
+    assert len(ev.asked) == 1 and (tmp_path / "accepted-config.json").exists()
+
+    # Stopped; a program adds a client; started again.
+    path = tmp_path / "clients.json"
+    path.write_text(json.dumps({"clients": old["clients"] + [_client("intruder")]}), encoding="utf-8")
+    ev = Events(answer=False)
+    g = saved_guard(tmp_path, ev)
+    assert g.check() and ev.paused == [CONFIG_PAUSE]
+    g.wait(5)
+    assert "intruder" in ev.asked[0]["reason"] and "no saved copy" not in ev.asked[0]["reason"]
+    assert json.loads(path.read_text(encoding="utf-8")) == old
+
+    # Started again with nothing changed: no question.
+    ev = Events()
+    assert saved_guard(tmp_path, ev).check() == [] and ev.asked == []
+
+
+def test_what_the_person_accepts_or_narrows_is_kept_for_the_next_start(tmp_path):
+    ev = Events(answer=True)
+    g = saved_guard(tmp_path, ev, settings={"input_mode": "never"})
+    assert g.check() == [] and ev.asked == []  # narrower than the defaults: nothing to ask
+    path = tmp_path / "settings.json"
+    assert g.propose("settings", {"input_mode": "full"},
+                     lambda: path.write_text('{"input_mode": "full"}', encoding="utf-8")) is None
+    ev = Events(answer=False)
+    assert saved_guard(tmp_path, ev).check() == [] and ev.asked == []
+
+
+def test_with_no_saved_copy_everything_past_the_defaults_is_asked_and_a_no_sets_files_aside(tmp_path):
+    ev = Events(answer=False)
+    g = saved_guard(tmp_path, ev, clients={"clients": [_client("a")]}, settings={"input_mode": "full"})
+    reasons = g.check()
+    g.wait(5)
+    assert "no saved copy" in reasons[0]
+    assert any("'a'" in r for r in reasons) and any("input mode" in r for r in reasons)
+    assert not (tmp_path / "clients.json").exists() and (tmp_path / "clients.json.refused").exists()
+    assert ev.resumed == [CONFIG_PAUSE]
+    ev = Events()
+    assert saved_guard(tmp_path, ev).check() == [] and ev.asked == []
+
+
+def test_a_removed_or_broken_saved_copy_counts_as_none(tmp_path):
+    ev = Events(answer=True)
+    g = saved_guard(tmp_path, ev, clients={"clients": [_client("a")]})
+    g.check()
+    g.wait(5)
+    for broken in ("", "{not json", '{"files": {"clients": "%%%"}}', '{"v": 1}'):
+        (tmp_path / "accepted-config.json").write_text(broken, encoding="utf-8")
+        ev = Events(answer=True)
+        assert "no saved copy" in saved_guard(tmp_path, ev).check()[0]
+    (tmp_path / "accepted-config.json").unlink()
+    ev = Events(answer=True)
+    assert "no saved copy" in saved_guard(tmp_path, ev).check()[0]
+
+
+def test_the_daemon_pauses_agents_at_start_for_a_client_added_while_it_was_stopped(daemon):  # noqa: F811
+    d, _, _ = daemon
+    gate = threading.Event()
+
+    def ask(req):
+        gate.wait(5)
+        return False
+
+    d.start_config_guard(ask=ask, poll_s=60)  # mcp-test was added before any copy was saved
+    try:
+        assert d.gw.status()["paused"]
+    finally:
+        gate.set()
+        d.gw.config_guard.wait(5)
         d.stop()

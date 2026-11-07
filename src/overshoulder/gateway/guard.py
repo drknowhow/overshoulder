@@ -10,13 +10,20 @@ the files with it before each use.
   it; No (or no answer) puts the accepted version back.
 - The settings page goes through propose(), which asks before it writes.
 
-This catches mistakes and a program that edits the files while the gateway runs. It does not stop one
-that can also stop the gateway, change the files, and start it again: the accepted version lives only in
-the gateway's memory.
+The accepted versions are also saved to a file (`saved`), and a gateway that starts compares the files
+with that copy, so stopping the gateway, changing the files and starting it again is asked about too. With
+no saved copy (the first start of this version, or the copy was removed) the defaults count as accepted:
+the person is asked about everything wider than them, and a No sets the files aside as `<name>.refused`.
+
+A program that runs as the person can still rewrite the saved copy along with the files, or Overshoulder
+itself; that needs Overshoulder installed where the person's own programs can't write (README, "What this
+does not protect against").
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import threading
 from collections.abc import Callable
@@ -140,25 +147,54 @@ def _read(path: Path) -> bytes | None:
 
 
 def _write(path: Path, raw: bytes | None) -> None:
-    if raw is None:
-        path.unlink(missing_ok=True)
+    if raw is None:  # set aside, not deleted: with no saved copy this may be the person's own file
+        if path.exists():
+            path.replace(path.with_name(path.name + ".refused"))
         return
     tmp = path.with_suffix(".restore")
     tmp.write_bytes(raw)
     tmp.replace(path)
 
 
+def _load_saved(path: Path, names) -> dict[str, bytes | None] | None:
+    """The accepted versions saved by an earlier gateway, or None when there is no readable copy."""
+    try:
+        files = json.loads(path.read_text(encoding="utf-8"))["files"]
+        return {n: None if files[n] is None else base64.b64decode(files[n], validate=True) for n in names}
+    except (OSError, ValueError, KeyError, TypeError, binascii.Error):
+        return None
+
+
 class ConfigGuard:
     """files: name ("settings" | "phone" | "clients") -> path. ask(request) -> bool asks the person at the
-    desk only. pause(reason) and resume(only_if) are the gateway's; log(event, **fields) its action log."""
+    desk only. pause(reason) and resume(only_if) are the gateway's; log(event, **fields) its action log.
+    saved: where the accepted versions are kept between runs. Without it the files as they are now count
+    as accepted (tests)."""
 
     def __init__(self, files: dict[str, Path], ask: Callable[[dict], bool], pause: Callable[[str], None],
-                 resume: Callable[[str], bool], log: Callable[..., None] = lambda *a, **k: None):
+                 resume: Callable[[str], bool], log: Callable[..., None] = lambda *a, **k: None,
+                 saved: Path | None = None):
         self.files = dict(files)
         self._ask, self._pause, self._resume, self._log = ask, pause, resume, log
         self._lock = threading.Lock()
-        self._accepted = {name: _read(p) for name, p in self.files.items()}
+        self.saved = saved
+        self._unsaved = False  # no saved copy was found: the defaults stand in for what was accepted
+        if saved is None:
+            self._accepted = {name: _read(p) for name, p in self.files.items()}
+        else:
+            got = _load_saved(saved, self.files)
+            self._unsaved = got is None
+            self._accepted = got or {name: None for name in self.files}
         self._asking: threading.Thread | None = None
+
+    def _save(self) -> None:
+        if self.saved is None:
+            return
+        files = {n: None if raw is None else base64.b64encode(raw).decode("ascii")
+                 for n, raw in self._accepted.items()}
+        tmp = self.saved.with_name(self.saved.name + ".tmp")
+        tmp.write_text(json.dumps({"v": 1, "files": files}, indent=1), encoding="utf-8")
+        tmp.replace(self.saved)
 
     def asking(self) -> bool:
         return self._asking is not None and self._asking.is_alive()
@@ -170,6 +206,7 @@ class ConfigGuard:
             if self.asking():
                 return ["a question about changed settings is still open"]
             changed = {}
+            narrowed = False
             for name, path in self.files.items():
                 now = _read(path)
                 if now == self._accepted[name]:
@@ -180,9 +217,16 @@ class ConfigGuard:
                 else:
                     self._accepted[name] = now
                     self._log("config_accepted", file=name, widened=False)
+                    narrowed = True
             if not changed:
+                if narrowed or self._unsaved or (self.saved is not None and not self.saved.exists()):
+                    self._unsaved = False
+                    self._save()
                 return []
             reasons = [r for _, why in changed.values() for r in why]
+            if self._unsaved:
+                reasons.insert(0, "no saved copy of the settings you last accepted was found (first start of"
+                                  " this version, or it was removed), so they are compared with the defaults")
             self._pause(CONFIG_PAUSE)
             self._asking = threading.Thread(target=self._decide, args=(changed, reasons), daemon=True,
                                             name="overshoulder-config-question")
@@ -203,6 +247,8 @@ class ConfigGuard:
                 else:
                     _write(self.files[name], self._accepted[name])
                 self._log("config_accepted" if yes else "config_restored", file=name, widened=True, why=why)
+            self._unsaved = False
+            self._save()
         self._resume(CONFIG_PAUSE)
 
     def wait(self, timeout: float | None = None) -> None:
@@ -228,5 +274,6 @@ class ConfigGuard:
         with self._lock:
             write()
             self._accepted[name] = _read(self.files[name])
+            self._save()
             self._log("config_accepted", file=name, widened=bool(why), why=why)
         return None
