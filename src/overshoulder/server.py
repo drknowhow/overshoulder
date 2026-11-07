@@ -123,8 +123,10 @@ class Daemon:
         st.load_or_default()  # records the settings as they are as the last good ones
         phone.load()  # makes the phone secrets now, so making them later is not a change
         g = ConfigGuard({"settings": st.settings_path(), "phone": phone.phone_path(), "clients": gw.registry.path},
-                        ask or MessageBoxApprover().approve, gw.pause, lambda r: gw.resume(only_if=r), gw.log.write)
+                        ask or MessageBoxApprover().approve, gw.pause, lambda r: gw.resume(only_if=r), gw.log.write,
+                        saved=gw.registry.path.parent / "accepted-config.json")
         gw.config_guard = g
+        g.check()  # changes made while the gateway was stopped pause agents before any of them can act
 
         def watch():
             # Agents are paused within a poll even when none is acting, and the person is asked at once.

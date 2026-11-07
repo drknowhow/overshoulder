@@ -245,13 +245,16 @@ refusal is logged.
   operator key can't lift a panic by itself.
   The watchdog is a separate process, so agents can't stop it. It outlines the active scope and
   shows the agent's own blue pointer where it last acted; neither appears in recordings.
-- **Settings that give agents more.** While the gateway runs it keeps the settings, phone and client
-  files as you last accepted them. A change that gives agents more (a new client or token, a looser
-  grant or limit, a higher input mode, a new phone channel or destination, vision switched on) pauses
-  every agent and asks you in a box on screen, whether it came from the settings page, `overshoulder
-  client add` or another program. No, or no answer, puts the old file back. A change that only takes
-  something away is kept without asking. This doesn't help against a program that can also restart the
-  gateway.
+- **Settings that give agents more.** The gateway keeps the settings, phone and client files as you
+  last accepted them, in memory and in `accepted-config.json`. A change that gives agents more (a new
+  client or token, a looser grant or limit, a higher input mode, a new phone channel or destination,
+  vision switched on) pauses every agent and asks you in a box on screen, whether it came from the
+  settings page, `overshoulder client add` or another program. No, or no answer, puts the old file back.
+  A change that only takes something away is kept without asking. The gateway compares the files with
+  the saved copy when it starts, so a change made while it was stopped is asked about too.
+- **The first start without a saved copy** (after updating to this version, or if the copy was
+  removed) compares the files with the defaults and asks once about everything past them, such as
+  every client. No sets those files aside as `<name>.refused` instead of deleting them.
 - **Logs.** Every action goes to a JSONL file in `%LOCALAPPDATA%\Overshoulder\logs`. Typed text is
   recorded only as its length, unless the agent took the scope with `log_text=true` (needed for
   tutorial captions).
@@ -274,9 +277,9 @@ refusal is logged.
 ### What this does not protect against
 
 The gateway guards one path to the desktop: its MCP tools. An agent that also has a shell running as
-you, as Claude Code or Codex do, has others. It can read Overshoulder's files, edit the settings while
-the gateway is stopped, end the watchdog, or send input without the gateway. The checks above don't
-stop that. To keep such an agent out, run it in a separate WSL distro with Windows interop and drive
+you, as Claude Code or Codex do, has others. It can read Overshoulder's files, rewrite the settings
+together with the saved copy of what you accepted, change Overshoulder's own code, end the watchdog, or
+send input without the gateway. The checks above don't stop that. To keep such an agent out, run it in a separate WSL distro with Windows interop and drive
 mounting turned off (`[interop] enabled=false` and `[automount] enabled=false` in its `/etc/wsl.conf`),
 under a user without `sudo`, and give it only its client token. Then start the gateway with:
 

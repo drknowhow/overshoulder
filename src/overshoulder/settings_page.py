@@ -277,7 +277,10 @@ def _client_lines(registry) -> list[str]:
     from overshoulder.gateway.limits import Limits
     out = []
     for name in registry.names():
-        lim = Limits.from_dict(registry.get(name).limits)
+        client = registry.get(name)
+        if client is None:  # removed since names() was read
+            continue
+        lim = Limits.from_dict(client.limits)
         out.append(f"{name}: {lim.describe()}" if lim else name)
     return out
 
