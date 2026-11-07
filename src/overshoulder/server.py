@@ -110,6 +110,8 @@ class Daemon:
         self._desk = threading.Lock()
         self.operator_key = ensure_operator_key()
         self._stop = threading.Event()
+        from overshoulder.agentbox import Watch
+        self.box_watch = Watch(log=self.gw.log.write)
 
     def start_config_guard(self, ask=None, poll_s: float = 2.0):
         """Keep the settings, phone and client files as the person has them now, and from here on ask on
@@ -465,7 +467,8 @@ class Daemon:
         async def op_status(request: Request):
             if not operator_ok(request):
                 return JSONResponse({"error": "forbidden"}, status_code=403)
-            return JSONResponse(d.gw.status())
+            # For the person only: the agent's own status tool doesn't carry it.
+            return JSONResponse({**d.gw.status(), "agent_box": d.box_watch.status()})
 
         @mcp.custom_route("/operator/{verb}", methods=["POST"])
         async def op_verb(request: Request):
@@ -508,7 +511,8 @@ class Daemon:
             return JSONResponse({"ok": True, "status": d.gw.status()})
 
         settings_routes(mcp, d.port_ref, d.settings_sessions, d.gw.registry, str(default_home() / "logs"),
-                        profiles=d.gw.profiles, cat=d.svc.catalog, config_guard=lambda: d.gw.config_guard)
+                        profiles=d.gw.profiles, cat=d.svc.catalog, config_guard=lambda: d.gw.config_guard,
+                        agent_box=d.box_watch.status)
         return mcp
 
 
@@ -573,6 +577,7 @@ def serve(port: int = DEFAULT_PORT, listen_wsl: bool = False) -> None:
     quiet_status_polls()  # on the logger, which uvicorn's own logging setup leaves in place
     daemon = Daemon(port=port)
     daemon.start_config_guard()
+    daemon.box_watch.start(daemon._stop)  # at start, then daily
     mcp = daemon.build()
     from overshoulder.catalog import start_weekly_check
     start_weekly_check(daemon.svc.catalog, daemon.gw.settings_source)  # does nothing while the setting is off

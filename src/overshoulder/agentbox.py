@@ -31,6 +31,8 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -137,6 +139,16 @@ CHECKS = {
     "egress filter": ("root", "iptables -C OUTPUT -m owner --uid-owner {uid} -j AGENT_OUT 2>/dev/null && "
                       "ip6tables -C OUTPUT -m owner --uid-owner {uid} -j AGENT_OUT 2>/dev/null && echo ok",
                       "the egress filter for uid {uid} is not in place"),
+    "no WSLg": ("agent", "[ ! -S /tmp/.X11-unix/X0 ] && ! ls /mnt/wslg/runtime-dir >/dev/null 2>&1 && echo ok",
+                "the agent can reach WSLg (the Windows clipboard, Wayland or PulseAudio)"),
+    # The rule above being there is not enough: its rules may have been flushed. This has the agent try a
+    # private and a loopback address and reads the filter's own counters to see that it refused both.
+    "network filter": ("root", "iptables -Z AGENT_OUT && su -s /bin/bash {user} -c 'timeout 3 bash -c "
+                       "\"</dev/tcp/10.255.255.1/9\" 2>/dev/null; timeout 3 bash -c \"</dev/tcp/127.0.0.1/9\" "
+                       "2>/dev/null'; [ \"$(iptables -L AGENT_OUT -v -x -n | awk '$3==\"REJECT\" && "
+                       "($9==\"10.0.0.0/8\" || $9==\"127.0.0.0/8\") && $1>0' | wc -l)\" = 2 ] && "
+                       "iptables -S AGENT_OUT | grep -q -- \"--dport $(cat " + PORT_PATH + ") -j ACCEPT\" && echo ok",
+                       "the network filter does not refuse the agent's private and loopback connections"),
     "token": ("agent", f"[ -r {TOKEN_PATH} ] && [ \"$(stat -c %a {TOKEN_PATH})\" = 600 ] && echo ok",
               "the client token is missing or readable by others"),
 }
@@ -236,8 +248,8 @@ class Box:
         for name, (user, cmd, why) in CHECKS.items():
             who = ("-u", user) if user else ()
             # On stdin, so Windows' command-line quoting never touches the script.
-            out = self._wsl("-d", DISTRO, *who, "--", "sh", "-s", input=cmd.format(uid=AGENT_UID).encode(),
-                            check=False)
+            script = cmd.format(uid=AGENT_UID, user=AGENT)
+            out = self._wsl("-d", DISTRO, *who, "--", "sh", "-s", input=script.encode(), check=False)
             if out.strip() != "ok":
                 failed.append(f"{name}: {why.format(uid=AGENT_UID)}")
         return failed
@@ -337,3 +349,67 @@ def _download(url: str, to: Path) -> None:
 
 def default_home() -> Path:
     return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "OvershoulderAgentWSL"
+
+
+DAY_S = 24 * 3600
+
+
+class Watch:
+    """Checks the box when the gateway starts and once a day, and keeps the last result for the person
+    (the operator status and the settings page). Root in another distro, or Docker rewriting iptables,
+    can undo the network filter while the box runs; this is how the person finds out."""
+
+    def __init__(self, box: Callable[[], Box] | None = None, log: Callable[..., None] = lambda *a, **k: None,
+                 every_s: float = DAY_S):
+        # check() needs no client registry, so the box gets none
+        self._box = box or (lambda: Box(say=lambda s: None, registry=False))
+        self._log, self.every_s = log, every_s
+        self._result: dict | None = None
+        self._lock = threading.Lock()
+
+    def run_once(self) -> dict:
+        b = self._box()
+        try:
+            if not b.exists():
+                result = {"exists": False}
+            else:
+                failed = b.check()
+                result = {"exists": True, "ok": not failed, "failed": failed}
+        except Exception as e:  # wsl.exe missing or broken: say so, don't stop the gateway
+            result = {"exists": None, "ok": False, "failed": [f"the check could not run: {e}"]}
+        result["at"] = time.time()
+        with self._lock:
+            self._result = result
+        if result["exists"] is not False:
+            self._log("agent_box_check", ok=result["ok"], failed=result["failed"])
+        return result
+
+    def start(self, stop: threading.Event) -> threading.Thread:
+        def loop():
+            self.run_once()
+            while not stop.wait(self.every_s):
+                self.run_once()
+        t = threading.Thread(target=loop, name="overshoulder-agent-box-check", daemon=True)
+        t.start()
+        return t
+
+    def status(self) -> dict | None:
+        """The last result with its age in seconds; None before the first check finished."""
+        with self._lock:
+            r = dict(self._result) if self._result else None
+        if r:
+            r["age_s"] = round(time.time() - r.pop("at"))
+        return r
+
+
+def describe(r: dict | None) -> str:
+    """One line for a person about the last check."""
+    if r is None:
+        return "The agent box has not been checked yet."
+    if r["exists"] is False:
+        return "There is no agent box (overshoulder agent-box create makes one)."
+    age = r.get("age_s", 0)
+    when = f"{age // 3600} h ago" if age >= 3600 else f"{age // 60} min ago"
+    if r["ok"]:
+        return f"The agent box held at the last check ({when})."
+    return f"THE AGENT BOX IS NOT LOCKED DOWN (checked {when}): " + "; ".join(r["failed"])

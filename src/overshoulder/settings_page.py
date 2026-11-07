@@ -268,6 +268,7 @@ PAGE = """<!doctype html>
     <li>While you use your mouse or keyboard, agents keep to background work, and anything that needs your
       input waits until you have been idle. Touching them during such an action stops it.</li>
     <li>Action log: <code>{logs}</code></li>
+    <li>{agent_box}</li>
   </ul>
 </section>
 </main></body></html>"""
@@ -384,9 +385,16 @@ def _find_section(find: dict | None, form_token: str) -> str:
 </section>"""
 
 
+def _agent_box_line(r: dict | None) -> str:
+    from overshoulder.agentbox import describe
+    text = html.escape(describe(r))
+    return f'<b style="color:#b91c1c">{text}</b>' if r and r.get("exists") is not False and not r.get("ok") else text
+
+
 def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, saved: bool,
                 ph: phone.PhoneSettings | None = None, phone_test: dict | None = None,
-                profiles: list[dict] | None = None, message: str = "", find: dict | None = None) -> str:
+                profiles: list[dict] | None = None, message: str = "", find: dict | None = None,
+                agent_box: dict | None = None) -> str:
     ph = ph or phone.PhoneSettings().ensure_secrets()
     kinds = "\n".join(
         f'<label class="row"><input type="checkbox" name="kind_{k}" {"checked" if k in s.wait_kinds else ""}>'
@@ -430,6 +438,7 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
         beep_on_detect="checked" if s.beep_on_detect else "",
         clients="".join(f"<li>{html.escape(c)}</li>" for c in clients) or "<li>none yet</li>",
         logs=html.escape(logs),
+        agent_box=_agent_box_line(agent_box),
         ntfy_enabled="checked" if ph.ntfy_enabled else "",
         ntfy_server=html.escape(ph.ntfy_server),
         ntfy_topic=_hidden_secret(ph.ntfy_topic),
@@ -621,7 +630,8 @@ def render_publish(d: publish.Draft, error: str, form_token: str) -> str:
 
 
 def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
-           phone_tester=None, profiles=None, cat: catalog.Catalog | None = None, config_guard=None) -> None:
+           phone_tester=None, profiles=None, cat: catalog.Catalog | None = None, config_guard=None,
+           agent_box=None) -> None:
     """Attach /settings handlers to an MCPServer. port_ref["port"] is filled in at serve time. cat is the
     registry's catalog for Find profiles; only its Load and Preview buttons go online. config_guard()
     returns the gateway's ConfigGuard (or None), which asks on screen before a save that widens access."""
@@ -665,7 +675,8 @@ def routes(mcp, port_ref: dict, sessions: Sessions, registry, logs_dir: str,
                                         saved=q.get("saved") == "1", ph=phone.load(),
                                         phone_test=last_test.get("result"),
                                         profiles=profiles.list() if profiles is not None else [], message=msg,
-                                        find=find_state(q.get("q", ""))))
+                                        find=find_state(q.get("q", "")),
+                                        agent_box=agent_box() if agent_box else None))
 
     @mcp.custom_route("/settings", methods=["POST"])
     async def settings_post(request: Request):
