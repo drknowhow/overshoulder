@@ -166,8 +166,9 @@ class Recording:
         self._proc: subprocess.Popen | None = None
         self.frames = 0
         self.error: str | None = None
-        # Looks for what to black out, (began, ended, rects) in monotonic time, oldest first; and frames
-        # grabbed but not yet blacked out and sent to the encoder, oldest first.
+        # Looks for what to black out, (began, ended, rects) oldest first; and frames grabbed but not yet
+        # blacked out and sent to the encoder, oldest first. Times are perf_counter: on Windows monotonic()
+        # moves in 15.6 ms steps, so a look and a frame would often share a time.
         self._looks: list[tuple[float, float, list[Rect]]] = []
         self._held: list[dict] = []
         self._lock = threading.Lock()
@@ -175,10 +176,10 @@ class Recording:
         self._hide_error: str | None = None
 
     def _look(self) -> None:
-        began = time.monotonic()
+        began = time.perf_counter()
         rects = capture_rects(self.scope)
         with self._lock:
-            self._looks.append((began, time.monotonic(), rects))
+            self._looks.append((began, time.perf_counter(), rects))
             del self._looks[:-64]
 
     def _refresh_hidden(self) -> None:
@@ -251,14 +252,14 @@ class Recording:
               row: dict | None) -> bool:
         with self._lock:
             # The last look that had finished before the grab began.
-            before = next((r for _, ended, r in reversed(self._looks) if ended <= began), self._looks[0][2])
-        self._held.append({"ended": time.monotonic(), "before": before, "kind": kind, "data": data,
+            before = next((r for _, ended, r in reversed(self._looks) if ended < began), self._looks[0][2])
+        self._held.append({"ended": time.perf_counter(), "before": before, "kind": kind, "data": data,
                            "size": size, "area": area, "row": row})
         return True
 
     def _write_window_frame(self, inner: Rect, row: dict | None = None) -> bool:
         """Grab the window and hold the frame until it can be blacked out (_flush)."""
-        began = time.monotonic()
+        began = time.perf_counter()
         got = print_window_bgra(self.scope.binding.hwnd)
         if got is None:
             return False
@@ -269,7 +270,7 @@ class Recording:
 
     def _write_screen_frame(self, grabber, row: dict | None = None) -> bool:
         """Grab the monitor rect and hold the frame until it can be blacked out (_flush)."""
-        began = time.monotonic()
+        began = time.perf_counter()
         o = self._origin
         shot = grabber.grab({"left": o.left, "top": o.top, "width": o.width, "height": o.height})
         return self._hold(began, "screen", shot.rgb, tuple(shot.size), o, row)
@@ -279,9 +280,9 @@ class Recording:
         while self._held:
             f = self._held[0]
             with self._lock:
-                after = next((r for began, _, r in self._looks if began >= f["ended"]), None)
+                after = next((r for began, _, r in self._looks if began > f["ended"]), None)
             if after is None:
-                if time.monotonic() - f["ended"] > HOLD_MAX_S:
+                if time.perf_counter() - f["ended"] > HOLD_MAX_S:
                     self.error = "stopped: password fields were not checked in time"
                     self._held.clear()
                     return False

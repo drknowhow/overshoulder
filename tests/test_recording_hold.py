@@ -42,9 +42,18 @@ def recording(tmp_path, monkeypatch):
     return rec
 
 
+def tick() -> float:
+    """perf_counter once it has moved on, so a look never shares a time with a grab."""
+    t = time.perf_counter()
+    while (now := time.perf_counter()) == t:
+        pass
+    return now
+
+
 def look(rec, rects):
-    now = time.monotonic()
+    now = tick()
     rec._looks.append((now, now, rects))
+    tick()
 
 
 def px(rec, x, y, frame=0):
@@ -94,7 +103,7 @@ def test_a_look_that_finished_during_the_grab_does_not_count_as_the_one_before(m
 
 def test_a_frame_no_look_reaches_in_time_stops_the_recording_unsent(monkeypatch, tmp_path):
     rec = recording(tmp_path, monkeypatch)
-    long_ago = time.monotonic() - 2 * R.HOLD_MAX_S
+    long_ago = time.perf_counter() - 2 * R.HOLD_MAX_S
     rec._looks.append((long_ago, long_ago, []))
     assert rec._write_window_frame(AREA)
     rec._held[0]["ended"] -= R.HOLD_MAX_S + 1  # held this long, and no look has begun since

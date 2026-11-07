@@ -120,7 +120,7 @@ def test_window_recording_frames_are_blacked_out_and_an_unreadable_window_is_not
     rec._looks = [(0.0, 0.0, capture_rects(rec.scope))]
     rec._proc = types.SimpleNamespace(stdin=Pipe())
     assert rec._write_window_frame(Rect(0, 0, 100, 100))
-    rec._looks.append((time.monotonic(), time.monotonic(), capture_rects(rec.scope)))
+    rec._looks.append((time.perf_counter() + 1, time.perf_counter() + 1, capture_rects(rec.scope)))
     assert rec._flush()
     at = lambda x, y: Pipe.data[(y * 100 + x) * 4:(y * 100 + x) * 4 + 3]  # noqa: E731
     assert at(15, 15) == b"\0\0\0" and at(50, 50) == b"\xff\xff\xff"
