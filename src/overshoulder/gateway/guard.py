@@ -74,6 +74,8 @@ def widened_settings(old: dict, new: dict) -> list[str]:
         out.append("reading the screen with OCR switched on")
     if n["catalog_weekly_check"] and not o["catalog_weekly_check"]:
         out.append("weekly catalog check switched on")
+    if n["listen_wsl"] and not o["listen_wsl"]:
+        out.append("the gateway takes MCP calls from WSL (the agent box)")
     return out
 
 
@@ -204,6 +206,12 @@ class ConfigGuard:
 
     def asking(self) -> bool:
         return self._asking is not None and self._asking.is_alive()
+
+    def accepted(self, name: str) -> dict:
+        """The file as the person last accepted it, parsed. A change still waiting for their answer is not
+        in it, so something that takes effect by itself (the agent box listener) waits for the Yes."""
+        with self._lock:
+            return _parse(self._accepted.get(name))
 
     def check(self) -> list[str]:
         """Compare the files with the accepted versions. Narrowing changes are accepted. A widening one

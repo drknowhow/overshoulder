@@ -519,8 +519,7 @@ def main(argv: list[str] | None = None) -> int:
         from overshoulder.server import serve
         print(f"Overshoulder MCP on http://127.0.0.1:{a.port}/mcp  (data: {default_home()})", flush=True)
         if a.listen_wsl:
-            from overshoulder.server import wsl_host_address
-            print(f"  and for WSL on http://{wsl_host_address()}:{a.port}/mcp", flush=True)
+            print("  and for the agent box on the WSL adapter, whatever the setting says", flush=True)
         serve(a.port, listen_wsl=a.listen_wsl)
         return 0
     if a.cmd == "watchdog":

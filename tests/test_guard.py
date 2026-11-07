@@ -347,3 +347,15 @@ def test_the_daemons_box_reports_a_timeout_as_no_answer(monkeypatch, daemon):  #
         assert not d.gw.status()["paused"] and d.gw.registry.get("mcp-test")
     finally:
         d.stop()
+
+
+def test_accepted_holds_back_a_widening_change_until_the_person_says_yes(tmp_path):
+    gate = threading.Event()
+    ev = Events(answer=lambda req: gate.wait(5))
+    g = ev.guard(tmp_path, settings={"listen_wsl": False})
+    (tmp_path / "settings.json").write_text(json.dumps({"listen_wsl": True}), encoding="utf-8")
+    g.check()
+    assert g.accepted("settings") == {"listen_wsl": False}  # on in the file, not yet accepted
+    gate.set()
+    g.wait(5)
+    assert g.accepted("settings") == {"listen_wsl": True}

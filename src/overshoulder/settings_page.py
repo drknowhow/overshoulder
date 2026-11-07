@@ -270,6 +270,12 @@ PAGE = """<!doctype html>
     <li>Action log: <code>{logs}</code></li>
     <li>{agent_box}</li>
   </ul>
+  <label class="row"><input type="checkbox" name="listen_wsl" {listen_wsl}>
+    <span>Serve the agent box<br><span class="hint">Takes MCP calls from the locked-down WSL distro
+    (<code>overshoulder agent-box create</code>). Only <code>/mcp</code> is served there, and every call
+    needs the box's client token.</span></span></label>
+  <ul class="plain">
+  </ul>
 </section>
 </main></body></html>"""
 
@@ -418,6 +424,7 @@ def render_page(s: st.Settings, form_token: str, clients: list[str], logs: str, 
         learn_profiles="checked" if s.learn_profiles else "",
         catalog_weekly_check="checked" if s.catalog_weekly_check else "",
         show_mark="checked" if s.show_mark else "",
+        listen_wsl="checked" if s.listen_wsl else "",
         profiles=_profiles_section(profiles or [], form_token),
         find=_find_section(find, form_token),
         form_token=html.escape(form_token),
@@ -483,6 +490,7 @@ def settings_from_form(form, current: st.Settings | None = None) -> st.Settings:
         learn_profiles=form.get("learn_profiles") == "on",
         catalog_weekly_check=form.get("catalog_weekly_check") == "on",
         show_mark=form.get("show_mark") == "on",
+        listen_wsl=form.get("listen_wsl") == "on",
     ).clamp()
 
 

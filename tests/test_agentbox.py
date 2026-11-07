@@ -156,3 +156,12 @@ def test_the_cli_removes_nothing_without_yes(monkeypatch, capsys):
     monkeypatch.setattr(A.Box, "__post_init__", lambda self: None)
     assert cli.main(["agent-box", "remove"]) == 2 and called == []
     assert "--yes" in capsys.readouterr().out
+
+
+def test_create_turns_on_serving_the_box_and_names_the_gateway_inside_it(tmp_path):
+    from overshoulder import settings as st
+    win = FakeWindows()
+    assert not st.load_or_default().listen_wsl
+    box(tmp_path, win).create(tmp_path / "home", firewall=False)
+    assert st.load_or_default().listen_wsl
+    assert b"echo \"$GW overshoulder-gateway\" >> /etc/hosts" in win.files["/usr/local/sbin/agent-boot.sh"]
