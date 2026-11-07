@@ -301,3 +301,49 @@ def test_the_daemon_pauses_agents_at_start_for_a_client_added_while_it_was_stopp
         gate.set()
         d.gw.config_guard.wait(5)
         d.stop()
+
+
+def test_no_answer_leaves_the_files_alone_keeps_agents_paused_and_asks_again(tmp_path):
+    answers = iter([None, None, True])
+    ev = Events(answer=lambda req: next(answers))
+    g = saved_guard(tmp_path, ev, clients={"clients": [_client("a")]})
+    g.ask_again_s = 0.01
+    g.check()
+    g.wait(5)
+    assert len(ev.asked) == 3 and ev.resumed == [CONFIG_PAUSE]  # paused through both unanswered boxes
+    assert [e for e, _ in ev.logged].count("config_unanswered") == 2
+    assert (tmp_path / "clients.json").exists() and not (tmp_path / "clients.json.refused").exists()
+
+
+def test_a_broken_box_is_no_answer_not_a_no(tmp_path):
+    calls = []
+
+    def ask(req):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("box failed")
+        return False
+
+    ev = Events(answer=ask)
+    old = {"clients": [_client("a")]}
+    g = ev.guard(tmp_path, clients=old)
+    g.ask_again_s = 0.01
+    path = tmp_path / "clients.json"
+    path.write_text(json.dumps({"clients": old["clients"] + [_client("intruder")]}), encoding="utf-8")
+    g.check()
+    g.wait(5)
+    assert len(calls) == 2 and json.loads(path.read_text(encoding="utf-8")) == old
+
+
+def test_the_daemons_box_reports_a_timeout_as_no_answer(monkeypatch, daemon):  # noqa: F811
+    from overshoulder import approvals
+    d, _, _ = daemon
+    answers = iter([None, True])
+    monkeypatch.setattr(approvals.DesktopBox, "ask", lambda self, q, stop: next(answers))
+    g = d.start_config_guard(poll_s=60)
+    g.ask_again_s = 0.01
+    try:
+        g.wait(10)
+        assert not d.gw.status()["paused"] and d.gw.registry.get("mcp-test")
+    finally:
+        d.stop()
